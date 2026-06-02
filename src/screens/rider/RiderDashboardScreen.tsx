@@ -1,367 +1,530 @@
-// src/screens/rider/RiderDashboardScreen.tsx
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
   ActivityIndicator,
+  RefreshControl,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
   Switch,
-  Alert,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import apiClient from "@/api/apiClient";
+import { riderService } from "@/services/api/riderApi";
 
 const THEME = {
-  bg: "#0B0F0D",
-  card: "#111827",
+  bg: "#070A08",
+  card: "#101713",
+  card2: "#0D120F",
   green: "#22C55E",
-  text: "#E5E7EB",
+  greenDark: "#0F3D24",
+  yellow: "#FACC15",
+  yellowDark: "#5B4708",
+  text: "#F8FAFC",
   muted: "#9CA3AF",
-  border: "#1F2937",
-  black: "#050807",
+  border: "#1E2A22",
+  black: "#030504",
   danger: "#EF4444",
-  warning: "#F59E0B",
 };
 
-export default function RiderDashboardScreen() {
-  const [loading, setLoading] = useState(true);
-  const [online, setOnline] = useState(false);
-  const [data, setData] = useState<any>({
-    todayEarnings: 0,
-    completedDeliveries: 0,
-    activeDelivery: null,
-    availableOrders: [],
-  });
+const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
+const shortId = (id?: string) => (id ? id.slice(0, 8).toUpperCase() : "ORDER");
 
-  const loadDashboard = async () => {
+export default function RiderDashboardScreen({ navigation }: any) {
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [online, setOnline] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const [toast, setToast] = useState("");
+  const [profile, setProfile] = useState<any>(null);
+  const [analytics, setAnalytics] = useState<any>(null);
+  const [wallet, setWallet] = useState<any>(null);
+  const [newOrders, setNewOrders] = useState<any[]>([]);
+  const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 2600);
+  };
+
+  const loadDashboard = useCallback(async () => {
     try {
-      const res = await apiClient.get("/riders/dashboard");
-      setData(res.data.data || data);
-      setOnline(!!res.data.data?.isOnline);
-    } catch (error) {
-      console.log("Rider dashboard error:", error);
+      const [
+        profileRes,
+        analyticsRes,
+        walletRes,
+        newOrdersRes,
+        activeOrdersRes,
+        leaderboardRes,
+      ] = await Promise.all([
+        riderService.getProfile(),
+        riderService.getAnalytics(),
+        riderService.getWallet(),
+        riderService.getNewOrders(),
+        riderService.getActiveOrders(),
+        riderService.getLeaderboard(),
+      ]);
+
+      setProfile(profileRes?.rider || null);
+      setOnline(!!profileRes?.rider?.isOnline);
+      setAnalytics(analyticsRes?.analytics || {});
+      setWallet(walletRes?.wallet || {});
+      setNewOrders(newOrdersRes?.orders || []);
+      setActiveOrders(activeOrdersRes?.orders || []);
+      setLeaderboard(leaderboardRes?.leaderboard || []);
+    } catch (e: any) {
+      showToast(e?.message || "Dashboard load failed");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
+  }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadDashboard();
   };
 
   const toggleOnline = async (value: boolean) => {
+    const old = online;
     setOnline(value);
+    setBusy(true);
 
     try {
-      await apiClient.patch("/riders/availability", {
-        isOnline: value,
-      });
-    } catch {
-      setOnline(!value);
-      Alert.alert("Error", "Could not update availability.");
+      const res = await riderService.updateOnlineStatus(value);
+      setOnline(!!res?.rider?.isOnline);
+      showToast(value ? "You are online now" : "You are offline now");
+    } catch (e: any) {
+      setOnline(old);
+      showToast(e?.message || "Could not update status");
+    } finally {
+      setBusy(false);
     }
   };
 
   const acceptOrder = async (orderId: string) => {
+    setBusy(true);
     try {
-      await apiClient.post(`/riders/orders/${orderId}/accept`);
-      Alert.alert("Accepted", "Order assigned to you.");
+      await riderService.acceptOrder(orderId);
+      showToast("Order accepted successfully");
       loadDashboard();
-    } catch {
-      Alert.alert("Error", "Could not accept order.");
+    } catch (e: any) {
+      showToast(e?.message || "Could not accept order");
+    } finally {
+      setBusy(false);
     }
   };
 
-  useEffect(() => {
-    loadDashboard();
-  }, []);
+  const rejectOrder = async (orderId: string) => {
+    setBusy(true);
+    try {
+      await riderService.rejectOrder(orderId);
+      setNewOrders((prev) => prev.filter((x) => x.id !== orderId));
+      showToast("Delivery request rejected");
+    } catch (e: any) {
+      showToast(e?.message || "Could not reject order");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rank = useMemo(() => {
+    const id = profile?.id;
+    return leaderboard?.find((x) => x?.rider?.id === id)?.rank || "-";
+  }, [leaderboard, profile]);
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={THEME.green} />
-        <Text style={styles.loadingText}>Loading rider dashboard...</Text>
-      </View>
+      <SafeAreaView style={styles.center}>
+        <StatusBar barStyle="light-content" backgroundColor={THEME.bg} />
+        <ActivityIndicator size="large" color={THEME.yellow} />
+        <Text style={styles.loadingText}>Preparing rider cockpit...</Text>
+      </SafeAreaView>
     );
   }
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>Rider Dashboard</Text>
-          <Text style={styles.subtitle}>
-            {online ? "You are online and ready" : "Go online to receive orders"}
-          </Text>
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor={THEME.bg} />
+
+      {!!toast && (
+        <View style={styles.toast}>
+          <Icon name="flash-outline" size={17} color={THEME.black} />
+          <Text style={styles.toastText}>{toast}</Text>
         </View>
-
-        <View style={styles.onlineBox}>
-          <Text style={styles.onlineText}>{online ? "Online" : "Offline"}</Text>
-          <Switch
-            value={online}
-            onValueChange={toggleOnline}
-            thumbColor={online ? THEME.green : THEME.muted}
-            trackColor={{ false: "#1F2937", true: "#173923" }}
-          />
-        </View>
-      </View>
-
-      <View style={styles.statsRow}>
-        <StatCard
-          icon="cash-outline"
-          title="Today Earnings"
-          value={`₹${data.todayEarnings || 0}`}
-        />
-        <StatCard
-          icon="checkmark-done-outline"
-          title="Completed"
-          value={data.completedDeliveries || 0}
-        />
-      </View>
-
-      <View style={styles.statsRow}>
-        <StatCard
-          icon="bicycle-outline"
-          title="Available Orders"
-          value={data.availableOrders?.length || 0}
-        />
-        <StatCard
-          icon="time-outline"
-          title="Active"
-          value={data.activeDelivery ? 1 : 0}
-        />
-      </View>
-
-      {data.activeDelivery && (
-        <>
-          <Text style={styles.sectionTitle}>Current Delivery</Text>
-          <View style={styles.activeCard}>
-            <View style={styles.iconCircle}>
-              <Icon name="navigate-outline" size={24} color={THEME.green} />
-            </View>
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.activeTitle}>
-                Order #{data.activeDelivery.id?.slice(0, 8)}
-              </Text>
-              <Text style={styles.activeSub}>
-                Pickup: {data.activeDelivery.restaurant?.name || "Store"}
-              </Text>
-              <Text style={styles.activeSub}>
-                Drop: {data.activeDelivery.address?.address || "Customer address"}
-              </Text>
-            </View>
-          </View>
-        </>
       )}
 
-      <Text style={styles.sectionTitle}>Available Orders</Text>
+      <ScrollView
+        style={styles.container}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={THEME.yellow}
+          />
+        }
+      >
+        <View style={styles.hero}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.hello}>Welcome back</Text>
+            <Text style={styles.name}>{profile?.fullName || "Karto Rider"}</Text>
+            <Text style={styles.sub}>
+              {online
+                ? "Live deliveries are ready for you"
+                : "Go online to receive new orders"}
+            </Text>
+          </View>
 
-      {!online ? (
-        <View style={styles.emptyBox}>
-          <Icon name="power-outline" size={46} color={THEME.warning} />
-          <Text style={styles.emptyTitle}>You are offline</Text>
-          <Text style={styles.emptyText}>Turn online to start receiving delivery requests.</Text>
+          <View style={styles.statusPill}>
+            <Text style={[styles.statusText, { color: online ? THEME.green : THEME.muted }]}>
+              {online ? "ONLINE" : "OFFLINE"}
+            </Text>
+            <Switch
+              value={online}
+              disabled={busy}
+              onValueChange={toggleOnline}
+              thumbColor={online ? THEME.yellow : THEME.muted}
+              trackColor={{ false: "#1F2937", true: THEME.greenDark }}
+            />
+          </View>
         </View>
-      ) : data.availableOrders?.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <Icon name="file-tray-outline" size={46} color={THEME.green} />
-          <Text style={styles.emptyTitle}>No orders nearby</Text>
-          <Text style={styles.emptyText}>New delivery requests will appear here.</Text>
+
+        <View style={styles.kycCard}>
+          <Icon
+            name={profile?.kycStatus === "APPROVED" ? "shield-checkmark" : "shield-outline"}
+            size={22}
+            color={profile?.kycStatus === "APPROVED" ? THEME.green : THEME.yellow}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.kycTitle}>
+              KYC Status: {profile?.kycStatus || "PENDING"}
+            </Text>
+            <Text style={styles.kycSub}>
+              {profile?.kycStatus === "APPROVED"
+                ? "You can accept delivery requests."
+                : "Complete KYC to unlock deliveries."}
+            </Text>
+          </View>
         </View>
-      ) : (
-        data.availableOrders.map((order: any) => (
-          <View key={order.id} style={styles.orderCard}>
-            <View style={styles.orderTop}>
-              <View>
-                <Text style={styles.orderTitle}>Order #{order.id?.slice(0, 8)}</Text>
-                <Text style={styles.orderSub}>
-                  {order.restaurant?.name || "Karto Store"}
+
+        <View style={styles.statsGrid}>
+          <StatCard icon="wallet-outline" title="Wallet" value={money(wallet?.balance)} />
+          <StatCard icon="cash-outline" title="Today" value={money(analytics?.todayEarnings)} />
+          <StatCard icon="cube-outline" title="Active" value={analytics?.activeOrders || 0} />
+          <StatCard icon="trophy-outline" title="Rank" value={`#${rank}`} />
+        </View>
+
+        <SectionHeader title="Current Delivery" action="View all" onPress={() => navigation?.navigate?.("RiderActiveOrders")} />
+
+        {activeOrders.length > 0 ? (
+          activeOrders.slice(0, 1).map((order) => (
+            <TouchableOpacity
+              key={order.id}
+              activeOpacity={0.88}
+              style={styles.activeCard}
+              onPress={() => navigation?.navigate?.("RiderOrderDetail", { orderId: order.id })}
+            >
+              <View style={styles.activeIcon}>
+                <Icon name="navigate" size={23} color={THEME.yellow} />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.orderTitle}>#{order.orderNumber || shortId(order.id)}</Text>
+                <Text style={styles.orderSub} numberOfLines={1}>
+                  Pickup: {order.restaurant?.name || "Store"}
+                </Text>
+                <Text style={styles.orderSub} numberOfLines={1}>
+                  Drop: {order.address?.address || "Customer address"}
                 </Text>
               </View>
 
-              <Text style={styles.amount}>₹{order.deliveryFee || 30}</Text>
-            </View>
-
-            <View style={styles.locationRow}>
-              <Icon name="storefront-outline" size={17} color={THEME.green} />
-              <Text style={styles.locationText} numberOfLines={1}>
-                Pickup: {order.restaurant?.address || "Store location"}
-              </Text>
-            </View>
-
-            <View style={styles.locationRow}>
-              <Icon name="location-outline" size={17} color={THEME.green} />
-              <Text style={styles.locationText} numberOfLines={1}>
-                Drop: {order.address?.address || "Customer location"}
-              </Text>
-            </View>
-
-            <TouchableOpacity style={styles.acceptBtn} onPress={() => acceptOrder(order.id)}>
-              <Text style={styles.acceptText}>Accept Order</Text>
-              <Icon name="arrow-forward" size={18} color={THEME.black} />
+              <Icon name="chevron-forward" size={22} color={THEME.muted} />
             </TouchableOpacity>
-          </View>
-        ))
-      )}
-    </ScrollView>
+          ))
+        ) : (
+          <EmptyCard icon="bicycle-outline" title="No active delivery" text="Accept an order to start your trip." />
+        )}
+
+        <SectionHeader title="New Requests" action={`${newOrders.length} orders`} />
+
+        {!online ? (
+          <EmptyCard icon="power-outline" title="You are offline" text="Turn online to start receiving delivery requests." />
+        ) : newOrders.length === 0 ? (
+          <EmptyCard icon="radio-outline" title="Waiting for orders" text="Realtime delivery requests will appear here." />
+        ) : (
+          newOrders.slice(0, 5).map((order) => (
+            <View key={order.id} style={styles.orderCard}>
+              <View style={styles.orderTop}>
+                <View>
+                  <Text style={styles.orderTitle}>#{order.orderNumber || shortId(order.id)}</Text>
+                  <Text style={styles.orderSub}>{order.restaurant?.name || "Karto Store"}</Text>
+                </View>
+                <View style={styles.feeBadge}>
+                  <Text style={styles.feeText}>{money(order.deliveryFee)}</Text>
+                </View>
+              </View>
+
+              <InfoLine icon="storefront-outline" text={`Pickup: ${order.restaurant?.address || order.restaurant?.name || "Store location"}`} />
+              <InfoLine icon="location-outline" text={`Drop: ${order.address?.address || "Customer location"}`} />
+              <InfoLine icon="card-outline" text={`Payment: ${order.paymentMethod || "COD"} • ${money(order.totalAmount)}`} />
+
+              <View style={styles.actions}>
+                <TouchableOpacity
+                  disabled={busy}
+                  style={styles.rejectBtn}
+                  onPress={() => rejectOrder(order.id)}
+                >
+                  <Text style={styles.rejectText}>Reject</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  disabled={busy}
+                  style={styles.acceptBtn}
+                  onPress={() => acceptOrder(order.id)}
+                >
+                  <Text style={styles.acceptText}>Accept</Text>
+                  <Icon name="arrow-forward" size={18} color={THEME.black} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))
+        )}
+
+        <View style={{ height: 28 }} />
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
-const StatCard = ({ icon, title, value }: any) => (
-  <View style={styles.statCard}>
-    <Icon name={icon} size={23} color={THEME.green} />
-    <Text style={styles.statValue}>{value}</Text>
-    <Text style={styles.statLabel}>{title}</Text>
-  </View>
-);
+function SectionHeader({ title, action, onPress }: any) {
+  return (
+    <View style={styles.sectionHead}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {!!action && (
+        <TouchableOpacity onPress={onPress} activeOpacity={0.75}>
+          <Text style={styles.sectionAction}>{action}</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+function StatCard({ icon, title, value }: any) {
+  return (
+    <View style={styles.statCard}>
+      <Icon name={icon} size={22} color={THEME.yellow} />
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statTitle}>{title}</Text>
+    </View>
+  );
+}
+
+function InfoLine({ icon, text }: any) {
+  return (
+    <View style={styles.infoLine}>
+      <Icon name={icon} size={16} color={THEME.green} />
+      <Text style={styles.infoText} numberOfLines={1}>{text}</Text>
+    </View>
+  );
+}
+
+function EmptyCard({ icon, title, text }: any) {
+  return (
+    <View style={styles.emptyCard}>
+      <Icon name={icon} size={42} color={THEME.yellow} />
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyText}>{text}</Text>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: THEME.bg, padding: 20 },
+  safe: { flex: 1, backgroundColor: THEME.bg },
+  container: { flex: 1, backgroundColor: THEME.bg, padding: 18 },
   center: {
     flex: 1,
     backgroundColor: THEME.bg,
-    justifyContent: "center",
     alignItems: "center",
+    justifyContent: "center",
   },
-  loadingText: { color: THEME.muted, marginTop: 10 },
+  loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "700" },
 
-  header: {
+  toast: {
+    position: "absolute",
+    top: 44,
+    left: 18,
+    right: 18,
+    zIndex: 99,
+    backgroundColor: THEME.yellow,
+    borderRadius: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 20,
+    alignItems: "center",
+    gap: 8,
   },
-  title: { color: THEME.text, fontSize: 26, fontWeight: "900" },
-  subtitle: { color: THEME.muted, marginTop: 4, maxWidth: 210 },
-  onlineBox: {
+  toastText: { color: THEME.black, fontWeight: "900", flex: 1 },
+
+  hero: {
     backgroundColor: THEME.card,
+    borderRadius: 28,
+    padding: 18,
     borderWidth: 1,
     borderColor: THEME.border,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 14,
+  },
+  hello: { color: THEME.yellow, fontSize: 13, fontWeight: "900" },
+  name: { color: THEME.text, fontSize: 26, fontWeight: "900", marginTop: 4 },
+  sub: { color: THEME.muted, fontSize: 13, marginTop: 6, maxWidth: 210 },
+  statusPill: {
+    backgroundColor: THEME.black,
     borderRadius: 18,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    padding: 8,
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
-  onlineText: {
-    color: THEME.green,
-    fontWeight: "900",
-    fontSize: 12,
-    marginBottom: 4,
-  },
+  statusText: { fontSize: 11, fontWeight: "900", marginBottom: 4 },
 
-  statsRow: {
+  kycCard: {
+    backgroundColor: THEME.card2,
+    borderRadius: 20,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: THEME.border,
     flexDirection: "row",
     gap: 12,
-    marginBottom: 12,
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  kycTitle: { color: THEME.text, fontWeight: "900" },
+  kycSub: { color: THEME.muted, fontSize: 12, marginTop: 3 },
+
+  statsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
   },
   statCard: {
-    flex: 1,
-    backgroundColor: THEME.card,
-    borderRadius: 18,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
-  },
-  statValue: {
-    color: THEME.green,
-    fontSize: 21,
-    fontWeight: "900",
-    marginTop: 8,
-  },
-  statLabel: { color: THEME.muted, marginTop: 4, fontSize: 12 },
-
-  sectionTitle: {
-    color: THEME.text,
-    fontSize: 19,
-    fontWeight: "900",
-    marginTop: 22,
-    marginBottom: 12,
-  },
-
-  activeCard: {
-    flexDirection: "row",
-    backgroundColor: "#0A120E",
-    borderWidth: 1,
-    borderColor: "#173923",
-    borderRadius: 20,
-    padding: 15,
-  },
-  iconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  activeTitle: { color: THEME.text, fontSize: 16, fontWeight: "900" },
-  activeSub: { color: THEME.muted, marginTop: 4, fontSize: 12 },
-
-  emptyBox: {
+    width: "48%",
     backgroundColor: THEME.card,
     borderRadius: 22,
-    padding: 28,
-    alignItems: "center",
+    padding: 15,
     borderWidth: 1,
     borderColor: THEME.border,
   },
-  emptyTitle: {
-    color: THEME.text,
-    fontSize: 18,
-    fontWeight: "900",
-    marginTop: 12,
+  statValue: { color: THEME.text, fontSize: 21, fontWeight: "900", marginTop: 10 },
+  statTitle: { color: THEME.muted, fontSize: 12, marginTop: 4 },
+
+  sectionHead: {
+    marginTop: 24,
+    marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
+  sectionTitle: { color: THEME.text, fontSize: 19, fontWeight: "900" },
+  sectionAction: { color: THEME.yellow, fontSize: 13, fontWeight: "900" },
+
+  activeCard: {
+    backgroundColor: "#0C1510",
+    borderRadius: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#20452E",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  activeIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: THEME.black,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: THEME.yellowDark,
+  },
+
+  orderCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    marginBottom: 14,
+  },
+  orderTop: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  orderTitle: { color: THEME.text, fontSize: 16, fontWeight: "900" },
+  orderSub: { color: THEME.muted, fontSize: 13, marginTop: 4 },
+  feeBadge: {
+    backgroundColor: THEME.yellow,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 14,
+    alignSelf: "flex-start",
+  },
+  feeText: { color: THEME.black, fontWeight: "900" },
+
+  infoLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+  },
+  infoText: { color: THEME.muted, flex: 1, fontSize: 13 },
+
+  actions: { flexDirection: "row", gap: 10, marginTop: 16 },
+  rejectBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: THEME.danger,
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  rejectText: { color: THEME.danger, fontWeight: "900" },
+  acceptBtn: {
+    flex: 1.4,
+    backgroundColor: THEME.yellow,
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  acceptText: { color: THEME.black, fontWeight: "900" },
+
+  emptyCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 28,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+  },
+  emptyTitle: { color: THEME.text, fontSize: 17, fontWeight: "900", marginTop: 12 },
   emptyText: {
     color: THEME.muted,
     textAlign: "center",
     marginTop: 6,
     lineHeight: 19,
-  },
-
-  orderCard: {
-    backgroundColor: THEME.card,
-    borderRadius: 22,
-    padding: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: THEME.border,
-  },
-  orderTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
-  orderTitle: { color: THEME.text, fontSize: 16, fontWeight: "900" },
-  orderSub: { color: THEME.muted, marginTop: 4 },
-  amount: { color: THEME.green, fontSize: 18, fontWeight: "900" },
-
-  locationRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 7,
-  },
-  locationText: {
-    color: THEME.muted,
-    marginLeft: 8,
-    flex: 1,
-    fontSize: 13,
-  },
-
-  acceptBtn: {
-    backgroundColor: THEME.green,
-    borderRadius: 15,
-    paddingVertical: 13,
-    marginTop: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    flexDirection: "row",
-  },
-  acceptText: {
-    color: THEME.black,
-    fontWeight: "900",
-    fontSize: 15,
-    marginRight: 8,
   },
 });
