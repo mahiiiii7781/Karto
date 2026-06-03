@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -6,30 +6,45 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  Alert,
   Image,
   ScrollView,
   PermissionsAndroid,
   Platform,
+  StatusBar,
+  Modal,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import Toast from "react-native-toast-message";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
+
 import { useAuth } from "@/context/AuthContext";
 
 const THEME = {
-  bg: "#050807",
-  card: "#0D1511",
-  card2: "#101C15",
+  bg: "#070A08",
+  card: "#101713",
+  card2: "#151F19",
   green: "#22C55E",
-  greenDark: "#12351F",
-  text: "#F3F4F6",
-  muted: "#9CA3AF",
+  yellow: "#FACC15",
+  text: "#F8FAFC",
+  muted: "#8A94A6",
   border: "#1E2A22",
   danger: "#EF4444",
-  yellow: "#FACC15",
-  black: "#041008",
+  black: "#050807",
+};
+
+const showToast = (
+  type: "success" | "error" | "info",
+  text1: string,
+  text2?: string
+) => {
+  Toast.show({
+    type,
+    text1,
+    text2,
+    position: "bottom",
+    visibilityTime: 1900,
+  });
 };
 
 export default function EditProfileScreen() {
@@ -41,10 +56,27 @@ export default function EditProfileScreen() {
   const [avatarUri, setAvatarUri] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const [photoModalVisible, setPhotoModalVisible] = useState(false);
+  const [discardModalVisible, setDiscardModalVisible] = useState(false);
+
+  const requireAuth = useCallback(() => {
+    if (user?.id) return true;
+
+    showToast("info", "Login required", "Please sign in to edit your profile.");
+    navigation.navigate("Auth");
+    return false;
+  }, [user?.id, navigation]);
+
+  useFocusEffect(
+    useCallback(() => {
+      requireAuth();
+    }, [requireAuth])
+  );
+
   useEffect(() => {
-    setFullName(user?.fullName || "");
-    setPhone(user?.phone || "");
-    setAvatarUri(user?.avatarUrl || "");
+    setFullName(user?.fullName || (user as any)?.name || "");
+    setPhone((user as any)?.phone || "");
+    setAvatarUri((user as any)?.avatarUrl || (user as any)?.avatar_url || "");
   }, [user]);
 
   const initials = useMemo(() => {
@@ -53,10 +85,14 @@ export default function EditProfileScreen() {
   }, [fullName, user?.email]);
 
   const hasChanges = useMemo(() => {
+    const oldName = user?.fullName || (user as any)?.name || "";
+    const oldPhone = (user as any)?.phone || "";
+    const oldAvatar = (user as any)?.avatarUrl || (user as any)?.avatar_url || "";
+
     return (
-      fullName.trim() !== (user?.fullName || "") ||
-      phone.trim() !== (user?.phone || "") ||
-      avatarUri !== (user?.avatarUrl || "")
+      fullName.trim() !== oldName ||
+      phone.trim() !== oldPhone ||
+      avatarUri !== oldAvatar
     );
   }, [fullName, phone, avatarUri, user]);
 
@@ -66,7 +102,7 @@ export default function EditProfileScreen() {
     const granted = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.CAMERA,
       {
-        title: "Karto Camera Permission",
+        title: "Camera Permission",
         message: "Karto needs camera access to update your profile photo.",
         buttonPositive: "Allow",
         buttonNegative: "Cancel",
@@ -77,52 +113,73 @@ export default function EditProfileScreen() {
   };
 
   const openCamera = async () => {
+    setPhotoModalVisible(false);
+
     const hasPermission = await requestCameraPermission();
 
     if (!hasPermission) {
-      Alert.alert("Permission Required", "Camera permission is required.");
+      showToast("info", "Permission required", "Camera permission is required.");
       return;
     }
 
-    const result = await launchCamera({
-      mediaType: "photo",
-      quality: 1,
-      cameraType: "front",
-      saveToPhotos: false,
-    });
+    try {
+      const result = await launchCamera({
+        mediaType: "photo",
+        quality: 0.8,
+        cameraType: "front",
+        saveToPhotos: false,
+      });
 
-    if (result.didCancel) return;
+      if (result.didCancel) return;
 
-    if (result.assets?.[0]?.uri) {
-      setAvatarUri(result.assets[0].uri);
+      if (result.errorCode) {
+        showToast("error", "Camera failed", result.errorMessage || "Please try again.");
+        return;
+      }
+
+      const uri = result.assets?.[0]?.uri;
+
+      if (uri) {
+        setAvatarUri(uri);
+        showToast("success", "Photo selected", "Profile photo updated locally.");
+      }
+    } catch {
+      showToast("error", "Camera failed", "Please try again.");
     }
   };
 
   const openGallery = async () => {
-    const result = await launchImageLibrary({
-      mediaType: "photo",
-      quality: 1,
-      selectionLimit: 1,
-    });
+    setPhotoModalVisible(false);
 
-    if (result.didCancel) return;
+    try {
+      const result = await launchImageLibrary({
+        mediaType: "photo",
+        quality: 1,
+        selectionLimit: 1,
+      });
 
-    if (result.assets?.[0]?.uri) {
-      setAvatarUri(result.assets[0].uri);
+      if (result.didCancel) return;
+
+      if (result.errorCode) {
+        showToast("error", "Gallery failed", result.errorMessage || "Please try again.");
+        return;
+      }
+
+      const uri = result.assets?.[0]?.uri;
+
+      if (uri) {
+        setAvatarUri(uri);
+        showToast("success", "Photo selected", "Profile photo updated locally.");
+      }
+    } catch {
+      showToast("error", "Gallery failed", "Please try again.");
     }
   };
 
-  const pickImage = () => {
-    Alert.alert("Profile Photo", "Choose photo source", [
-      { text: "Camera", onPress: openCamera },
-      { text: "Gallery", onPress: openGallery },
-      {
-        text: "Remove Photo",
-        style: "destructive",
-        onPress: () => setAvatarUri(""),
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
+  const removePhoto = () => {
+    setAvatarUri("");
+    setPhotoModalVisible(false);
+    showToast("info", "Photo removed", "Profile photo will be removed after saving.");
   };
 
   const validate = () => {
@@ -130,22 +187,22 @@ export default function EditProfileScreen() {
     const cleanPhone = phone.trim();
 
     if (!cleanName) {
-      Alert.alert("Validation", "Full name is required.");
+      showToast("info", "Name required", "Please enter your full name.");
       return false;
     }
 
     if (cleanName.length < 2) {
-      Alert.alert("Validation", "Full name must be at least 2 characters.");
+      showToast("info", "Name too short", "Full name must be at least 2 characters.");
       return false;
     }
 
     if (cleanName.length > 60) {
-      Alert.alert("Validation", "Full name cannot be more than 60 characters.");
+      showToast("info", "Name too long", "Full name cannot be more than 60 characters.");
       return false;
     }
 
     if (cleanPhone && !/^[6-9]\d{9}$/.test(cleanPhone)) {
-      Alert.alert("Validation", "Enter valid 10 digit Indian phone number.");
+      showToast("info", "Invalid phone number", "Enter a valid 10 digit Indian phone number.");
       return false;
     }
 
@@ -153,15 +210,11 @@ export default function EditProfileScreen() {
   };
 
   const handleSave = async () => {
+    if (!requireAuth()) return;
     if (!validate()) return;
 
     if (!hasChanges) {
-      Toast.show({
-        type: "info",
-        text1: "No changes",
-        text2: "Profile is already up to date.",
-        position: "bottom",
-      });
+      showToast("info", "No changes", "Profile is already up to date.");
       return;
     }
 
@@ -171,35 +224,28 @@ export default function EditProfileScreen() {
       const { error } = await updateProfile({
         fullName: fullName.trim(),
         phone: phone.trim() || null,
-
-        // Local URI save hoga. Production me Cloudinary/S3 upload karke URL save karna best hai.
         avatarUrl: avatarUri || null,
       });
 
       if (error) {
-        Alert.alert("Error", error.message || "Profile update failed.");
+        showToast("error", "Profile update failed", error.message || "Please try again.");
         return;
       }
 
-      Toast.show({
-        type: "success",
-        text1: "Profile Updated",
-        text2: "Your changes have been saved.",
-        position: "bottom",
-      });
-
+      showToast("success", "Profile updated", "Your changes have been saved.");
       navigation.goBack();
     } catch (error: any) {
-      Alert.alert("Error", error?.message || "Profile update failed.");
+      showToast("error", "Profile update failed", error?.message || "Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   const resetChanges = () => {
-    setFullName(user?.fullName || "");
-    setPhone(user?.phone || "");
-    setAvatarUri(user?.avatarUrl || "");
+    setFullName(user?.fullName || (user as any)?.name || "");
+    setPhone((user as any)?.phone || "");
+    setAvatarUri((user as any)?.avatarUrl || (user as any)?.avatar_url || "");
+    showToast("info", "Changes reset", "Profile form restored.");
   };
 
   const confirmDiscard = () => {
@@ -208,41 +254,55 @@ export default function EditProfileScreen() {
       return;
     }
 
-    Alert.alert("Discard Changes?", "Your unsaved changes will be lost.", [
-      { text: "Keep Editing", style: "cancel" },
-      {
-        text: "Discard",
-        style: "destructive",
-        onPress: () => navigation.goBack(),
-      },
-    ]);
+    setDiscardModalVisible(true);
+  };
+
+  const discardChanges = () => {
+    setDiscardModalVisible(false);
+    navigation.goBack();
   };
 
   return (
     <View style={styles.container}>
+      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 118 }}
       >
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={confirmDiscard}>
-            <Icon name="chevron-back" size={24} color={THEME.green} />
+            <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Edit Profile</Text>
-            <Text style={styles.subtitle}>Update your personal details</Text>
+            <Text style={styles.subtitle}>Keep your account details updated</Text>
           </View>
 
           {hasChanges && (
             <TouchableOpacity style={styles.resetBtn} onPress={resetChanges}>
-              <Icon name="refresh" size={19} color={THEME.green} />
+              <Icon name="refresh" size={19} color={THEME.black} />
             </TouchableOpacity>
           )}
         </View>
 
+        <View style={styles.heroBanner}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroTag}>KARTO PROFILE</Text>
+            <Text style={styles.heroTitle}>Personalize your account</Text>
+            <Text style={styles.heroSub}>
+              Add your name, phone number and profile photo for a smoother delivery experience.
+            </Text>
+          </View>
+
+          <View style={styles.heroIcon}>
+            <Icon name="person-circle-outline" size={38} color={THEME.black} />
+          </View>
+        </View>
+
         <View style={styles.heroCard}>
-          <TouchableOpacity activeOpacity={0.85} onPress={pickImage}>
+          <TouchableOpacity activeOpacity={0.85} onPress={() => setPhotoModalVisible(true)}>
             {avatarUri ? (
               <Image source={{ uri: avatarUri }} style={styles.avatar} />
             ) : (
@@ -257,7 +317,7 @@ export default function EditProfileScreen() {
           </TouchableOpacity>
 
           <Text style={styles.photoTitle}>Profile Photo</Text>
-          <Text style={styles.photoHint}>Tap photo to use camera or gallery</Text>
+          <Text style={styles.photoHint}>Use camera or gallery. No image URL required.</Text>
         </View>
 
         <View style={styles.formCard}>
@@ -289,6 +349,7 @@ export default function EditProfileScreen() {
             />
             <Icon name="lock-closed-outline" size={18} color={THEME.muted} />
           </View>
+          <Text style={styles.hintLeft}>Email is linked with your login account.</Text>
 
           <Text style={styles.label}>Phone Number</Text>
           <View style={styles.inputBox}>
@@ -297,7 +358,7 @@ export default function EditProfileScreen() {
             <TextInput
               style={styles.input}
               value={phone}
-              onChangeText={(text) => setPhone(text.replace(/\D/g, ""))}
+              onChangeText={text => setPhone(text.replace(/\D/g, ""))}
               keyboardType="phone-pad"
               placeholder="Enter phone number"
               placeholderTextColor={THEME.muted}
@@ -308,7 +369,7 @@ export default function EditProfileScreen() {
           <View style={styles.infoBox}>
             <Icon name="information-circle-outline" size={18} color={THEME.green} />
             <Text style={styles.infoText}>
-              Email cannot be changed here. Profile photo from camera/gallery will show instantly.
+              Your phone number helps riders contact you for delivery updates.
             </Text>
           </View>
         </View>
@@ -321,18 +382,42 @@ export default function EditProfileScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.securityTitle}>Account Security</Text>
             <Text style={styles.securitySub}>
-              Your profile updates are protected with your login session.
+              Your profile updates are protected with your active login session.
             </Text>
+          </View>
+        </View>
+
+        <View style={styles.previewCard}>
+          <Text style={styles.sectionTitle}>Profile Preview</Text>
+
+          <View style={styles.previewRow}>
+            <View style={styles.previewAvatar}>
+              {avatarUri ? (
+                <Image source={{ uri: avatarUri }} style={styles.previewImage} />
+              ) : (
+                <Text style={styles.previewAvatarText}>{initials}</Text>
+              )}
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.previewName} numberOfLines={1}>
+                {fullName.trim() || "Karto User"}
+              </Text>
+              <Text style={styles.previewSub} numberOfLines={1}>
+                {phone.trim() ? `+91 ${phone.trim()}` : "Phone number not added"}
+              </Text>
+              <View style={styles.previewPill}>
+                <Icon name="checkmark-circle-outline" size={14} color={THEME.green} />
+                <Text style={styles.previewPillText}>Customer Profile</Text>
+              </View>
+            </View>
           </View>
         </View>
       </ScrollView>
 
       <View style={styles.footer}>
         <TouchableOpacity
-          style={[
-            styles.saveBtn,
-            (loading || !hasChanges) && { opacity: 0.65 },
-          ]}
+          style={[styles.saveBtn, (loading || !hasChanges) && { opacity: 0.65 }]}
           onPress={handleSave}
           disabled={loading || !hasChanges}
         >
@@ -348,55 +433,167 @@ export default function EditProfileScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={photoModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPhotoModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.optionBox}>
+            <View style={styles.optionIcon}>
+              <Icon name="camera-outline" size={31} color={THEME.yellow} />
+            </View>
+
+            <Text style={styles.optionTitle}>Profile Photo</Text>
+            <Text style={styles.optionSub}>Choose how you want to update your photo.</Text>
+
+            <TouchableOpacity style={styles.optionRow} onPress={openCamera}>
+              <Icon name="camera-outline" size={21} color={THEME.green} />
+              <Text style={styles.optionText}>Take Photo</Text>
+              <Icon name="chevron-forward" size={19} color={THEME.muted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.optionRow} onPress={openGallery}>
+              <Icon name="images-outline" size={21} color={THEME.green} />
+              <Text style={styles.optionText}>Choose From Gallery</Text>
+              <Icon name="chevron-forward" size={19} color={THEME.muted} />
+            </TouchableOpacity>
+
+            {!!avatarUri && (
+              <TouchableOpacity style={styles.optionRow} onPress={removePhoto}>
+                <Icon name="trash-outline" size={21} color={THEME.danger} />
+                <Text style={[styles.optionText, { color: THEME.danger }]}>
+                  Remove Photo
+                </Text>
+                <Icon name="chevron-forward" size={19} color={THEME.muted} />
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.modalBtn}
+              onPress={() => setPhotoModalVisible(false)}
+            >
+              <Text style={styles.modalBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={discardModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDiscardModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={styles.confirmIcon}>
+              <Icon name="alert-circle-outline" size={31} color={THEME.danger} />
+            </View>
+
+            <Text style={styles.confirmTitle}>Discard changes?</Text>
+            <Text style={styles.confirmText}>
+              Your unsaved profile changes will be lost.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={styles.keepBtn}
+                onPress={() => setDiscardModalVisible(false)}
+              >
+                <Text style={styles.keepText}>Keep Editing</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.discardBtn} onPress={discardChanges}>
+                <Text style={styles.discardText}>Discard</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: THEME.bg },
-
   header: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 20,
-    paddingTop: 30,
+    paddingTop: Platform.OS === "ios" ? 54 : 34,
     paddingBottom: 16,
     gap: 12,
   },
-
   backBtn: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 18,
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
   },
-
   resetBtn: {
     width: 42,
     height: 42,
-    borderRadius: 21,
-    backgroundColor: "#07150D",
-    borderWidth: 1,
-    borderColor: "#173923",
+    borderRadius: 17,
+    backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
   },
-
   title: {
     color: THEME.text,
     fontSize: 27,
     fontWeight: "900",
   },
-
   subtitle: {
     color: THEME.muted,
     marginTop: 2,
+    fontWeight: "700",
   },
-
+  heroBanner: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 26,
+    padding: 18,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  heroTag: {
+    color: THEME.yellow,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  heroTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 5,
+  },
+  heroSub: {
+    color: THEME.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 6,
+    fontWeight: "700",
+  },
+  heroIcon: {
+    width: 62,
+    height: 62,
+    borderRadius: 22,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 14,
+  },
   heroCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
@@ -407,57 +604,51 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
   },
-
   avatar: {
     width: 118,
     height: 118,
-    borderRadius: 59,
+    borderRadius: 42,
     borderWidth: 2,
     borderColor: THEME.green,
   },
-
   avatarPlaceholder: {
     width: 118,
     height: 118,
-    borderRadius: 59,
+    borderRadius: 42,
     backgroundColor: THEME.card2,
     borderWidth: 2,
     borderColor: THEME.green,
     justifyContent: "center",
     alignItems: "center",
   },
-
   avatarText: {
     color: THEME.green,
     fontSize: 40,
     fontWeight: "900",
   },
-
   cameraIcon: {
     position: "absolute",
     bottom: 2,
     right: 2,
     backgroundColor: THEME.green,
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 9,
     borderWidth: 2,
     borderColor: THEME.card,
   },
-
   photoTitle: {
     color: THEME.text,
     fontWeight: "900",
     fontSize: 17,
     marginTop: 13,
   },
-
   photoHint: {
     color: THEME.muted,
     marginTop: 5,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
+    textAlign: "center",
   },
-
   formCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
@@ -467,21 +658,18 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     marginBottom: 16,
   },
-
   sectionTitle: {
     color: THEME.text,
     fontSize: 17,
     fontWeight: "900",
     marginBottom: 12,
   },
-
   label: {
     color: THEME.text,
     fontWeight: "800",
     marginBottom: 8,
     marginTop: 10,
   },
-
   inputBox: {
     minHeight: 56,
     backgroundColor: THEME.card2,
@@ -492,55 +680,52 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-
-  disabledBox: {
-    opacity: 0.8,
-  },
-
+  disabledBox: { opacity: 0.8 },
   input: {
     flex: 1,
     color: THEME.text,
     paddingHorizontal: 12,
     paddingVertical: 13,
     fontSize: 15,
+    fontWeight: "700",
   },
-
-  disabledInput: {
-    color: THEME.muted,
-  },
-
+  disabledInput: { color: THEME.muted },
   countryCode: {
     color: THEME.green,
     fontWeight: "900",
     marginLeft: 10,
   },
-
   hintText: {
     color: THEME.muted,
     fontSize: 11,
     marginTop: 6,
     textAlign: "right",
+    fontWeight: "700",
   },
-
+  hintLeft: {
+    color: THEME.muted,
+    fontSize: 11,
+    marginTop: 6,
+    fontWeight: "700",
+  },
   infoBox: {
     marginTop: 18,
-    backgroundColor: "#07150D",
+    backgroundColor: "#102116",
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: "#20462C",
     borderRadius: 15,
     padding: 12,
     flexDirection: "row",
     alignItems: "flex-start",
   },
-
   infoText: {
-    color: THEME.muted,
+    color: THEME.green,
     marginLeft: 8,
     flex: 1,
     lineHeight: 18,
     fontSize: 13,
+    fontWeight: "800",
   },
-
   securityCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
@@ -551,32 +736,91 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+    marginBottom: 16,
   },
-
   securityIcon: {
     width: 48,
     height: 48,
     borderRadius: 16,
-    backgroundColor: "#07150D",
+    backgroundColor: THEME.card2,
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
   },
-
   securityTitle: {
     color: THEME.text,
     fontWeight: "900",
     fontSize: 15,
   },
-
   securitySub: {
     color: THEME.muted,
     marginTop: 3,
     lineHeight: 18,
     fontSize: 12,
+    fontWeight: "700",
   },
-
+  previewCard: {
+    marginHorizontal: 20,
+    backgroundColor: THEME.card,
+    borderRadius: 22,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  previewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  previewAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 20,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  previewImage: {
+    width: "100%",
+    height: "100%",
+  },
+  previewAvatarText: {
+    color: THEME.green,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  previewName: {
+    color: THEME.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  previewSub: {
+    color: THEME.muted,
+    marginTop: 3,
+    fontWeight: "700",
+  },
+  previewPill: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    backgroundColor: "#102116",
+    borderWidth: 1,
+    borderColor: "#20462C",
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  previewPillText: {
+    color: THEME.green,
+    fontSize: 11,
+    fontWeight: "900",
+  },
   footer: {
     position: "absolute",
     bottom: 0,
@@ -588,7 +832,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: THEME.border,
   },
-
   saveBtn: {
     backgroundColor: THEME.green,
     borderRadius: 18,
@@ -598,10 +841,135 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-
   saveText: {
     color: THEME.black,
     fontWeight: "900",
     fontSize: 16,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    justifyContent: "center",
+    padding: 22,
+  },
+  optionBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 20,
+    alignItems: "center",
+  },
+  optionIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 24,
+    backgroundColor: "#252109",
+    borderWidth: 1,
+    borderColor: "#57470A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  optionTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  optionSub: {
+    color: THEME.muted,
+    textAlign: "center",
+    marginTop: 7,
+    lineHeight: 20,
+    fontWeight: "700",
+    marginBottom: 16,
+  },
+  optionRow: {
+    alignSelf: "stretch",
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 10,
+  },
+  optionText: {
+    flex: 1,
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  modalBtn: {
+    marginTop: 8,
+    backgroundColor: THEME.green,
+    paddingHorizontal: 24,
+    paddingVertical: 13,
+    borderRadius: 16,
+  },
+  modalBtnText: {
+    color: THEME.black,
+    fontWeight: "900",
+  },
+  confirmBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 20,
+    alignItems: "center",
+  },
+  confirmIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 24,
+    backgroundColor: "#1B0E0E",
+    borderWidth: 1,
+    borderColor: "#3F1717",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  confirmTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  confirmText: {
+    color: THEME.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginTop: 8,
+    fontWeight: "700",
+  },
+  confirmActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 20,
+  },
+  keepBtn: {
+    flex: 1,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  keepText: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  discardBtn: {
+    flex: 1,
+    backgroundColor: THEME.green,
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  discardText: {
+    color: THEME.black,
+    fontWeight: "900",
   },
 });

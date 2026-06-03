@@ -9,6 +9,8 @@ import RiderDeliveryHistoryScreen from "@/screens/rider/RiderDeliveryHistoryScre
 import RiderKycScreen from "@/screens/rider/RiderKycScreen";
 import RiderSupportScreen from "@/screens/rider/RiderSupportScreen";
 import RiderIncentivesScreen from "@/screens/rider/RiderIncentivesScreen";
+import RiderLiveTrackingScreen from "@/screens/rider/RiderLiveTrackingScreen";
+import RiderAnalyticsScreen from "@/screens/rider/RiderAnalyticsScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -21,40 +23,15 @@ export default function RiderNavigator() {
         animation: "slide_from_right",
       }}
     >
-      <Stack.Screen
-        name="RiderHome"
-        component={RiderBottomTabNavigator}
-      />
-
-      <Stack.Screen
-        name="RiderOrderDetail"
-        component={RiderOrderDetailScreen}
-      />
-
-      <Stack.Screen
-        name="RiderWallet"
-        component={RiderWalletScreen}
-      />
-
-      <Stack.Screen
-        name="RiderDeliveryHistory"
-        component={RiderDeliveryHistoryScreen}
-      />
-
-      <Stack.Screen
-        name="RiderKyc"
-        component={RiderKycScreen}
-      />
-
-      <Stack.Screen
-        name="RiderSupport"
-        component={RiderSupportScreen}
-      />
-
-      <Stack.Screen
-        name="RiderIncentives"
-        component={RiderIncentivesScreen}
-      />
+      <Stack.Screen name="RiderHome" component={RiderBottomTabNavigator} />
+      <Stack.Screen name="RiderOrderDetail" component={RiderOrderDetailScreen} />
+      <Stack.Screen name="RiderWallet" component={RiderWalletScreen} />
+      <Stack.Screen name="RiderDeliveryHistory" component={RiderDeliveryHistoryScreen} />
+      <Stack.Screen name="RiderKyc" component={RiderKycScreen} />
+      <Stack.Screen name="RiderSupport" component={RiderSupportScreen} />
+      <Stack.Screen name="RiderIncentives" component={RiderIncentivesScreen} />
+      <Stack.Screen name="RiderLiveTracking" component={RiderLiveTrackingScreen} />
+      <Stack.Screen name="RiderAnalytics" component={RiderAnalyticsScreen} />
     </Stack.Navigator>
   );
 }

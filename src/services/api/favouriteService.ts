@@ -18,6 +18,7 @@ export type FavoriteRestaurant = {
   isOpen?: boolean;
   is_open?: boolean;
   address?: string | null;
+  cuisine?: string | null;
 };
 
 export type FavoriteItem = {
@@ -29,35 +30,95 @@ export type FavoriteItem = {
   created_at?: string;
 };
 
+export type FavoriteMenuItem = {
+  id: string;
+  menuItemId?: string;
+  menu_item_id?: string;
+  menuItem?: any;
+  menu_item?: any;
+  createdAt?: string;
+  created_at?: string;
+};
+
+export type FavoritesResponse = {
+  restaurants: FavoriteItem[];
+  items: FavoriteMenuItem[];
+};
+
 type ApiResult<T> = {
   data: T | null;
   error: any | null;
 };
 
 const normalizeData = (res: any) => {
-  return res?.data?.data ?? res?.data?.favorites ?? res?.data ?? null;
+  return res?.data?.data ?? res?.data ?? null;
 };
 
 const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
   try {
     const res = await fn();
-    return { data: normalizeData(res) as T, error: null };
+
+    return {
+      data: normalizeData(res) as T,
+      error: null,
+    };
   } catch (error: any) {
     console.log("FAVORITE API ERROR:", error?.response?.data || error?.message);
-    return { data: null, error: error?.response?.data || error };
+
+    return {
+      data: null,
+      error: error?.response?.data || error,
+    };
   }
 };
 
 export const favoriteService = {
   getFavorites: async () => {
-    return safe<FavoriteItem[]>(() => apiClient.get("/favorite"));
+    return safe<FavoritesResponse>(() => apiClient.get("/favorite"));
+  },
+
+  getFavoriteRestaurants: async () => {
+    const result = await safe<FavoritesResponse>(() => apiClient.get("/favorite"));
+
+    return {
+      data: Array.isArray(result.data?.restaurants)
+        ? result.data.restaurants
+        : [],
+      error: result.error,
+    } as ApiResult<FavoriteItem[]>;
   },
 
   toggleFavorite: async (restaurantId: string) => {
-    return safe<any>(() => apiClient.post(`/favorite/${restaurantId}`));
+    return safe<any>(() =>
+      apiClient.post(`/favorite/restaurant/${restaurantId}`)
+    );
+  },
+
+  addFavorite: async (restaurantId: string) => {
+    return safe<any>(() =>
+      apiClient.post(`/favorite/restaurant/${restaurantId}`)
+    );
   },
 
   removeFavorite: async (restaurantId: string) => {
-    return safe<any>(() => apiClient.post(`/favorite/${restaurantId}`));
+    return safe<any>(() =>
+      apiClient.post(`/favorite/restaurant/${restaurantId}`)
+    );
+  },
+
+  isFavorite: async (restaurantId: string) => {
+    return safe<{ success: boolean; isFavorite: boolean }>(() =>
+      apiClient.get(`/favorite/restaurant/${restaurantId}/status`)
+    );
+  },
+
+  toggleItemFavorite: async (menuItemId: string) => {
+    return safe<any>(() => apiClient.post(`/favorite/item/${menuItemId}`));
+  },
+
+  isItemFavorite: async (menuItemId: string) => {
+    return safe<{ success: boolean; isFavorite: boolean }>(() =>
+      apiClient.get(`/favorite/item/${menuItemId}/status`)
+    );
   },
 };

@@ -12,15 +12,15 @@ export type KartoUser = {
   isActive: boolean;
 };
 
+type AuthResult = {
+  data?: any;
+  error?: any;
+};
+
 type UpdateProfilePayload = {
   fullName?: string;
   phone?: string | null;
   avatarUrl?: string | null;
-};
-
-type AuthResult = {
-  data?: any;
-  error?: any;
 };
 
 type AuthContextType = {
@@ -56,6 +56,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     if (accessToken) await AsyncStorage.setItem("accessToken", accessToken);
     if (refreshToken) await AsyncStorage.setItem("refreshToken", refreshToken);
+
     if (authUser) {
       await AsyncStorage.setItem("user", JSON.stringify(authUser));
       setUser(authUser);
@@ -70,6 +71,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const reloadUser = async () => {
     try {
       const token = await AsyncStorage.getItem("accessToken");
+
       if (!token) {
         setUser(null);
         return;
@@ -92,10 +94,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const signInFromStorage = async () => {
     try {
       const userData = await AsyncStorage.getItem("user");
+
       if (userData) {
         setUser(JSON.parse(userData));
         return;
       }
+
       await reloadUser();
     } catch {
       await reloadUser();
@@ -105,12 +109,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   React.useEffect(() => {
     const initAuth = async () => {
       try {
-        // Load user from local storage immediately
         const userData = await AsyncStorage.getItem("user");
-        if (userData) setUser(JSON.parse(userData));
-        else setUser(null);
 
-        // Reload user in background
+        if (userData) {
+          setUser(JSON.parse(userData));
+        } else {
+          setUser(null);
+        }
+
         reloadUser().catch(() => {});
       } finally {
         setLoading(false);
@@ -133,7 +139,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         password,
         phone,
       });
+
       await saveAuthData(res.data);
+
       return { data: res.data, error: null };
     } catch (error: any) {
       return { data: null, error: error?.response?.data || error };
@@ -143,7 +151,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const signIn = async (email: string, password: string) => {
     try {
       const res = await apiClient.post("/auth/login", { email, password });
+
       await saveAuthData(res.data);
+
       return { data: res.data, error: null };
     } catch (error: any) {
       return { data: null, error: error?.response?.data || error };
@@ -177,7 +187,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const value = React.useMemo(
-    () => ({ user, loading, signUp, signIn, signInFromStorage, signOut, reloadUser, updateProfile }),
+    () => ({
+      user,
+      loading,
+      signUp,
+      signIn,
+      signInFromStorage,
+      signOut,
+      reloadUser,
+      updateProfile,
+    }),
     [user, loading]
   );
 

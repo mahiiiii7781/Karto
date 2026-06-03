@@ -7,75 +7,100 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  Alert,
   ScrollView,
   FlatList,
+  StatusBar,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import Toast from "react-native-toast-message";
+
 import { useAuth } from "@/context/AuthContext";
-import { requireLogin } from "@/utils/authGuard";
+import { restaurantService, MenuItem } from "@/services/api/restaurantService";
 import {
-  restaurantService,
-  MenuItem,
   cartService,
-} from "@/services/api/restaurantService";
+  isDifferentRestaurantError,
+  getCartErrorMessage,
+} from "@/services/api/cartService";
+import { favoriteService } from "@/services/api/favouriteService";
 
 const THEME = {
-  bg: "#F7FFF9",
-  card: "#FFFFFF",
-  green: "#16A34A",
-  greenDark: "#0B7A34",
-  mint: "#DCFCE7",
+  bg: "#070A08",
+  card: "#101713",
+  card2: "#151F19",
+  green: "#22C55E",
   yellow: "#FACC15",
-  text: "#101510",
-  muted: "#6B7280",
-  border: "#E5E7EB",
-  soft: "#F1F5F9",
+  text: "#F8FAFC",
+  muted: "#8A94A6",
+  border: "#1E2A22",
   black: "#050807",
   danger: "#EF4444",
 };
 
 const NOTE_SUGGESTIONS = ["Less spicy", "No onion", "Extra fresh", "Pack separately"];
 
-const FALLBACK_IMAGE =
-  "https://images.unsplash.com/photo-1504674900247-0877df9cc836";
-
-const getImage = (item: any) =>
-  item?.image_url || item?.imageUrl || item?.image || FALLBACK_IMAGE;
-
+const getImage = (item: any) => item?.image_url || item?.imageUrl || item?.image || null;
 const num = (value: any) => Number(value || 0);
 
 const isAvailable = (item: any) =>
   item?.is_available !== false && item?.isAvailable !== false;
 
 const isVeg = (item: any) =>
-  item?.is_vegetarian === true ||
-  item?.isVegetarian === true ||
-  item?.isVeg === true;
+  item?.is_vegetarian === true || item?.isVegetarian === true || item?.isVeg === true;
 
 export default function MenuItemDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
+  const { user } = useAuth();
+
   const { itemId, restaurantId } = route.params || {};
-const { user } = useAuth();
+
   const [item, setItem] = useState<(MenuItem & any) | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [note, setNote] = useState("");
   const [isFav, setIsFav] = useState(false);
+  const [favLoading, setFavLoading] = useState(false);
 
   const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
   const [selectedCustomizationIds, setSelectedCustomizationIds] = useState<string[]>([]);
 
+  const showToast = (
+    type: "success" | "error" | "info",
+    text1: string,
+    text2?: string
+  ) => {
+    Toast.show({
+      type,
+      text1,
+      text2,
+      position: "bottom",
+      visibilityTime: 1900,
+    });
+  };
+
+  const requireAuth = (message = "Please sign in to continue.") => {
+    if (user?.id) return true;
+
+    showToast("info", "Login required", message);
+    navigation.navigate("Auth");
+    return false;
+  };
+
   useEffect(() => {
     loadMenuItem();
-    loadFavoriteStatus();
-    saveRecentlyViewed();
   }, [itemId]);
+
+  useEffect(() => {
+    if (user?.id && itemId) {
+      loadFavoriteStatus();
+      saveRecentlyViewed();
+    } else {
+      setIsFav(false);
+    }
+  }, [itemId, user?.id]);
 
   const addons = useMemo(() => {
     const data = item?.addons || [];
@@ -100,7 +125,10 @@ const { user } = useAuth();
   );
 
   const selectedCustomizations = useMemo(
-    () => customizations.filter((custom: any) => selectedCustomizationIds.includes(custom.id)),
+    () =>
+      customizations.filter((custom: any) =>
+        selectedCustomizationIds.includes(custom.id)
+      ),
     [customizations, selectedCustomizationIds]
   );
 
@@ -113,65 +141,89 @@ const { user } = useAuth();
     (sum: number, custom: any) => sum + num(custom.price),
     0
   );
+
   const unitPrice = basePrice + addonsTotal + customizationTotal;
   const totalPrice = unitPrice * quantity;
   const frequentlyBought = addons.slice(0, 4);
 
   const loadMenuItem = async () => {
     if (!itemId) {
-      Alert.alert("Invalid Item", "Item id is missing.");
+      setLoading(false);
+      showToast("error", "Item unavailable", "Item details are missing.");
       navigation.goBack();
       return;
     }
 
     try {
       setLoading(true);
-      const { data, error } = await restaurantService.getMenuItemById(itemId);
-      if (error) throw error;
 
-      if (!data) {
-        Alert.alert("Not Found", "This item is not available.");
+      const { data, error } = await restaurantService.getMenuItemById(itemId);
+
+      if (error || !data) {
+        showToast("error", "Item unavailable", "This item is currently unavailable.");
         navigation.goBack();
         return;
       }
 
       setItem(data as any);
-    } catch (err) {
-      console.error("Error fetching menu item:", err);
-      Alert.alert("Error", "Could not load item.");
+    } catch {
+      showToast("error", "Unable to load item", "Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
   const loadFavoriteStatus = async () => {
+    if (!itemId || !user?.id) return;
+
     try {
-      if (!itemId) return;
-      const res = await restaurantService.isMenuItemFavorite(itemId);
-      setIsFav(!!res.data);
+      const { data } = await favoriteService.isItemFavorite(itemId);
+      setIsFav(!!data?.isFavorite);
     } catch {
       setIsFav(false);
     }
   };
 
   const toggleFavorite = async () => {
+    if (!requireAuth("Please sign in to save favorite items.")) return;
+    if (!itemId || favLoading) return;
+
     try {
-      if (!itemId) return;
-      const res: any = await restaurantService.toggleMenuItemFavorite(itemId);
-      setIsFav(!!res?.data?.isFavorite);
+      setFavLoading(true);
+
+      const { data, error } = await favoriteService.toggleItemFavorite(itemId);
+
+      if (error) {
+        showToast("error", "Unable to update favorite", error?.message || "Please try again.");
+        return;
+      }
+
+      const next = !!data?.isFavorite;
+      setIsFav(next);
+
+      showToast(
+        "success",
+        next ? "Added to favorites" : "Removed from favorites",
+        item?.name || "Item updated successfully."
+      );
     } catch {
-      Alert.alert("Error", "Favorite update failed.");
+      showToast("error", "Unable to update favorite", "Please try again.");
+    } finally {
+      setFavLoading(false);
     }
   };
 
   const saveRecentlyViewed = async () => {
     try {
-      if (itemId) await restaurantService.saveRecentlyViewed(itemId);
+      if (itemId && user?.id) {
+        await restaurantService.saveRecentlyViewed(itemId);
+      }
     } catch {}
   };
 
   const toggleAddon = (id: string) => {
     if (adding) return;
+
     setSelectedAddonIds(prev =>
       prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
     );
@@ -185,140 +237,124 @@ const { user } = useAuth();
         if (isRequired) return prev;
         return prev.filter(x => x !== id);
       }
+
       return [...prev, id];
     });
   };
 
   const validateRequiredCustomizations = () => {
-    const required = customizations.filter((x: any) => x.isRequired);
-    const missing = required.find(
-      (x: any) => !selectedCustomizationIds.includes(x.id)
-    );
+    const required = customizations.filter((x: any) => x.isRequired || x.is_required);
+
+    const missing = required.find((x: any) => !selectedCustomizationIds.includes(x.id));
 
     if (missing) {
-      Alert.alert("Required", `Please select ${missing.title}`);
+      showToast("info", "Selection required", `Please select ${missing.title} to continue.`);
       return false;
     }
 
     return true;
   };
 
-  const showAddedToast = (name: string) => {
-    Toast.show({
-      type: "success",
-      text1: "Added to cart",
-      text2: `${quantity}x ${name} added successfully`,
-      position: "bottom",
-      visibilityTime: 1800,
-    });
-  };
-
   const addSuggestion = (value: string) => {
     if (adding) return;
-    const finalNote = note.trim() ? `${note.trim()}, ${value}` : value;
-    if (finalNote.length <= 120) setNote(finalNote);
-  };
 
-  const addToCartPayload = async () => {
-    return cartService.addToCart(
-      item!.id,
-      restaurantId,
-      quantity,
-      note.trim(),
-      selectedCustomizationIds,
-      selectedAddonIds
-    );
+    const finalNote = note.trim() ? `${note.trim()}, ${value}` : value;
+
+    if (finalNote.length <= 120) {
+      setNote(finalNote);
+    } else {
+      showToast("info", "Note limit reached", "Please keep your note under 120 characters.");
+    }
   };
 
   const handleAddToCart = async () => {
-    if (!requireLogin(user, navigation, "Please login to add items to cart.")) {
-    return;
-  }
+    if (!requireAuth("Please sign in to add items to your cart.")) return;
+
     if (!item?.id) {
-      Alert.alert("Invalid Item", "Please try again.");
+      showToast("error", "Invalid item", "Please try again.");
       return;
     }
 
     if (!restaurantId) {
-      Alert.alert("Invalid Store", "Restaurant/store id is missing.");
+      showToast("error", "Store unavailable", "Store details are missing.");
       return;
     }
 
     if (!isAvailable(item)) {
-      Alert.alert("Unavailable", "This item is currently not available.");
+      showToast("info", "Item unavailable", "This item is currently unavailable.");
       return;
     }
 
     if (!validateRequiredCustomizations()) return;
 
     if (!quantity || quantity < 1) {
-      Alert.alert("Invalid Quantity", "Quantity must be at least 1.");
+      showToast("info", "Invalid quantity", "Quantity must be at least 1.");
       return;
     }
 
     if (note.length > 120) {
-      Alert.alert("Note Too Long", "Please keep note under 120 characters.");
+      showToast("info", "Note too long", "Please keep your note under 120 characters.");
       return;
     }
 
     setAdding(true);
 
     try {
-      const res: any = await addToCartPayload();
+      const res = await cartService.addToCart({
+        menuItemId: item.id,
+        restaurantId,
+        quantity,
+        note: note.trim(),
+        customizationIds: selectedCustomizationIds,
+        addonIds: selectedAddonIds,
+      });
 
-      if (res?.error) {
-        if (res.error === "DIFFERENT_RESTAURANT") {
-          Alert.alert(
-            "Different Store",
-            "Your cart already contains items from another store. Clear cart and add this item?",
-            [
-              { text: "Cancel", style: "cancel" },
-              {
-                text: "Clear & Add",
-                style: "destructive",
-                onPress: async () => {
-                  try {
-                    setAdding(true);
-                    const clearRes: any = await cartService.clearCart();
+      if (res.error) {
+        const message = getCartErrorMessage(res.error);
 
-                    if (clearRes?.error) {
-                      Alert.alert("Error", "Failed to clear cart.");
-                      return;
-                    }
-
-                    const retryRes: any = await addToCartPayload();
-
-                    if (retryRes?.error) {
-                      Alert.alert("Error", "Could not add item.");
-                      return;
-                    }
-
-                    showAddedToast(item.name);
-                  } finally {
-                    setAdding(false);
-                  }
-                },
-              },
-            ]
-          );
-          return;
-        }
-
-        Alert.alert("Error", "Could not add item to cart.");
+        showToast(
+          isDifferentRestaurantError(res.error) ? "info" : "error",
+          message.title,
+          message.message
+        );
         return;
       }
 
-      showAddedToast(item.name);
-    } catch (err) {
-      console.error("Error adding to cart:", err);
-      Alert.alert("Error", "Could not add item to cart.");
+      showToast(
+        "success",
+        "Added to cart",
+        `${quantity}x ${item.name || "Item"} has been added.`
+      );
+    } catch {
+      showToast("error", "Unable to add item", "Please try again.");
     } finally {
       setAdding(false);
     }
   };
 
+  const openCart = () => {
+    if (!requireAuth("Please sign in to view your cart.")) return;
+    navigation.navigate("Cart", { userId: user?.id });
+  };
+
+  const renderHeroImage = () => {
+    const uri = getImage(item);
+
+    if (uri) {
+      return <Image source={{ uri }} style={styles.image} />;
+    }
+
+    return (
+      <View style={[styles.image, styles.imagePlaceholder]}>
+        <Icon name="fast-food-outline" size={62} color={THEME.yellow} />
+        <Text style={styles.imagePlaceholderText}>Karto Item</Text>
+      </View>
+    );
+  };
+
   const renderAddon = (addon: any) => {
     const selected = selectedAddonIds.includes(addon.id);
+    const addonImg = addon.imageUrl || addon.image_url || null;
 
     return (
       <TouchableOpacity
@@ -329,14 +365,11 @@ const { user } = useAuth();
       >
         <View style={styles.optionLeft}>
           <View style={[styles.checkBox, selected && styles.checkBoxActive]}>
-            {selected && <Icon name="checkmark" size={15} color="#fff" />}
+            {selected && <Icon name="checkmark" size={15} color={THEME.black} />}
           </View>
 
-          {addon.imageUrl || addon.image_url ? (
-            <Image
-              source={{ uri: addon.imageUrl || addon.image_url }}
-              style={styles.optionImg}
-            />
+          {addonImg ? (
+            <Image source={{ uri: addonImg }} style={styles.optionImg} />
           ) : (
             <View style={styles.optionIcon}>
               <Icon name="add-circle-outline" size={20} color={THEME.green} />
@@ -344,7 +377,7 @@ const { user } = useAuth();
           )}
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.optionTitle}>{addon.title}</Text>
+            <Text style={styles.optionTitle}>{addon.title || "Add-on"}</Text>
             <Text style={styles.optionSub}>Recommended add-on</Text>
           </View>
         </View>
@@ -356,12 +389,13 @@ const { user } = useAuth();
 
   const renderCustomization = (customization: any) => {
     const selected = selectedCustomizationIds.includes(customization.id);
+    const required = customization.isRequired || customization.is_required;
 
     return (
       <TouchableOpacity
         key={customization.id}
         style={[styles.optionRow, selected && styles.optionSelected]}
-        onPress={() => toggleCustomization(customization.id, customization.isRequired)}
+        onPress={() => toggleCustomization(customization.id, required)}
         activeOpacity={0.86}
       >
         <View style={styles.optionLeft}>
@@ -371,9 +405,9 @@ const { user } = useAuth();
 
           <View style={{ flex: 1 }}>
             <View style={styles.optionTitleRow}>
-              <Text style={styles.optionTitle}>{customization.title}</Text>
+              <Text style={styles.optionTitle}>{customization.title || "Customization"}</Text>
 
-              {customization.isRequired && (
+              {required && (
                 <View style={styles.requiredPill}>
                   <Text style={styles.requiredText}>Required</Text>
                 </View>
@@ -396,8 +430,9 @@ const { user } = useAuth();
   if (loading || !item) {
     return (
       <View style={styles.loadingContainer}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
         <View style={styles.loadingLogo}>
-          <Icon name="fast-food-outline" size={34} color={THEME.green} />
+          <Icon name="fast-food-outline" size={34} color={THEME.yellow} />
         </View>
         <ActivityIndicator size="large" color={THEME.green} />
         <Text style={styles.loadingText}>Loading item details...</Text>
@@ -408,9 +443,12 @@ const { user } = useAuth();
   const available = isAvailable(item);
   const rating = Number(item.rating || 4.4);
   const totalReviews = Number(item.totalReviews || item.total_reviews || 0);
+  const soldCount = Number((item as any).soldCount || (item as any).sold_count || 0);
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
       <View style={styles.screen}>
         <ScrollView
           style={styles.container}
@@ -418,7 +456,7 @@ const { user } = useAuth();
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.imageWrapper}>
-            <Image source={{ uri: getImage(item) }} style={styles.image} />
+            {renderHeroImage()}
             <View style={styles.imageGradient} />
 
             <View style={styles.topBar}>
@@ -427,11 +465,17 @@ const { user } = useAuth();
                 onPress={() => navigation.goBack()}
                 activeOpacity={0.85}
               >
-                <Icon name="arrow-back" size={23} color={THEME.text} />
+                <Icon name="chevron-back" size={23} color={THEME.text} />
               </TouchableOpacity>
 
               <View style={styles.topRight}>
-                <TouchableOpacity style={styles.circleBtn} activeOpacity={0.85}>
+                <TouchableOpacity
+                  style={styles.circleBtn}
+                  activeOpacity={0.85}
+                  onPress={() =>
+                    showToast("info", "Sharing coming soon", "This feature will be available soon.")
+                  }
+                >
                   <Icon name="share-social-outline" size={22} color={THEME.text} />
                 </TouchableOpacity>
 
@@ -439,12 +483,17 @@ const { user } = useAuth();
                   style={styles.circleBtn}
                   activeOpacity={0.85}
                   onPress={toggleFavorite}
+                  disabled={favLoading}
                 >
-                  <Icon
-                    name={isFav ? "heart" : "heart-outline"}
-                    size={23}
-                    color={isFav ? THEME.danger : THEME.text}
-                  />
+                  {favLoading ? (
+                    <ActivityIndicator size="small" color={THEME.green} />
+                  ) : (
+                    <Icon
+                      name={isFav ? "heart" : "heart-outline"}
+                      size={23}
+                      color={isFav ? THEME.danger : THEME.text}
+                    />
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
@@ -455,25 +504,9 @@ const { user } = useAuth();
                 <Text style={styles.ratingBadgeText}>{rating.toFixed(1)}</Text>
               </View>
 
-              <View
-                style={[
-                  styles.availabilityBadge,
-                  !available && styles.unavailableBadge,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.liveDot,
-                    !available && { backgroundColor: THEME.danger },
-                  ]}
-                />
-
-                <Text
-                  style={[
-                    styles.availabilityText,
-                    !available && { color: THEME.danger },
-                  ]}
-                >
+              <View style={[styles.availabilityBadge, !available && styles.unavailableBadge]}>
+                <View style={[styles.liveDot, !available && { backgroundColor: THEME.danger }]} />
+                <Text style={[styles.availabilityText, !available && { color: THEME.danger }]}>
                   {available ? "Available now" : "Currently unavailable"}
                 </Text>
               </View>
@@ -481,24 +514,37 @@ const { user } = useAuth();
           </View>
 
           <View style={styles.contentCard}>
+            <View style={styles.heroStatsBanner}>
+              <View style={styles.heroStat}>
+                <Text style={styles.heroStatValue}>⭐ {rating.toFixed(1)}</Text>
+                <Text style={styles.heroStatLabel}>Rating</Text>
+              </View>
+
+              <View style={styles.heroStat}>
+                <Text style={styles.heroStatValue}>
+                  {soldCount > 0 ? `${soldCount}+` : "Fresh"}
+                </Text>
+                <Text style={styles.heroStatLabel}>Orders</Text>
+              </View>
+
+              <View style={styles.heroStat}>
+                <Text style={styles.heroStatValue}>
+                  {item.prepTimeMin || item.prep_time_min || 20} min
+                </Text>
+                <Text style={styles.heroStatLabel}>Prep time</Text>
+              </View>
+            </View>
+
             <View style={styles.titleRow}>
               <View style={{ flex: 1 }}>
                 <View style={styles.vegRow}>
-                  <View
-                    style={[
-                      styles.vegBox,
-                      !isVeg(item) && { borderColor: THEME.danger },
-                    ]}
-                  >
-                    <View
-                      style={[
-                        styles.vegDot,
-                        !isVeg(item) && { backgroundColor: THEME.danger },
-                      ]}
-                    />
+                  <View style={[styles.vegBox, !isVeg(item) && { borderColor: THEME.danger }]}>
+                    <View style={[styles.vegDot, !isVeg(item) && { backgroundColor: THEME.danger }]} />
                   </View>
 
-                  <Text style={styles.vegText}>{isVeg(item) ? "Veg" : "Non Veg"}</Text>
+                  <Text style={styles.vegText}>
+                    {isVeg(item) ? "Vegetarian" : "Non vegetarian"}
+                  </Text>
 
                   {(item.isPopular || item.is_popular || item.isBestSeller) && (
                     <View style={styles.bestSellerPill}>
@@ -508,7 +554,7 @@ const { user } = useAuth();
                   )}
                 </View>
 
-                <Text style={styles.title}>{item.name}</Text>
+                <Text style={styles.title}>{item.name || "Menu Item"}</Text>
                 <Text style={styles.desc}>
                   {item.description || "Freshly prepared item from this store."}
                 </Text>
@@ -519,12 +565,15 @@ const { user } = useAuth();
               </View>
             </View>
 
+            <View style={styles.offerBanner}>
+              <Icon name="gift-outline" size={20} color={THEME.black} />
+              <Text style={styles.offerText}>Eligible for restaurant offers at checkout.</Text>
+            </View>
+
             <View style={styles.trustRow}>
               <View style={styles.trustChip}>
                 <Icon name="flash-outline" size={16} color={THEME.green} />
-                <Text style={styles.trustText}>
-                  {item.prepTimeMin || item.prep_time_min || 20} min prep
-                </Text>
+                <Text style={styles.trustText}>Fast preparation</Text>
               </View>
 
               <View style={styles.trustChip}>
@@ -533,8 +582,8 @@ const { user } = useAuth();
               </View>
 
               <View style={styles.trustChip}>
-                <Icon name="leaf-outline" size={16} color={THEME.green} />
-                <Text style={styles.trustText}>Fresh</Text>
+                <Icon name="cube-outline" size={16} color={THEME.green} />
+                <Text style={styles.trustText}>Safe packing</Text>
               </View>
             </View>
 
@@ -591,9 +640,7 @@ const { user } = useAuth();
                     <Text style={styles.sectionSub}>Choose your preferences</Text>
                   </View>
 
-                  <Text style={styles.sectionAmount}>
-                    ₹{customizationTotal.toFixed(0)}
-                  </Text>
+                  <Text style={styles.sectionAmount}>₹{customizationTotal.toFixed(0)}</Text>
                 </View>
 
                 {customizations.map(renderCustomization)}
@@ -611,7 +658,7 @@ const { user } = useAuth();
                   horizontal
                   showsHorizontalScrollIndicator={false}
                   data={frequentlyBought}
-                  keyExtractor={(x: any) => x.id}
+                  keyExtractor={(x: any, index) => x?.id?.toString() || String(index)}
                   renderItem={({ item: addon }) => {
                     const selected = selectedAddonIds.includes(addon.id);
 
@@ -625,17 +672,15 @@ const { user } = useAuth();
                           <Icon
                             name={selected ? "checkmark-circle" : "add-circle-outline"}
                             size={26}
-                            color={THEME.green}
+                            color={selected ? THEME.yellow : THEME.green}
                           />
                         </View>
 
                         <Text style={styles.comboTitle} numberOfLines={1}>
-                          {addon.title}
+                          {addon.title || "Add-on"}
                         </Text>
 
-                        <Text style={styles.comboPrice}>
-                          +₹{num(addon.price).toFixed(0)}
-                        </Text>
+                        <Text style={styles.comboPrice}>+₹{num(addon.price).toFixed(0)}</Text>
                       </TouchableOpacity>
                     );
                   }}
@@ -646,7 +691,7 @@ const { user } = useAuth();
             <View style={styles.sectionBox}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Quantity</Text>
-                <Text style={styles.sectionSub}>Choose how many you want</Text>
+                <Text style={styles.sectionSub}>Estimated total updates live</Text>
               </View>
 
               <View style={styles.quantityCard}>
@@ -665,7 +710,7 @@ const { user } = useAuth();
 
                 <View style={styles.qtyCenter}>
                   <Text style={styles.qtyText}>{quantity}</Text>
-                  <Text style={styles.qtyLabel}>items</Text>
+                  <Text style={styles.qtyLabel}>{quantity === 1 ? "item" : "items"}</Text>
                 </View>
 
                 <TouchableOpacity
@@ -719,8 +764,6 @@ const { user } = useAuth();
                       ⭐ {rating.toFixed(1)} from {totalReviews || reviews.length} reviews
                     </Text>
                   </View>
-
-                  <Text style={styles.viewAllText}>View all</Text>
                 </View>
 
                 {reviews.map((review: any, index: number) => (
@@ -744,7 +787,7 @@ const { user } = useAuth();
             <View style={styles.sectionBox}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>Special instructions</Text>
-                <Text style={styles.sectionSub}>Optional note for store</Text>
+                <Text style={styles.sectionSub}>Optional note for the store</Text>
               </View>
 
               <View style={styles.suggestionWrap}>
@@ -776,17 +819,13 @@ const { user } = useAuth();
             </View>
 
             <View style={styles.infoBox}>
-              <Icon name="information-circle-outline" size={20} color={THEME.green} />
+              <Icon name="information-circle-outline" size={20} color={THEME.yellow} />
               <Text style={styles.infoText}>
-                Add-ons and customizations are included in final cart total.
+                Add-ons and customizations are included in the final cart total.
               </Text>
             </View>
 
-            <TouchableOpacity
-              style={styles.goToCartBtn}
-              onPress={() => navigation.navigate("Cart")}
-              activeOpacity={0.85}
-            >
+            <TouchableOpacity style={styles.goToCartBtn} onPress={openCart} activeOpacity={0.85}>
               <Icon name="bag-handle-outline" size={18} color={THEME.green} />
               <Text style={styles.goToCartText}>Go to Cart</Text>
             </TouchableOpacity>
@@ -800,10 +839,7 @@ const { user } = useAuth();
           </View>
 
           <TouchableOpacity
-            style={[
-              styles.addToCartBtn,
-              (!available || adding) && { opacity: 0.65 },
-            ]}
+            style={[styles.addToCartBtn, (!available || adding) && { opacity: 0.65 }]}
             onPress={handleAddToCart}
             disabled={adding || !available}
             activeOpacity={0.9}
@@ -814,7 +850,7 @@ const { user } = useAuth();
               <>
                 <Icon name="cart" size={19} color={THEME.black} />
                 <Text style={styles.addToCartText}>
-                  {available ? "Add to Cart" : "Unavailable"}
+                  {available ? `Add • ₹${totalPrice.toFixed(0)}` : "Unavailable"}
                 </Text>
               </>
             )}
@@ -840,6 +876,8 @@ const styles = StyleSheet.create({
     height: 76,
     borderRadius: 26,
     backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 18,
@@ -853,16 +891,25 @@ const styles = StyleSheet.create({
   imageWrapper: {
     position: "relative",
     height: 330,
-    backgroundColor: THEME.soft,
+    backgroundColor: THEME.card2,
   },
   image: {
     width: "100%",
     height: "100%",
-    backgroundColor: THEME.soft,
+    backgroundColor: THEME.card2,
+  },
+  imagePlaceholder: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  imagePlaceholderText: {
+    color: THEME.muted,
+    marginTop: 8,
+    fontWeight: "800",
   },
   imageGradient: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.18)",
+    backgroundColor: "rgba(0,0,0,0.42)",
   },
   topBar: {
     position: "absolute",
@@ -878,7 +925,9 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.92)",
+    backgroundColor: "rgba(5,8,7,0.82)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
     justifyContent: "center",
     alignItems: "center",
     elevation: 4,
@@ -913,8 +962,13 @@ const styles = StyleSheet.create({
     borderRadius: 99,
     flexDirection: "row",
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
-  unavailableBadge: { backgroundColor: "#FEE2E2" },
+  unavailableBadge: {
+    backgroundColor: "#1A0E0E",
+    borderColor: "#5C2020",
+  },
   liveDot: {
     width: 7,
     height: 7,
@@ -935,6 +989,34 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 22,
   },
+  heroStatsBanner: {
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 22,
+    padding: 13,
+    flexDirection: "row",
+    gap: 9,
+    marginBottom: 18,
+  },
+  heroStat: {
+    flex: 1,
+    backgroundColor: THEME.card2,
+    borderRadius: 16,
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  heroStatValue: {
+    color: THEME.text,
+    fontWeight: "900",
+    fontSize: 13,
+  },
+  heroStatLabel: {
+    color: THEME.muted,
+    fontSize: 11,
+    marginTop: 4,
+    fontWeight: "700",
+  },
   titleRow: {
     flexDirection: "row",
     alignItems: "flex-start",
@@ -943,6 +1025,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 9,
+    flexWrap: "wrap",
   },
   vegBox: {
     width: 17,
@@ -952,6 +1035,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginRight: 6,
+    backgroundColor: THEME.bg,
   },
   vegDot: {
     width: 8,
@@ -968,10 +1052,12 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: THEME.black,
+    backgroundColor: "#252109",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 99,
+    borderWidth: 1,
+    borderColor: "#57470A",
   },
   bestSellerText: {
     color: THEME.yellow,
@@ -991,6 +1077,7 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     marginTop: 8,
     paddingRight: 10,
+    fontWeight: "700",
   },
   pricePill: {
     backgroundColor: THEME.green,
@@ -1001,8 +1088,22 @@ const styles = StyleSheet.create({
   },
   price: {
     fontSize: 17,
-    color: "#FFFFFF",
+    color: THEME.black,
     fontWeight: "900",
+  },
+  offerBanner: {
+    backgroundColor: THEME.yellow,
+    borderRadius: 18,
+    padding: 13,
+    marginTop: 16,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  offerText: {
+    color: THEME.black,
+    fontWeight: "900",
+    marginLeft: 8,
+    flex: 1,
   },
   trustRow: {
     flexDirection: "row",
@@ -1066,14 +1167,14 @@ const styles = StyleSheet.create({
   },
   nutritionItem: {
     flex: 1,
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.card2,
     borderWidth: 1,
     borderColor: THEME.border,
     borderRadius: 18,
     padding: 12,
   },
   nutritionValue: {
-    color: THEME.green,
+    color: THEME.yellow,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -1087,7 +1188,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.card2,
     borderRadius: 18,
     padding: 13,
     borderWidth: 1,
@@ -1096,7 +1197,7 @@ const styles = StyleSheet.create({
   },
   optionSelected: {
     borderColor: THEME.green,
-    backgroundColor: "#F0FDF4",
+    backgroundColor: "#102116",
   },
   optionLeft: {
     flexDirection: "row",
@@ -1143,14 +1244,16 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 14,
     marginRight: 10,
-    backgroundColor: THEME.soft,
+    backgroundColor: THEME.card,
   },
   optionIcon: {
     width: 42,
     height: 42,
     borderRadius: 14,
     marginRight: 10,
-    backgroundColor: THEME.mint,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1190,7 +1293,7 @@ const styles = StyleSheet.create({
   },
   comboCard: {
     width: 126,
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.card2,
     borderRadius: 18,
     padding: 12,
     marginRight: 10,
@@ -1199,7 +1302,7 @@ const styles = StyleSheet.create({
   },
   comboCardActive: {
     borderColor: THEME.green,
-    backgroundColor: "#F0FDF4",
+    backgroundColor: "#102116",
   },
   comboIcon: {
     marginBottom: 8,
@@ -1219,7 +1322,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.card2,
     borderRadius: 22,
     padding: 12,
     borderWidth: 1,
@@ -1229,12 +1332,14 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 18,
-    backgroundColor: THEME.mint,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
     justifyContent: "center",
     alignItems: "center",
   },
   qtyBtnDisabled: {
-    backgroundColor: THEME.soft,
+    opacity: 0.45,
   },
   qtyCenter: {
     alignItems: "center",
@@ -1294,7 +1399,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   reviewCard: {
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.card2,
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
@@ -1319,18 +1424,15 @@ const styles = StyleSheet.create({
     marginTop: 6,
     lineHeight: 18,
   },
-  viewAllText: {
-    color: THEME.green,
-    fontWeight: "900",
-    fontSize: 13,
-  },
   suggestionWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
     marginBottom: 10,
   },
   suggestionChip: {
-    backgroundColor: THEME.mint,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 99,
@@ -1341,12 +1443,12 @@ const styles = StyleSheet.create({
   },
   suggestionText: {
     marginLeft: 5,
-    color: THEME.greenDark,
+    color: THEME.text,
     fontSize: 12,
     fontWeight: "900",
   },
   noteInput: {
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.card2,
     borderRadius: 18,
     padding: 14,
     minHeight: 86,
@@ -1365,17 +1467,19 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   infoBox: {
-    backgroundColor: THEME.mint,
+    backgroundColor: "#252109",
     borderRadius: 18,
     padding: 13,
     marginTop: 16,
     flexDirection: "row",
     alignItems: "flex-start",
+    borderWidth: 1,
+    borderColor: "#57470A",
   },
   infoText: {
     flex: 1,
     marginLeft: 8,
-    color: THEME.greenDark,
+    color: THEME.yellow,
     fontSize: 12,
     fontWeight: "800",
     lineHeight: 18,
@@ -1426,7 +1530,7 @@ const styles = StyleSheet.create({
   addToCartBtn: {
     backgroundColor: THEME.yellow,
     paddingVertical: 15,
-    paddingHorizontal: 22,
+    paddingHorizontal: 18,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
@@ -1435,7 +1539,7 @@ const styles = StyleSheet.create({
   },
   addToCartText: {
     color: THEME.black,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "900",
     marginLeft: 8,
   },

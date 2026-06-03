@@ -6,43 +6,54 @@ import {
   FlatList,
   TouchableOpacity,
   TextInput,
-  Alert,
   PermissionsAndroid,
   Platform,
   ActivityIndicator,
+  StatusBar,
+  Modal,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import Geolocation from "react-native-geolocation-service";
 import Geocoder from "react-native-geocoding";
 import { Picker } from "@react-native-picker/picker";
 import { useNavigation, useRoute, useFocusEffect } from "@react-navigation/native";
+import Toast from "react-native-toast-message";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
+import { useAuth } from "@/context/AuthContext";
 import {
   addressService,
   CreateAddressPayload,
 } from "@/services/api/addressService";
 
 const THEME = {
-  bg: "#050807",
-  card: "#0D1511",
-  card2: "#101C15",
-  green: "#22C55E",
+  bg: "#F7FAF6",
+  soft: "#ECFDF3",
+  card: "#FFFFFF",
+  card2: "#F4FBF6",
+  green: "#16A34A",
+  green2: "#22C55E",
   yellow: "#FACC15",
-  text: "#F3F4F6",
-  muted: "#9CA3AF",
-  border: "#1E2A22",
+  yellow2: "#FFF7CC",
+  text: "#101713",
+  muted: "#647067",
+  border: "#DDE7DE",
   danger: "#EF4444",
-  black: "#041008",
+  black: "#07110B",
 };
 
 export default function AddressScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
+  const { user } = useAuth();
 
   const editAddress = route.params?.editAddress || null;
   const fromCheckout = route.params?.fromCheckout || false;
 
   const [addresses, setAddresses] = useState<any[]>([]);
   const [editingId, setEditingId] = useState<string | null>(editAddress?.id || null);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+  const [authModal, setAuthModal] = useState(false);
 
   const [label, setLabel] = useState("Home");
   const [address, setAddress] = useState("");
@@ -62,30 +73,74 @@ export default function AddressScreen() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [defaultLoadingId, setDefaultLoadingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (editAddress?.id) {
-      fillForm(editAddress);
+  const showToast = (
+    type: "success" | "error" | "info",
+    text1: string,
+    text2?: string
+  ) => {
+    Toast.show({
+      type,
+      text1,
+      text2,
+      position: "bottom",
+      visibilityTime: 1900,
+    });
+  };
+
+  const isRealUser = async () => {
+    const token = await AsyncStorage.getItem("accessToken");
+    return Boolean(user?.id && token);
+  };
+
+  const requireRealLogin = async () => {
+    const ok = await isRealUser();
+
+    if (!ok) {
+      setAuthModal(true);
+      return false;
     }
+
+    return true;
+  };
+
+  useEffect(() => {
+    if (editAddress?.id) fillForm(editAddress);
   }, [editAddress?.id]);
 
   useFocusEffect(
     useCallback(() => {
       loadAddresses();
-    }, [])
+    }, [user?.id])
   );
+
+  const openLogin = () => {
+    setAuthModal(false);
+    navigation.navigate("Auth");
+  };
 
   const loadAddresses = async () => {
     try {
       setLoading(true);
 
-      const { data, error } = await addressService.getAddresses();
+      const ok = await isRealUser();
 
-      if (error) {
+      if (!ok) {
         setAddresses([]);
         return;
       }
 
+      const { data, error } = await addressService.getAddresses();
+
+      if (error) {
+        setAddresses([]);
+        showToast("error", "Unable to load addresses", "Please try again.");
+        return;
+      }
+
       setAddresses(Array.isArray(data) ? data : []);
+    } catch {
+      setAddresses([]);
+      showToast("error", "Unable to load addresses", "Please try again.");
     } finally {
       setLoading(false);
     }
@@ -125,8 +180,8 @@ export default function AddressScreen() {
     const granted = await PermissionsAndroid.request(
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       {
-        title: "Karto Location Permission",
-        message: "Karto needs location permission to auto fetch your address.",
+        title: "Location Permission",
+        message: "Karto needs location permission to fetch your delivery address.",
         buttonPositive: "Allow",
         buttonNegative: "Cancel",
       }
@@ -136,10 +191,10 @@ export default function AddressScreen() {
   };
 
   const fetchPincodeDetails = async (pin = pincode) => {
-    const cleanPin = pin.trim();
+    const cleanPin = String(pin || "").trim();
 
     if (!/^\d{6}$/.test(cleanPin)) {
-      Alert.alert("Invalid Pincode", "Please enter valid 6 digit pincode.");
+      showToast("info", "Invalid pincode", "Please enter a valid 6 digit pincode.");
       return;
     }
 
@@ -153,7 +208,7 @@ export default function AddressScreen() {
       const postOffice = result?.PostOffice?.[0];
 
       if (result?.Status !== "Success" || !postOffice) {
-        Alert.alert("Not Found", "No location found for this pincode.");
+        showToast("info", "Pincode not found", "No location found for this pincode.");
         return;
       }
 
@@ -166,17 +221,17 @@ export default function AddressScreen() {
       setStateName(detectedState);
       setCountry(detectedCountry);
 
-      if (!landmark.trim()) {
-        setLandmark(detectedLandmark);
-      }
+      if (!landmark.trim()) setLandmark(detectedLandmark);
 
       if (!address.trim()) {
         setAddress(
           `${detectedLandmark}, ${postOffice.Block || ""}, ${detectedCity}, ${detectedState} - ${cleanPin}`
         );
       }
+
+      showToast("success", "Pincode verified", `${detectedCity}, ${detectedState}`);
     } catch {
-      Alert.alert("Error", "Pincode lookup failed.");
+      showToast("error", "Pincode lookup failed", "Please try again.");
     } finally {
       setPincodeLoading(false);
     }
@@ -186,14 +241,14 @@ export default function AddressScreen() {
     const hasPermission = await requestLocationPermission();
 
     if (!hasPermission) {
-      Alert.alert("Permission Required", "Please allow location permission.");
+      showToast("info", "Permission required", "Please allow location permission.");
       return;
     }
 
     setLocationLoading(true);
 
     Geolocation.getCurrentPosition(
-      async (position) => {
+      async position => {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
 
@@ -205,7 +260,7 @@ export default function AddressScreen() {
           const result = geoRes.results?.[0];
 
           if (!result) {
-            Alert.alert("Location Found", "Location attached. Please fill address manually.");
+            showToast("success", "Location attached", "Please complete address manually.");
             return;
           }
 
@@ -236,19 +291,20 @@ export default function AddressScreen() {
           setCountry(detectedCountry);
           setPincode(detectedPin || "");
 
-          Alert.alert("Location Added", "Current location details filled successfully.");
+          showToast("success", "Location added", "Address details filled successfully.");
         } catch {
-          Alert.alert(
-            "Location Attached",
-            "Location attached. Please enter address and landmark manually."
-          );
+          showToast("success", "Location attached", "Please enter address manually.");
         } finally {
           setLocationLoading(false);
         }
       },
-      (error) => {
+      error => {
         setLocationLoading(false);
-        Alert.alert("Location Error", error?.message || "Failed to fetch location.");
+        showToast(
+          "error",
+          "Location unavailable",
+          error?.message || "Unable to fetch your location."
+        );
       },
       {
         enableHighAccuracy: true,
@@ -260,27 +316,27 @@ export default function AddressScreen() {
 
   const validate = () => {
     if (!label.trim()) {
-      Alert.alert("Validation", "Please select address label.");
+      showToast("info", "Label required", "Please select address label.");
       return false;
     }
 
     if (!address.trim() || address.trim().length < 8) {
-      Alert.alert("Validation", "Please enter complete address.");
+      showToast("info", "Complete address required", "Please enter your full address.");
       return false;
     }
 
     if (!landmark.trim() || landmark.trim().length < 3) {
-      Alert.alert("Landmark Required", "Please enter nearby landmark.");
+      showToast("info", "Landmark required", "Please enter a nearby landmark.");
       return false;
     }
 
     if (!city.trim()) {
-      Alert.alert("Validation", "City is required.");
+      showToast("info", "City required", "Please enter city or district.");
       return false;
     }
 
     if (!/^\d{6}$/.test(pincode.trim())) {
-      Alert.alert("Validation", "Please enter valid 6 digit pincode.");
+      showToast("info", "Invalid pincode", "Please enter a valid 6 digit pincode.");
       return false;
     }
 
@@ -301,6 +357,9 @@ export default function AddressScreen() {
   });
 
   const saveAddress = async () => {
+    const canSave = await requireRealLogin();
+    if (!canSave) return;
+
     if (!validate()) return;
 
     setSaving(true);
@@ -312,79 +371,87 @@ export default function AddressScreen() {
         const { error } = await addressService.updateAddress(editingId, payload);
 
         if (error) {
-          Alert.alert("Error", error?.message || "Failed to update address.");
+          showToast("error", "Update failed", error?.message || "Failed to update address.");
           return;
         }
 
-        Alert.alert("Updated", "Address updated successfully.");
+        showToast("success", "Address updated", "Your delivery address has been updated.");
       } else {
         const { error } = await addressService.createAddress(payload);
 
         if (error) {
-          Alert.alert("Error", error?.message || "Failed to save address.");
+          showToast("error", "Save failed", error?.message || "Failed to save address.");
           return;
         }
 
-        Alert.alert("Saved", "Address saved successfully.");
+        showToast("success", "Address saved", "Your delivery address has been saved.");
       }
 
       resetForm();
       await loadAddresses();
 
-      if (fromCheckout) {
-        navigation.goBack();
-      }
+      if (fromCheckout) navigation.goBack();
+    } catch {
+      showToast("error", "Save failed", "Please try again.");
     } finally {
       setSaving(false);
     }
   };
 
-  const deleteAddress = async (id: string) => {
-    Alert.alert("Delete Address", "Remove this address?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            setDeletingId(id);
+  const deleteAddress = async () => {
+    if (!deleteTarget?.id) return;
 
-            const { error } = await addressService.deleteAddress(id);
+    const canDelete = await requireRealLogin();
+    if (!canDelete) return;
 
-            if (error) {
-              Alert.alert("Error", error?.message || "Failed to delete address.");
-              return;
-            }
+    try {
+      setDeletingId(deleteTarget.id);
 
-            setAddresses((prev) => prev.filter((x) => x.id !== id));
+      const { error } = await addressService.deleteAddress(deleteTarget.id);
 
-            if (editingId === id) resetForm();
-          } finally {
-            setDeletingId(null);
-          }
-        },
-      },
-    ]);
+      if (error) {
+        showToast("error", "Delete failed", error?.message || "Failed to delete address.");
+        return;
+      }
+
+      setAddresses(prev => prev.filter(x => x.id !== deleteTarget.id));
+
+      if (editingId === deleteTarget.id) resetForm();
+
+      setDeleteTarget(null);
+      showToast("success", "Address deleted", "Address removed successfully.");
+    } catch {
+      showToast("error", "Delete failed", "Please try again.");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const setDefaultAddress = async (item: any) => {
+    const canUpdate = await requireRealLogin();
+    if (!canUpdate) return;
+
     try {
       setDefaultLoadingId(item.id);
 
       const { error } = await addressService.setDefaultAddress(item.id);
 
       if (error) {
-        Alert.alert("Error", error?.message || "Failed to set default address.");
+        showToast("error", "Update failed", error?.message || "Failed to set default.");
         return;
       }
 
-      setAddresses((prev) =>
-        prev.map((x) => ({
+      setAddresses(prev =>
+        prev.map(x => ({
           ...x,
           isDefault: x.id === item.id,
           is_default: x.id === item.id,
         }))
       );
+
+      showToast("success", "Default updated", "This is now your default address.");
+    } catch {
+      showToast("error", "Update failed", "Please try again.");
     } finally {
       setDefaultLoadingId(null);
     }
@@ -416,7 +483,7 @@ export default function AddressScreen() {
             </View>
 
             <Text style={styles.savedAddress}>
-              {item.address || item.addressLine || item.fullAddress}
+              {item.address || item.addressLine || item.fullAddress || "Saved address"}
             </Text>
 
             <Text style={styles.savedMeta}>
@@ -456,7 +523,7 @@ export default function AddressScreen() {
 
           <TouchableOpacity
             disabled={deleting}
-            onPress={() => deleteAddress(item.id)}
+            onPress={() => setDeleteTarget(item)}
             style={styles.deleteBtn}
           >
             {deleting ? (
@@ -473,6 +540,7 @@ export default function AddressScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <ActivityIndicator size="large" color={THEME.green} />
         <Text style={styles.loadingText}>Loading addresses...</Text>
       </View>
@@ -481,23 +549,37 @@ export default function AddressScreen() {
 
   return (
     <View style={styles.screen}>
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
+
       <FlatList
         data={addresses}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => item?.id?.toString() || index.toString()}
         renderItem={renderAddress}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={
           <>
             <View style={styles.header}>
               <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-                <Icon name="chevron-back" size={24} color={THEME.green} />
+                <Icon name="chevron-back" size={24} color={THEME.text} />
               </TouchableOpacity>
 
               <View style={{ flex: 1 }}>
                 <Text style={styles.title}>Delivery Address</Text>
-                <Text style={styles.subtitle}>
-                  Add exact address with landmark and location
+                <Text style={styles.subtitle}>Add exact details for faster delivery</Text>
+              </View>
+            </View>
+
+            <View style={styles.heroBanner}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.heroTag}>KARTO DELIVERY</Text>
+                <Text style={styles.heroTitle}>Save accurate address</Text>
+                <Text style={styles.heroSub}>
+                  Exact pincode, landmark and location help riders deliver faster.
                 </Text>
+              </View>
+
+              <View style={styles.heroIcon}>
+                <Icon name="navigate-outline" size={33} color={THEME.black} />
               </View>
             </View>
 
@@ -518,22 +600,20 @@ export default function AddressScreen() {
               >
                 <View style={styles.currentLocationIcon}>
                   {locationLoading ? (
-                    <ActivityIndicator color={THEME.black} />
+                    <ActivityIndicator color={THEME.card} />
                   ) : (
-                    <Icon name="navigate" size={24} color={THEME.black} />
+                    <Icon name="navigate" size={24} color={THEME.card} />
                   )}
                 </View>
 
                 <View style={{ flex: 1 }}>
                   <Text style={styles.currentLocationTitle}>Use Current Location</Text>
                   <Text style={styles.currentLocationSub}>
-                    Auto fetch address, pincode, city and landmark
+                    Auto-fill address, pincode, city and landmark
                   </Text>
 
                   {!!latitude && !!longitude && (
-                    <Text style={styles.locationAttached}>
-                      Location attached successfully
-                    </Text>
+                    <Text style={styles.locationAttached}>Location attached</Text>
                   )}
                 </View>
 
@@ -547,7 +627,7 @@ export default function AddressScreen() {
                   selectedValue={label}
                   dropdownIconColor={THEME.green}
                   style={styles.picker}
-                  onValueChange={(value) => setLabel(value)}
+                  onValueChange={value => setLabel(value)}
                 >
                   <Picker.Item label="Home" value="Home" />
                   <Picker.Item label="Work" value="Work" />
@@ -566,7 +646,7 @@ export default function AddressScreen() {
                   keyboardType="number-pad"
                   maxLength={6}
                   value={pincode}
-                  onChangeText={(text) => {
+                  onChangeText={text => {
                     const pin = text.replace(/\D/g, "");
                     setPincode(pin);
                     if (pin.length === 6) fetchPincodeDetails(pin);
@@ -596,10 +676,9 @@ export default function AddressScreen() {
 
               <View style={styles.inputBox}>
                 <Icon name="flag-outline" size={20} color={THEME.green} />
-
                 <TextInput
                   style={styles.input}
-                  placeholder="Landmark required"
+                  placeholder="Nearby landmark"
                   placeholderTextColor={THEME.muted}
                   value={landmark}
                   onChangeText={setLandmark}
@@ -608,7 +687,6 @@ export default function AddressScreen() {
 
               <View style={styles.inputBox}>
                 <Icon name="business-outline" size={20} color={THEME.green} />
-
                 <TextInput
                   style={styles.input}
                   placeholder="City / District"
@@ -620,7 +698,6 @@ export default function AddressScreen() {
 
               <View style={styles.inputBox}>
                 <Icon name="map-outline" size={20} color={THEME.green} />
-
                 <TextInput
                   style={styles.input}
                   placeholder="State"
@@ -632,7 +709,6 @@ export default function AddressScreen() {
 
               <View style={styles.inputBox}>
                 <Icon name="earth-outline" size={20} color={THEME.green} />
-
                 <TextInput
                   style={styles.input}
                   placeholder="Country"
@@ -645,7 +721,7 @@ export default function AddressScreen() {
               <TouchableOpacity
                 style={styles.defaultToggle}
                 activeOpacity={0.85}
-                onPress={() => setIsDefault((prev) => !prev)}
+                onPress={() => setIsDefault(prev => !prev)}
               >
                 <Icon
                   name={isDefault ? "checkbox" : "square-outline"}
@@ -659,7 +735,7 @@ export default function AddressScreen() {
                 <View style={styles.geoPill}>
                   <Icon name="checkmark-circle" size={17} color={THEME.green} />
                   <Text style={styles.geoText}>
-                    Lat/Lng saved: {latitude.toFixed(5)}, {longitude.toFixed(5)}
+                    Location saved: {latitude.toFixed(5)}, {longitude.toFixed(5)}
                   </Text>
                 </View>
               )}
@@ -677,13 +753,13 @@ export default function AddressScreen() {
                   disabled={saving}
                 >
                   {saving ? (
-                    <ActivityIndicator color={THEME.black} />
+                    <ActivityIndicator color={THEME.card} />
                   ) : (
                     <>
                       <Text style={styles.saveBtnText}>
                         {editingId ? "Update Address" : "Save Address"}
                       </Text>
-                      <Icon name="checkmark-circle" size={20} color={THEME.black} />
+                      <Icon name="checkmark-circle" size={20} color={THEME.card} />
                     </>
                   )}
                 </TouchableOpacity>
@@ -695,13 +771,86 @@ export default function AddressScreen() {
         }
         ListEmptyComponent={
           <View style={styles.emptyBox}>
-            <Icon name="location-outline" size={56} color={THEME.green} />
+            <View style={styles.emptyIcon}>
+              <Icon name="location-outline" size={56} color={THEME.green} />
+            </View>
             <Text style={styles.emptyTitle}>No saved address</Text>
             <Text style={styles.emptySub}>Add your first delivery address.</Text>
           </View>
         }
         contentContainerStyle={styles.listContent}
       />
+
+      <Modal
+        visible={!!deleteTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteTarget(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={styles.confirmIcon}>
+              <Icon name="trash-outline" size={30} color={THEME.danger} />
+            </View>
+
+            <Text style={styles.confirmTitle}>Delete address?</Text>
+            <Text style={styles.confirmText}>
+              This address will be removed from your saved delivery addresses.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={styles.keepBtn}
+                onPress={() => setDeleteTarget(null)}
+                disabled={!!deletingId}
+              >
+                <Text style={styles.keepText}>Keep</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.deleteConfirmBtn}
+                onPress={deleteAddress}
+                disabled={!!deletingId}
+              >
+                {deletingId ? (
+                  <ActivityIndicator color={THEME.card} />
+                ) : (
+                  <Text style={styles.deleteConfirmText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={authModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAuthModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.authBox}>
+            <View style={styles.authIcon}>
+              <Icon name="lock-closed-outline" size={32} color={THEME.yellow} />
+            </View>
+
+            <Text style={styles.authTitle}>Login required</Text>
+            <Text style={styles.authMessage}>
+              Login to save addresses, checkout and track your orders.
+            </Text>
+
+            <TouchableOpacity style={styles.loginBtn} onPress={openLogin}>
+              <Text style={styles.loginBtnText}>Login / Sign up</Text>
+              <Icon name="arrow-forward" size={20} color={THEME.card} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.browseBtn} onPress={() => setAuthModal(false)}>
+              <Text style={styles.browseText}>Continue Browsing</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -714,10 +863,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "700" },
+  loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "800" },
   listContent: { padding: 18, paddingBottom: 38 },
   header: {
-    marginTop: 10,
+    marginTop: Platform.OS === "ios" ? 34 : 10,
     marginBottom: 18,
     flexDirection: "row",
     alignItems: "center",
@@ -726,7 +875,7 @@ const styles = StyleSheet.create({
   backBtn: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 18,
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
@@ -734,7 +883,45 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   title: { color: THEME.text, fontSize: 29, fontWeight: "900" },
-  subtitle: { color: THEME.muted, marginTop: 5 },
+  subtitle: { color: THEME.muted, marginTop: 5, fontWeight: "700" },
+  heroBanner: {
+    backgroundColor: THEME.yellow2,
+    borderRadius: 26,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "#F4DE7A",
+    marginBottom: 16,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  heroTag: {
+    color: THEME.green,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  heroTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 5,
+  },
+  heroSub: {
+    color: THEME.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 6,
+    fontWeight: "700",
+  },
+  heroIcon: {
+    width: 62,
+    height: 62,
+    borderRadius: 22,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 14,
+  },
   formCard: {
     backgroundColor: THEME.card,
     borderRadius: 26,
@@ -758,9 +945,9 @@ const styles = StyleSheet.create({
   currentLocationCard: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#07150D",
+    backgroundColor: THEME.soft,
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: "#BDEDCB",
     borderRadius: 20,
     padding: 14,
     marginBottom: 14,
@@ -784,6 +971,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
     lineHeight: 17,
+    fontWeight: "700",
   },
   locationAttached: {
     color: THEME.green,
@@ -804,7 +992,7 @@ const styles = StyleSheet.create({
   },
   picker: { flex: 1, color: THEME.text },
   inputBox: {
-    height: 56,
+    minHeight: 56,
     borderRadius: 16,
     backgroundColor: THEME.card2,
     borderWidth: 1,
@@ -819,6 +1007,7 @@ const styles = StyleSheet.create({
     color: THEME.text,
     paddingHorizontal: 12,
     fontSize: 15,
+    fontWeight: "700",
   },
   lookupText: { color: THEME.green, fontWeight: "900" },
   addressInput: {
@@ -831,6 +1020,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
     textAlignVertical: "top",
+    fontWeight: "700",
   },
   defaultToggle: {
     flexDirection: "row",
@@ -847,18 +1037,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
-    backgroundColor: "#102417",
+    backgroundColor: THEME.soft,
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: "#BDEDCB",
     padding: 11,
     borderRadius: 14,
     marginBottom: 12,
   },
   geoText: { color: THEME.green, fontSize: 12, fontWeight: "800" },
-  buttonRow: {
-    flexDirection: "row",
-    gap: 10,
-  },
+  buttonRow: { flexDirection: "row", gap: 10 },
   saveBtn: {
     flex: 1,
     height: 56,
@@ -870,7 +1057,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   saveBtnText: {
-    color: THEME.black,
+    color: THEME.card,
     fontWeight: "900",
     fontSize: 16,
   },
@@ -878,9 +1065,9 @@ const styles = StyleSheet.create({
     height: 56,
     paddingHorizontal: 18,
     borderRadius: 18,
-    backgroundColor: "#1B0E0E",
+    backgroundColor: "#FFF1F1",
     borderWidth: 1,
-    borderColor: "#3F1717",
+    borderColor: "#FFD6D6",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -899,7 +1086,7 @@ const styles = StyleSheet.create({
   },
   savedCardDefault: {
     borderColor: THEME.green,
-    backgroundColor: "#07150D",
+    backgroundColor: THEME.soft,
   },
   savedTop: {
     flexDirection: "row",
@@ -910,9 +1097,9 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 15,
-    backgroundColor: "#07150D",
+    backgroundColor: THEME.soft,
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: "#BDEDCB",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -934,7 +1121,7 @@ const styles = StyleSheet.create({
     borderRadius: 99,
   },
   defaultPillText: {
-    color: THEME.black,
+    color: THEME.card,
     fontSize: 10,
     fontWeight: "900",
   },
@@ -942,6 +1129,7 @@ const styles = StyleSheet.create({
     color: THEME.muted,
     marginTop: 4,
     lineHeight: 19,
+    fontWeight: "700",
   },
   savedMeta: {
     color: THEME.green,
@@ -950,7 +1138,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   savedLocation: {
-    color: THEME.yellow,
+    color: THEME.black,
     marginTop: 5,
     fontSize: 12,
     fontWeight: "900",
@@ -962,9 +1150,9 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   smallBtn: {
-    backgroundColor: "#07110B",
+    backgroundColor: THEME.card2,
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: THEME.border,
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 12,
@@ -981,7 +1169,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 13,
-    backgroundColor: "#1B0E0E",
+    backgroundColor: "#FFF1F1",
+    borderWidth: 1,
+    borderColor: "#FFD6D6",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -993,11 +1183,154 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
+  emptyIcon: {
+    width: 88,
+    height: 88,
+    borderRadius: 30,
+    backgroundColor: THEME.soft,
+    borderWidth: 1,
+    borderColor: "#BDEDCB",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   emptyTitle: {
     color: THEME.text,
     fontSize: 20,
     fontWeight: "900",
     marginTop: 12,
   },
-  emptySub: { color: THEME.muted, marginTop: 5 },
+  emptySub: {
+    color: THEME.muted,
+    marginTop: 5,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(7,17,11,0.56)",
+    justifyContent: "center",
+    padding: 22,
+  },
+  confirmBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 20,
+    alignItems: "center",
+  },
+  confirmIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 24,
+    backgroundColor: "#FFF1F1",
+    borderWidth: 1,
+    borderColor: "#FFD6D6",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  confirmTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  confirmText: {
+    color: THEME.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginTop: 8,
+    fontWeight: "700",
+  },
+  confirmActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 20,
+  },
+  keepBtn: {
+    flex: 1,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  keepText: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  deleteConfirmBtn: {
+    flex: 1,
+    backgroundColor: THEME.green,
+    borderRadius: 16,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  deleteConfirmText: {
+    color: THEME.card,
+    fontWeight: "900",
+  },
+  authBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 22,
+    alignItems: "center",
+  },
+  authIcon: {
+    width: 70,
+    height: 70,
+    borderRadius: 25,
+    backgroundColor: THEME.yellow2,
+    borderWidth: 1,
+    borderColor: "#F4DE7A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  authTitle: {
+    color: THEME.text,
+    fontSize: 23,
+    fontWeight: "900",
+  },
+  authMessage: {
+    color: THEME.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginTop: 8,
+    fontWeight: "700",
+  },
+  loginBtn: {
+    marginTop: 22,
+    width: "100%",
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: THEME.green,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  loginBtnText: {
+    color: THEME.card,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  browseBtn: {
+    marginTop: 12,
+    width: "100%",
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: THEME.soft,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  browseText: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
 });

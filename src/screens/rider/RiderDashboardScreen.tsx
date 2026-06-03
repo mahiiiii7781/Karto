@@ -1,4 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -29,22 +34,49 @@ const THEME = {
   danger: "#EF4444",
 };
 
-const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
-const shortId = (id?: string) => (id ? id.slice(0, 8).toUpperCase() : "ORDER");
+const money = (v: any) =>
+  `₹${Number(v || 0).toFixed(0)}`;
 
-export default function RiderDashboardScreen({ navigation }: any) {
+const shortId = (id?: string) =>
+  id ? id.slice(0, 8).toUpperCase() : "ORDER";
+
+const getAddressText = (address: any) => {
+  if (!address) return "Customer address";
+
+  return (
+    address.address ||
+    address.addressLine ||
+    address.fullAddress ||
+    address.street ||
+    address.landmark ||
+    address.city ||
+    "Customer address"
+  );
+};
+
+export default function RiderDashboardScreen({
+  navigation,
+}: any) {
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] =
+    useState(false);
   const [online, setOnline] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [toast, setToast] = useState("");
   const [profile, setProfile] = useState<any>(null);
-  const [analytics, setAnalytics] = useState<any>(null);
+  const [analytics, setAnalytics] =
+    useState<any>(null);
   const [wallet, setWallet] = useState<any>(null);
-  const [newOrders, setNewOrders] = useState<any[]>([]);
-  const [activeOrders, setActiveOrders] = useState<any[]>([]);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [newOrders, setNewOrders] = useState<any[]>(
+    []
+  );
+  const [activeOrders, setActiveOrders] = useState<
+    any[]
+  >([]);
+  const [leaderboard, setLeaderboard] = useState<
+    any[]
+  >([]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -75,7 +107,9 @@ export default function RiderDashboardScreen({ navigation }: any) {
       setWallet(walletRes?.wallet || {});
       setNewOrders(newOrdersRes?.orders || []);
       setActiveOrders(activeOrdersRes?.orders || []);
-      setLeaderboard(leaderboardRes?.leaderboard || []);
+      setLeaderboard(
+        leaderboardRes?.leaderboard || []
+      );
     } catch (e: any) {
       showToast(e?.message || "Dashboard load failed");
     } finally {
@@ -99,38 +133,69 @@ export default function RiderDashboardScreen({ navigation }: any) {
     setBusy(true);
 
     try {
-      const res = await riderService.updateOnlineStatus(value);
+      const res =
+        await riderService.updateOnlineStatus(value);
+
       setOnline(!!res?.rider?.isOnline);
-      showToast(value ? "You are online now" : "You are offline now");
+      showToast(
+        value
+          ? "You are online now"
+          : "You are offline now"
+      );
+
+      loadDashboard();
     } catch (e: any) {
       setOnline(old);
-      showToast(e?.message || "Could not update status");
+      showToast(
+        e?.message || "Could not update status"
+      );
     } finally {
       setBusy(false);
     }
   };
 
   const acceptOrder = async (orderId: string) => {
+    if (!orderId || busy) return;
+
     setBusy(true);
+
     try {
-      await riderService.acceptOrder(orderId);
+      const res =
+        await riderService.acceptOrder(orderId);
+
       showToast("Order accepted successfully");
-      loadDashboard();
+      await loadDashboard();
+
+      navigation?.navigate?.("RiderOrderDetail", {
+        orderId,
+        order: res?.order,
+      });
     } catch (e: any) {
-      showToast(e?.message || "Could not accept order");
+      showToast(
+        e?.message || "Could not accept order"
+      );
     } finally {
       setBusy(false);
     }
   };
 
   const rejectOrder = async (orderId: string) => {
+    if (!orderId || busy) return;
+
     setBusy(true);
+
     try {
       await riderService.rejectOrder(orderId);
-      setNewOrders((prev) => prev.filter((x) => x.id !== orderId));
+
+      setNewOrders((prev) =>
+        prev.filter((x) => x.id !== orderId)
+      );
+
       showToast("Delivery request rejected");
     } catch (e: any) {
-      showToast(e?.message || "Could not reject order");
+      showToast(
+        e?.message || "Could not reject order"
+      );
     } finally {
       setBusy(false);
     }
@@ -138,27 +203,63 @@ export default function RiderDashboardScreen({ navigation }: any) {
 
   const rank = useMemo(() => {
     const id = profile?.id;
-    return leaderboard?.find((x) => x?.rider?.id === id)?.rank || "-";
+
+    return (
+      leaderboard?.find(
+        (x) => x?.rider?.id === id
+      )?.rank || "-"
+    );
   }, [leaderboard, profile]);
+
+  const completionRate = useMemo(() => {
+    const delivered = Number(
+      analytics?.deliveredOrders || 0
+    );
+    const active = Number(
+      analytics?.activeOrders || 0
+    );
+    const total = delivered + active;
+
+    if (!total) return 0;
+
+    return Math.round((delivered / total) * 100);
+  }, [analytics]);
 
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
-        <StatusBar barStyle="light-content" backgroundColor={THEME.bg} />
-        <ActivityIndicator size="large" color={THEME.yellow} />
-        <Text style={styles.loadingText}>Preparing rider cockpit...</Text>
+        <StatusBar
+          barStyle="light-content"
+          backgroundColor={THEME.bg}
+        />
+        <ActivityIndicator
+          size="large"
+          color={THEME.yellow}
+        />
+        <Text style={styles.loadingText}>
+          Preparing rider cockpit...
+        </Text>
       </SafeAreaView>
     );
   }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="light-content" backgroundColor={THEME.bg} />
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor={THEME.bg}
+      />
 
       {!!toast && (
         <View style={styles.toast}>
-          <Icon name="flash-outline" size={17} color={THEME.black} />
-          <Text style={styles.toastText}>{toast}</Text>
+          <Icon
+            name="flash-outline"
+            size={17}
+            color={THEME.black}
+          />
+          <Text style={styles.toastText}>
+            {toast}
+          </Text>
         </View>
       )}
 
@@ -175,8 +276,12 @@ export default function RiderDashboardScreen({ navigation }: any) {
       >
         <View style={styles.hero}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.hello}>Welcome back</Text>
-            <Text style={styles.name}>{profile?.fullName || "Karto Rider"}</Text>
+            <Text style={styles.hello}>
+              Welcome back
+            </Text>
+            <Text style={styles.name}>
+              {profile?.fullName || "Karto Rider"}
+            </Text>
             <Text style={styles.sub}>
               {online
                 ? "Live deliveries are ready for you"
@@ -185,28 +290,129 @@ export default function RiderDashboardScreen({ navigation }: any) {
           </View>
 
           <View style={styles.statusPill}>
-            <Text style={[styles.statusText, { color: online ? THEME.green : THEME.muted }]}>
+            <Text
+              style={[
+                styles.statusText,
+                {
+                  color: online
+                    ? THEME.green
+                    : THEME.muted,
+                },
+              ]}
+            >
               {online ? "ONLINE" : "OFFLINE"}
             </Text>
+
             <Switch
               value={online}
               disabled={busy}
               onValueChange={toggleOnline}
-              thumbColor={online ? THEME.yellow : THEME.muted}
-              trackColor={{ false: "#1F2937", true: THEME.greenDark }}
+              thumbColor={
+                online ? THEME.yellow : THEME.muted
+              }
+              trackColor={{
+                false: "#1F2937",
+                true: THEME.greenDark,
+              }}
             />
           </View>
         </View>
 
+        <TouchableOpacity
+          activeOpacity={0.9}
+          style={styles.analyticsBanner}
+          onPress={() =>
+            navigation?.navigate?.("RiderAnalytics")
+          }
+        >
+          <View style={styles.analyticsIcon}>
+            <Icon
+              name="analytics"
+              size={24}
+              color={THEME.black}
+            />
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.analyticsTitle}>
+              Performance Analytics
+            </Text>
+            <Text style={styles.analyticsSub}>
+              {completionRate}% completion • Today{" "}
+              {money(analytics?.todayEarnings)}
+            </Text>
+
+            <View style={styles.progressOuter}>
+              <View
+                style={[
+                  styles.progressInner,
+                  { width: `${completionRate}%` },
+                ]}
+              />
+            </View>
+          </View>
+
+          <Icon
+            name="chevron-forward"
+            size={22}
+            color={THEME.yellow}
+          />
+        </TouchableOpacity>
+
+        <View style={styles.quickGrid}>
+          <QuickAction
+            icon="wallet-outline"
+            title="Wallet"
+            onPress={() =>
+              navigation?.navigate?.("RiderWallet")
+            }
+          />
+          <QuickAction
+            icon="document-text-outline"
+            title="History"
+            onPress={() =>
+              navigation?.navigate?.(
+                "RiderDeliveryHistory"
+              )
+            }
+          />
+          <QuickAction
+            icon="gift-outline"
+            title="Incentives"
+            onPress={() =>
+              navigation?.navigate?.(
+                "RiderIncentives"
+              )
+            }
+          />
+          <QuickAction
+            icon="shield-checkmark-outline"
+            title="KYC"
+            onPress={() =>
+              navigation?.navigate?.("RiderKyc")
+            }
+          />
+        </View>
+
         <View style={styles.kycCard}>
           <Icon
-            name={profile?.kycStatus === "APPROVED" ? "shield-checkmark" : "shield-outline"}
+            name={
+              profile?.kycStatus === "APPROVED"
+                ? "shield-checkmark"
+                : "shield-outline"
+            }
             size={22}
-            color={profile?.kycStatus === "APPROVED" ? THEME.green : THEME.yellow}
+            color={
+              profile?.kycStatus === "APPROVED"
+                ? THEME.green
+                : THEME.yellow
+            }
           />
+
           <View style={{ flex: 1 }}>
             <Text style={styles.kycTitle}>
-              KYC Status: {profile?.kycStatus || "PENDING"}
+              KYC Status:{" "}
+              {profile?.kycStatus || "PENDING"}
             </Text>
             <Text style={styles.kycSub}>
               {profile?.kycStatus === "APPROVED"
@@ -214,16 +420,53 @@ export default function RiderDashboardScreen({ navigation }: any) {
                 : "Complete KYC to unlock deliveries."}
             </Text>
           </View>
+
+          {profile?.kycStatus !== "APPROVED" && (
+            <TouchableOpacity
+              style={styles.smallYellowBtn}
+              onPress={() =>
+                navigation?.navigate?.("RiderKyc")
+              }
+            >
+              <Text style={styles.smallYellowText}>
+                Update
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={styles.statsGrid}>
-          <StatCard icon="wallet-outline" title="Wallet" value={money(wallet?.balance)} />
-          <StatCard icon="cash-outline" title="Today" value={money(analytics?.todayEarnings)} />
-          <StatCard icon="cube-outline" title="Active" value={analytics?.activeOrders || 0} />
-          <StatCard icon="trophy-outline" title="Rank" value={`#${rank}`} />
+          <StatCard
+            icon="wallet-outline"
+            title="Wallet"
+            value={money(wallet?.balance)}
+          />
+          <StatCard
+            icon="cash-outline"
+            title="Today"
+            value={money(
+              analytics?.todayEarnings
+            )}
+          />
+          <StatCard
+            icon="cube-outline"
+            title="Active"
+            value={analytics?.activeOrders || 0}
+          />
+          <StatCard
+            icon="trophy-outline"
+            title="Rank"
+            value={`#${rank}`}
+          />
         </View>
 
-        <SectionHeader title="Current Delivery" action="View all" onPress={() => navigation?.navigate?.("RiderActiveOrders")} />
+        <SectionHeader
+          title="Current Delivery"
+          action="View all"
+          onPress={() =>
+            navigation?.navigate?.("Orders")
+          }
+        />
 
         {activeOrders.length > 0 ? (
           activeOrders.slice(0, 1).map((order) => (
@@ -231,87 +474,204 @@ export default function RiderDashboardScreen({ navigation }: any) {
               key={order.id}
               activeOpacity={0.88}
               style={styles.activeCard}
-              onPress={() => navigation?.navigate?.("RiderOrderDetail", { orderId: order.id })}
+              onPress={() =>
+                navigation?.navigate?.(
+                  "RiderOrderDetail",
+                  {
+                    orderId: order.id,
+                    order,
+                  }
+                )
+              }
             >
               <View style={styles.activeIcon}>
-                <Icon name="navigate" size={23} color={THEME.yellow} />
+                <Icon
+                  name="navigate"
+                  size={23}
+                  color={THEME.yellow}
+                />
               </View>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.orderTitle}>#{order.orderNumber || shortId(order.id)}</Text>
-                <Text style={styles.orderSub} numberOfLines={1}>
-                  Pickup: {order.restaurant?.name || "Store"}
+                <Text style={styles.orderTitle}>
+                  #
+                  {order.orderNumber ||
+                    shortId(order.id)}
                 </Text>
-                <Text style={styles.orderSub} numberOfLines={1}>
-                  Drop: {order.address?.address || "Customer address"}
+                <Text
+                  style={styles.orderSub}
+                  numberOfLines={1}
+                >
+                  Pickup:{" "}
+                  {order.restaurant?.name || "Store"}
+                </Text>
+                <Text
+                  style={styles.orderSub}
+                  numberOfLines={1}
+                >
+                  Drop:{" "}
+                  {getAddressText(order.address)}
                 </Text>
               </View>
 
-              <Icon name="chevron-forward" size={22} color={THEME.muted} />
+              <TouchableOpacity
+                style={styles.trackMiniBtn}
+                onPress={() =>
+                  navigation?.navigate?.(
+                    "RiderLiveTracking",
+                    {
+                      orderId: order.id,
+                      order,
+                    }
+                  )
+                }
+              >
+                <Icon
+                  name="map"
+                  size={18}
+                  color={THEME.black}
+                />
+              </TouchableOpacity>
             </TouchableOpacity>
           ))
         ) : (
-          <EmptyCard icon="bicycle-outline" title="No active delivery" text="Accept an order to start your trip." />
+          <EmptyCard
+            icon="bicycle-outline"
+            title="No active delivery"
+            text="Accept an order to start your trip."
+          />
         )}
 
-        <SectionHeader title="New Requests" action={`${newOrders.length} orders`} />
+        <SectionHeader
+          title="New Requests"
+          action={`${newOrders.length} orders`}
+        />
 
         {!online ? (
-          <EmptyCard icon="power-outline" title="You are offline" text="Turn online to start receiving delivery requests." />
+          <EmptyCard
+            icon="power-outline"
+            title="You are offline"
+            text="Turn online to start receiving delivery requests."
+          />
         ) : newOrders.length === 0 ? (
-          <EmptyCard icon="radio-outline" title="Waiting for orders" text="Realtime delivery requests will appear here." />
+          <EmptyCard
+            icon="radio-outline"
+            title="Waiting for orders"
+            text="Realtime delivery requests will appear here."
+          />
         ) : (
           newOrders.slice(0, 5).map((order) => (
-            <View key={order.id} style={styles.orderCard}>
+            <View
+              key={order.id}
+              style={styles.orderCard}
+            >
               <View style={styles.orderTop}>
                 <View>
-                  <Text style={styles.orderTitle}>#{order.orderNumber || shortId(order.id)}</Text>
-                  <Text style={styles.orderSub}>{order.restaurant?.name || "Karto Store"}</Text>
+                  <Text style={styles.orderTitle}>
+                    #
+                    {order.orderNumber ||
+                      shortId(order.id)}
+                  </Text>
+                  <Text style={styles.orderSub}>
+                    {order.restaurant?.name ||
+                      "Karto Store"}
+                  </Text>
                 </View>
+
                 <View style={styles.feeBadge}>
-                  <Text style={styles.feeText}>{money(order.deliveryFee)}</Text>
+                  <Text style={styles.feeText}>
+                    {money(order.deliveryFee)}
+                  </Text>
                 </View>
               </View>
 
-              <InfoLine icon="storefront-outline" text={`Pickup: ${order.restaurant?.address || order.restaurant?.name || "Store location"}`} />
-              <InfoLine icon="location-outline" text={`Drop: ${order.address?.address || "Customer location"}`} />
-              <InfoLine icon="card-outline" text={`Payment: ${order.paymentMethod || "COD"} • ${money(order.totalAmount)}`} />
+              <InfoLine
+                icon="storefront-outline"
+                text={`Pickup: ${
+                  order.restaurant?.address ||
+                  order.restaurant?.name ||
+                  "Store location"
+                }`}
+              />
+              <InfoLine
+                icon="location-outline"
+                text={`Drop: ${getAddressText(
+                  order.address
+                )}`}
+              />
+              <InfoLine
+                icon="card-outline"
+                text={`Payment: ${
+                  order.paymentMethod || "COD"
+                } • ${money(order.totalAmount)}`}
+              />
 
               <View style={styles.actions}>
                 <TouchableOpacity
                   disabled={busy}
-                  style={styles.rejectBtn}
-                  onPress={() => rejectOrder(order.id)}
+                  style={[
+                    styles.rejectBtn,
+                    busy && styles.disabledBtn,
+                  ]}
+                  onPress={() =>
+                    rejectOrder(order.id)
+                  }
                 >
-                  <Text style={styles.rejectText}>Reject</Text>
+                  <Text style={styles.rejectText}>
+                    Reject
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   disabled={busy}
-                  style={styles.acceptBtn}
-                  onPress={() => acceptOrder(order.id)}
+                  style={[
+                    styles.acceptBtn,
+                    busy && styles.disabledBtn,
+                  ]}
+                  onPress={() =>
+                    acceptOrder(order.id)
+                  }
                 >
-                  <Text style={styles.acceptText}>Accept</Text>
-                  <Icon name="arrow-forward" size={18} color={THEME.black} />
+                  <Text style={styles.acceptText}>
+                    Accept
+                  </Text>
+                  <Icon
+                    name="arrow-forward"
+                    size={18}
+                    color={THEME.black}
+                  />
                 </TouchableOpacity>
               </View>
             </View>
           ))
         )}
 
-        <View style={{ height: 28 }} />
+        <View style={{ height: 110 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function SectionHeader({ title, action, onPress }: any) {
+function SectionHeader({
+  title,
+  action,
+  onPress,
+}: any) {
   return (
     <View style={styles.sectionHead}>
-      <Text style={styles.sectionTitle}>{title}</Text>
+      <Text style={styles.sectionTitle}>
+        {title}
+      </Text>
+
       {!!action && (
-        <TouchableOpacity onPress={onPress} activeOpacity={0.75}>
-          <Text style={styles.sectionAction}>{action}</Text>
+        <TouchableOpacity
+          onPress={onPress}
+          activeOpacity={0.75}
+          disabled={!onPress}
+        >
+          <Text style={styles.sectionAction}>
+            {action}
+          </Text>
         </TouchableOpacity>
       )}
     </View>
@@ -321,18 +681,54 @@ function SectionHeader({ title, action, onPress }: any) {
 function StatCard({ icon, title, value }: any) {
   return (
     <View style={styles.statCard}>
-      <Icon name={icon} size={22} color={THEME.yellow} />
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statTitle}>{title}</Text>
+      <Icon
+        name={icon}
+        size={22}
+        color={THEME.yellow}
+      />
+      <Text style={styles.statValue}>
+        {value}
+      </Text>
+      <Text style={styles.statTitle}>
+        {title}
+      </Text>
     </View>
+  );
+}
+
+function QuickAction({ icon, title, onPress }: any) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      style={styles.quickAction}
+      onPress={onPress}
+    >
+      <View style={styles.quickIcon}>
+        <Icon
+          name={icon}
+          size={20}
+          color={THEME.yellow}
+        />
+      </View>
+      <Text style={styles.quickText}>{title}</Text>
+    </TouchableOpacity>
   );
 }
 
 function InfoLine({ icon, text }: any) {
   return (
     <View style={styles.infoLine}>
-      <Icon name={icon} size={16} color={THEME.green} />
-      <Text style={styles.infoText} numberOfLines={1}>{text}</Text>
+      <Icon
+        name={icon}
+        size={16}
+        color={THEME.green}
+      />
+      <Text
+        style={styles.infoText}
+        numberOfLines={1}
+      >
+        {text}
+      </Text>
     </View>
   );
 }
@@ -340,23 +736,42 @@ function InfoLine({ icon, text }: any) {
 function EmptyCard({ icon, title, text }: any) {
   return (
     <View style={styles.emptyCard}>
-      <Icon name={icon} size={42} color={THEME.yellow} />
-      <Text style={styles.emptyTitle}>{title}</Text>
-      <Text style={styles.emptyText}>{text}</Text>
+      <Icon
+        name={icon}
+        size={42}
+        color={THEME.yellow}
+      />
+      <Text style={styles.emptyTitle}>
+        {title}
+      </Text>
+      <Text style={styles.emptyText}>
+        {text}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: THEME.bg },
-  container: { flex: 1, backgroundColor: THEME.bg, padding: 18 },
+  safe: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+  },
+  container: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+    padding: 18,
+  },
   center: {
     flex: 1,
     backgroundColor: THEME.bg,
     alignItems: "center",
     justifyContent: "center",
   },
-  loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "700" },
+  loadingText: {
+    color: THEME.muted,
+    marginTop: 12,
+    fontWeight: "700",
+  },
 
   toast: {
     position: "absolute",
@@ -372,7 +787,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  toastText: { color: THEME.black, fontWeight: "900", flex: 1 },
+  toastText: {
+    color: THEME.black,
+    fontWeight: "900",
+    flex: 1,
+  },
 
   hero: {
     backgroundColor: THEME.card,
@@ -384,9 +803,23 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     marginBottom: 14,
   },
-  hello: { color: THEME.yellow, fontSize: 13, fontWeight: "900" },
-  name: { color: THEME.text, fontSize: 26, fontWeight: "900", marginTop: 4 },
-  sub: { color: THEME.muted, fontSize: 13, marginTop: 6, maxWidth: 210 },
+  hello: {
+    color: THEME.yellow,
+    fontSize: 13,
+    fontWeight: "900",
+  },
+  name: {
+    color: THEME.text,
+    fontSize: 26,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+  sub: {
+    color: THEME.muted,
+    fontSize: 13,
+    marginTop: 6,
+    maxWidth: 210,
+  },
   statusPill: {
     backgroundColor: THEME.black,
     borderRadius: 18,
@@ -395,7 +828,82 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-  statusText: { fontSize: 11, fontWeight: "900", marginBottom: 4 },
+  statusText: {
+    fontSize: 11,
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+
+  analyticsBanner: {
+    backgroundColor: "#0E1B12",
+    borderRadius: 24,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: "#1F6B3B",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 14,
+  },
+  analyticsIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 22,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  analyticsTitle: {
+    color: THEME.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  analyticsSub: {
+    color: THEME.muted,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  progressOuter: {
+    height: 7,
+    borderRadius: 10,
+    backgroundColor: THEME.black,
+    overflow: "hidden",
+    marginTop: 9,
+  },
+  progressInner: {
+    height: "100%",
+    borderRadius: 10,
+    backgroundColor: THEME.yellow,
+  },
+
+  quickGrid: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 14,
+  },
+  quickAction: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  quickIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 16,
+    backgroundColor: THEME.black,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 7,
+  },
+  quickText: {
+    color: THEME.text,
+    fontSize: 11,
+    fontWeight: "900",
+  },
 
   kycCard: {
     backgroundColor: THEME.card2,
@@ -408,8 +916,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 14,
   },
-  kycTitle: { color: THEME.text, fontWeight: "900" },
-  kycSub: { color: THEME.muted, fontSize: 12, marginTop: 3 },
+  kycTitle: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  kycSub: {
+    color: THEME.muted,
+    fontSize: 12,
+    marginTop: 3,
+  },
+  smallYellowBtn: {
+    backgroundColor: THEME.yellow,
+    borderRadius: 13,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  smallYellowText: {
+    color: THEME.black,
+    fontSize: 12,
+    fontWeight: "900",
+  },
 
   statsGrid: {
     flexDirection: "row",
@@ -424,8 +950,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-  statValue: { color: THEME.text, fontSize: 21, fontWeight: "900", marginTop: 10 },
-  statTitle: { color: THEME.muted, fontSize: 12, marginTop: 4 },
+  statValue: {
+    color: THEME.text,
+    fontSize: 21,
+    fontWeight: "900",
+    marginTop: 10,
+  },
+  statTitle: {
+    color: THEME.muted,
+    fontSize: 12,
+    marginTop: 4,
+  },
 
   sectionHead: {
     marginTop: 24,
@@ -434,8 +969,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  sectionTitle: { color: THEME.text, fontSize: 19, fontWeight: "900" },
-  sectionAction: { color: THEME.yellow, fontSize: 13, fontWeight: "900" },
+  sectionTitle: {
+    color: THEME.text,
+    fontSize: 19,
+    fontWeight: "900",
+  },
+  sectionAction: {
+    color: THEME.yellow,
+    fontSize: 13,
+    fontWeight: "900",
+  },
 
   activeCard: {
     backgroundColor: "#0C1510",
@@ -457,6 +1000,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.yellowDark,
   },
+  trackMiniBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 
   orderCard: {
     backgroundColor: THEME.card,
@@ -471,8 +1022,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 12,
   },
-  orderTitle: { color: THEME.text, fontSize: 16, fontWeight: "900" },
-  orderSub: { color: THEME.muted, fontSize: 13, marginTop: 4 },
+  orderTitle: {
+    color: THEME.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  orderSub: {
+    color: THEME.muted,
+    fontSize: 13,
+    marginTop: 4,
+  },
   feeBadge: {
     backgroundColor: THEME.yellow,
     paddingHorizontal: 12,
@@ -480,7 +1039,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignSelf: "flex-start",
   },
-  feeText: { color: THEME.black, fontWeight: "900" },
+  feeText: {
+    color: THEME.black,
+    fontWeight: "900",
+  },
 
   infoLine: {
     flexDirection: "row",
@@ -488,9 +1050,17 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 8,
   },
-  infoText: { color: THEME.muted, flex: 1, fontSize: 13 },
+  infoText: {
+    color: THEME.muted,
+    flex: 1,
+    fontSize: 13,
+  },
 
-  actions: { flexDirection: "row", gap: 10, marginTop: 16 },
+  actions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
   rejectBtn: {
     flex: 1,
     borderWidth: 1,
@@ -499,7 +1069,10 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  rejectText: { color: THEME.danger, fontWeight: "900" },
+  rejectText: {
+    color: THEME.danger,
+    fontWeight: "900",
+  },
   acceptBtn: {
     flex: 1.4,
     backgroundColor: THEME.yellow,
@@ -510,7 +1083,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-  acceptText: { color: THEME.black, fontWeight: "900" },
+  acceptText: {
+    color: THEME.black,
+    fontWeight: "900",
+  },
+  disabledBtn: {
+    opacity: 0.55,
+  },
 
   emptyCard: {
     backgroundColor: THEME.card,
@@ -520,7 +1099,12 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     alignItems: "center",
   },
-  emptyTitle: { color: THEME.text, fontSize: 17, fontWeight: "900", marginTop: 12 },
+  emptyTitle: {
+    color: THEME.text,
+    fontSize: 17,
+    fontWeight: "900",
+    marginTop: 12,
+  },
   emptyText: {
     color: THEME.muted,
     textAlign: "center",

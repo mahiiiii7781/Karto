@@ -3,36 +3,73 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 const API_BASE_URL =
   "https://karto-backend-kor1.onrender.com/api";
 
-const authHeaders = async () => {
+const authHeaders = async (isFormData: boolean = false) => {
   const token = await AsyncStorage.getItem("accessToken");
 
+  if (!token) {
+    throw new Error("Session expired. Please login again.");
+  }
+
   return {
-    "Content-Type": "application/json",
+    ...(isFormData ? {} : { "Content-Type": "application/json" }),
     Authorization: `Bearer ${token}`,
   };
 };
 
+const safeJsonParse = (text: string) => {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+};
+
 const request = async (
   url: string,
-  options: RequestInit = {}
+  options: RequestInit & { isFormData?: boolean } = {}
 ) => {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...(await authHeaders()),
-      ...(options.headers || {}),
-    },
-  });
+  try {
+    const isFormData = options.isFormData === true;
 
-  const data = await res.json();
+    const { isFormData: _removed, ...fetchOptions } = options;
 
-  if (!res.ok) {
+    const res = await fetch(url, {
+      ...fetchOptions,
+      headers: {
+        ...(await authHeaders(isFormData)),
+        ...(options.headers || {}),
+      },
+    });
+
+    const text = await res.text();
+    const data = safeJsonParse(text);
+
+    if (!res.ok) {
+      throw new Error(
+        data?.message ||
+          data?.error?.message ||
+          data?.error ||
+          `Request failed with status ${res.status}`
+      );
+    }
+
+    return data;
+  } catch (error: any) {
+    if (
+      error?.message ===
+      "Session expired. Please login again."
+    ) {
+      throw error;
+    }
+
+    if (error?.message) {
+      throw error;
+    }
+
     throw new Error(
-      data?.message || "Something went wrong"
+      "Network error. Please check your internet connection."
     );
   }
-
-  return data;
 };
 
 export const riderService = {

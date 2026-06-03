@@ -1,33 +1,63 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import apiClient from "@/api/apiClient";
 
-const API_BASE_URL = "https://karto-backend-kor1.onrender.com/api";
-const authHeaders = async () => {
-  const token = await AsyncStorage.getItem("accessToken");
+export type CreatePaymentOrderResponse = {
+  success: boolean;
+  message?: string;
+  key?: string;
+  razorpayOrderId?: string;
+  amount?: number;
+  currency?: string;
+  kartoOrderId?: string;
+  orderNumber?: string;
+};
 
-  return {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
-  };
+export type VerifyPaymentPayload = {
+  kartoOrderId: string;
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
+};
+
+export type VerifyPaymentResponse = {
+  success: boolean;
+  message?: string;
+  data?: any;
+  order?: any;
+};
+
+type ApiResult<T> = {
+  data: T | null;
+  error: any | null;
+};
+
+const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
+  try {
+    const res = await fn();
+
+    return {
+      data: res?.data as T,
+      error: null,
+    };
+  } catch (error: any) {
+    console.log("PAYMENT API ERROR:", error?.response?.data || error?.message);
+
+    return {
+      data: null,
+      error: error?.response?.data || error,
+    };
+  }
 };
 
 export const paymentApi = {
   createOrder: async (orderId: string) => {
-    const res = await fetch(`${API_BASE_URL}/payment/create-order`, {
-      method: "POST",
-      headers: await authHeaders(),
-      body: JSON.stringify({ orderId }),
-    });
-
-    return res.json();
+    return safe<CreatePaymentOrderResponse>(() =>
+      apiClient.post("/payments/create-order", { orderId })
+    );
   },
 
-  verifyPayment: async (payload: any) => {
-    const res = await fetch(`${API_BASE_URL}/payment/verify`, {
-      method: "POST",
-      headers: await authHeaders(),
-      body: JSON.stringify(payload),
-    });
-
-    return res.json();
+  verifyPayment: async (payload: VerifyPaymentPayload) => {
+    return safe<VerifyPaymentResponse>(() =>
+      apiClient.post("/payments/verify", payload)
+    );
   },
 };

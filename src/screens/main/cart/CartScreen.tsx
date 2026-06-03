@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -6,50 +6,82 @@ import {
   StyleSheet,
   Image,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
   RefreshControl,
+  StatusBar,
+  Modal,
+  Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import Toast from "react-native-toast-message";
+
 import { cartService, CartItem } from "@/services/api/cartService";
 import { useAuth } from "@/context/AuthContext";
-import { requireLogin } from "@/utils/authGuard";
+
 const THEME = {
-  bg: "#050807",
-  card: "#0D1511",
-  card2: "#101C15",
+  bg: "#070A08",
+  card: "#101713",
+  card2: "#151F19",
   green: "#22C55E",
-  greenDark: "#12351F",
-  text: "#F3F4F6",
-  muted: "#9CA3AF",
-  border: "#1E2A22",
-  danger: "#EF4444",
   yellow: "#FACC15",
+  text: "#F8FAFC",
+  muted: "#8A94A6",
+  border: "#1E2A22",
+  black: "#050807",
+  danger: "#EF4444",
 };
 
 const DELIVERY_FEE = 25;
 const PLATFORM_FEE = 5;
 const FREE_DELIVERY_ABOVE = 299;
 
+const FALLBACK_IMAGE =
+  "https://images.unsplash.com/photo-1546069901-ba9599a7e63c";
+
 export default function CartScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
+
   const [items, setItems] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [clearModalVisible, setClearModalVisible] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
- useFocusEffect(
-  React.useCallback(() => {
-    if (!requireLogin(user, navigation, "Please login to view your cart.")) {
-      navigation.goBack();
-      return;
-    }
+  const showToast = (
+    type: "success" | "error" | "info",
+    text1: string,
+    text2?: string
+  ) => {
+    Toast.show({
+      type,
+      text1,
+      text2,
+      position: "bottom",
+      visibilityTime: 1800,
+    });
+  };
 
-    loadCartItems();
-  }, [user])
-);
+  const requireAuth = (message = "Please sign in to continue.") => {
+    if (user?.id) return true;
+
+    showToast("info", "Login required", message);
+    navigation.navigate("Auth");
+    return false;
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!requireAuth("Please sign in to view your cart.")) {
+        setLoading(false);
+        return;
+      }
+
+      loadCartItems();
+    }, [user?.id])
+  );
 
   const subtotal = useMemo(
     () =>
@@ -71,90 +103,117 @@ export default function CartScreen() {
   const remainingForFreeDelivery = Math.max(FREE_DELIVERY_ABOVE - subtotal, 0);
 
   const loadCartItems = async (isRefresh = false) => {
+    if (!user?.id) {
+      setItems([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     isRefresh ? setRefreshing(true) : setLoading(true);
 
     try {
       const { data, error } = await cartService.getCartItems();
 
       if (error) {
-        Alert.alert("Error", "Failed to load cart items");
         setItems([]);
+        showToast("error", "Unable to load cart", "Please try again.");
         return;
       }
 
-      setItems(data || []);
-    } catch (err) {
-      Alert.alert("Error", "Something went wrong");
+      setItems(Array.isArray(data) ? data : []);
+    } catch {
+      setItems([]);
+      showToast("error", "Something went wrong", "Please try again.");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const clearCart = () => {
-    Alert.alert("Clear Cart", "Remove all items from your cart?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Yes, Clear",
-        style: "destructive",
-        onPress: async () => {
-          const { error } = await cartService.clearCart();
+  const confirmClearCart = () => {
+    if (items.length === 0) return;
+    setClearModalVisible(true);
+  };
 
-          if (error) {
-            Alert.alert("Error", "Failed to clear cart");
-            return;
-          }
+  const clearCart = async () => {
+    try {
+      setClearing(true);
 
-          setItems([]);
-        },
-      },
-    ]);
+      const { error } = await cartService.clearCart();
+
+      if (error) {
+        showToast("error", "Unable to clear cart", "Please try again.");
+        return;
+      }
+
+      setItems([]);
+      setClearModalVisible(false);
+      showToast("success", "Cart cleared", "All items have been removed from your cart.");
+    } catch {
+      showToast("error", "Unable to clear cart", "Please try again.");
+    } finally {
+      setClearing(false);
+    }
   };
 
   const removeItem = async (itemId: string) => {
+    if (!itemId || updatingId) return;
+
     setUpdatingId(itemId);
 
-    const { error } = await cartService.removeFromCart(itemId);
+    try {
+      const { error } = await cartService.removeFromCart(itemId);
 
-    setUpdatingId(null);
+      if (error) {
+        showToast("error", "Unable to remove item", "Please try again.");
+        return;
+      }
 
-    if (error) {
-      Alert.alert("Error", "Failed to remove item");
-      return;
+      setItems(prev => prev.filter(i => i.id !== itemId));
+      showToast("success", "Item removed", "The item has been removed from your cart.");
+    } catch {
+      showToast("error", "Unable to remove item", "Please try again.");
+    } finally {
+      setUpdatingId(null);
     }
-
-    setItems((prev) => prev.filter((i) => i.id !== itemId));
   };
 
   const updateQuantity = async (item: CartItem, nextQty: number) => {
+    if (!item?.id || updatingId) return;
+
     if (nextQty < 1) {
-      removeItem(item.id);
+      await removeItem(item.id);
       return;
     }
 
     setUpdatingId(item.id);
 
-    const { error } = await cartService.updateCartItem(item.id, nextQty);
+    try {
+      const { error } = await cartService.updateCartItem(item.id, nextQty);
 
-    setUpdatingId(null);
+      if (error) {
+        showToast("error", "Unable to update quantity", "Please try again.");
+        return;
+      }
 
-    if (error) {
-      Alert.alert("Error", "Failed to update quantity");
-      return;
+      setItems(prev =>
+        prev.map(x =>
+          x.id === item.id
+            ? {
+                ...x,
+                quantity: nextQty,
+                total_price: Number(x.price || 0) * nextQty,
+                totalPrice: Number(x.price || 0) * nextQty,
+              }
+            : x
+        )
+      );
+    } catch {
+      showToast("error", "Unable to update quantity", "Please try again.");
+    } finally {
+      setUpdatingId(null);
     }
-
-    setItems((prev) =>
-      prev.map((x) =>
-        x.id === item.id
-          ? {
-              ...x,
-              quantity: nextQty,
-              total_price: Number(x.price || 0) * nextQty,
-              totalPrice: Number(x.price || 0) * nextQty,
-            }
-          : x
-      )
-    );
   };
 
   const getItemImage = (item: CartItem) =>
@@ -164,13 +223,30 @@ export default function CartScreen() {
     item.menuItem?.imageUrl ||
     item.restaurant?.image_url ||
     item.restaurant?.imageUrl ||
-    "https://images.unsplash.com/photo-1546069901-ba9599a7e63c";
+    FALLBACK_IMAGE;
 
   const getItemName = (item: CartItem) =>
-    item.menu_item?.name || item.menuItem?.name || "Item";
+    item.menu_item?.name || item.menuItem?.name || "Cart Item";
 
   const getRestaurantName = (item: CartItem) =>
     item.restaurant?.restaurant_name || item.restaurant?.name || "Karto Store";
+
+  const goToCheckout = () => {
+    if (!requireAuth("Please sign in to continue checkout.")) return;
+
+    if (items.length === 0) {
+      showToast("info", "Cart is empty", "Please add items before checkout.");
+      return;
+    }
+
+    navigation.navigate("Checkout", {
+      subtotal,
+      deliveryFee,
+      platformFee: PLATFORM_FEE,
+      total: grandTotal,
+      items,
+    });
+  };
 
   const renderItem = ({ item }: { item: CartItem }) => {
     const disabled = updatingId === item.id;
@@ -192,6 +268,7 @@ export default function CartScreen() {
               disabled={disabled}
               onPress={() => removeItem(item.id)}
               style={styles.trashBtn}
+              activeOpacity={0.85}
             >
               {disabled ? (
                 <ActivityIndicator size="small" color={THEME.green} />
@@ -220,16 +297,18 @@ export default function CartScreen() {
                 style={[styles.qtyBtn, disabled && styles.disabledBtn]}
                 disabled={disabled}
                 onPress={() => updateQuantity(item, Number(item.quantity) - 1)}
+                activeOpacity={0.85}
               >
                 <Icon name="remove" size={16} color={THEME.green} />
               </TouchableOpacity>
 
-              <Text style={styles.qtyText}>{item.quantity}</Text>
+              <Text style={styles.qtyText}>{Number(item.quantity || 0)}</Text>
 
               <TouchableOpacity
                 style={[styles.qtyBtn, disabled && styles.disabledBtn]}
                 disabled={disabled}
                 onPress={() => updateQuantity(item, Number(item.quantity) + 1)}
+                activeOpacity={0.85}
               >
                 <Icon name="add" size={16} color={THEME.green} />
               </TouchableOpacity>
@@ -250,6 +329,10 @@ export default function CartScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <View style={styles.loadingLogo}>
+          <Text style={styles.loadingLogoText}>K</Text>
+        </View>
         <ActivityIndicator size="large" color={THEME.green} />
         <Text style={styles.loadingText}>Preparing your cart...</Text>
       </View>
@@ -258,21 +341,25 @@ export default function CartScreen() {
 
   return (
     <View style={styles.container}>
+      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
-          <Icon name="chevron-back" size={24} color={THEME.green} />
+          <Icon name="chevron-back" size={24} color={THEME.text} />
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
           <Text style={styles.heading}>Your Cart</Text>
           <Text style={styles.subHeading}>
-            {itemCount > 0 ? `${itemCount} items ready for checkout` : "Cart is empty"}
+            {itemCount > 0
+              ? `${itemCount} item${itemCount > 1 ? "s" : ""} ready for checkout`
+              : "Your cart is empty"}
           </Text>
         </View>
 
         {items.length > 0 && (
-          <TouchableOpacity onPress={clearCart} style={styles.clearBtn}>
-            <Icon name="trash" size={18} color="#041008" />
+          <TouchableOpacity onPress={confirmClearCart} style={styles.clearBtn}>
+            <Icon name="trash" size={18} color={THEME.black} />
           </TouchableOpacity>
         )}
       </View>
@@ -283,14 +370,14 @@ export default function CartScreen() {
           <Text style={styles.offerText}>
             {remainingForFreeDelivery > 0
               ? `Add ₹${remainingForFreeDelivery.toFixed(0)} more for free delivery`
-              : "Free delivery unlocked!"}
+              : "Free delivery unlocked"}
           </Text>
         </View>
       )}
 
       <FlatList
         data={items}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => item?.id || String(index)}
         renderItem={renderItem}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -298,25 +385,27 @@ export default function CartScreen() {
             refreshing={refreshing}
             onRefresh={() => loadCartItems(true)}
             tintColor={THEME.green}
+            colors={[THEME.green]}
           />
         }
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <View style={styles.emptyIcon}>
-              <Icon name="cart-outline" size={54} color={THEME.green} />
+              <Icon name="cart-outline" size={54} color={THEME.yellow} />
             </View>
 
-            <Text style={styles.emptyTitle}>Your cart feels lonely</Text>
+            <Text style={styles.emptyTitle}>Your cart is empty</Text>
             <Text style={styles.emptyText}>
-              Add tasty food or products from nearby stores and continue checkout.
+              Add items from nearby stores and continue to checkout.
             </Text>
 
             <TouchableOpacity
               style={styles.exploreBtn}
               onPress={() => navigation.goBack()}
+              activeOpacity={0.9}
             >
               <Text style={styles.exploreText}>Explore Stores</Text>
-              <Icon name="arrow-forward" size={18} color="#041008" />
+              <Icon name="arrow-forward" size={18} color={THEME.black} />
             </TouchableOpacity>
           </View>
         }
@@ -355,19 +444,7 @@ export default function CartScreen() {
             </View>
           </View>
 
-          <TouchableOpacity
-            activeOpacity={0.85}
-            style={styles.checkoutBtn}
-            onPress={() =>
-              navigation.navigate("Checkout", {
-                subtotal,
-                deliveryFee,
-                platformFee: PLATFORM_FEE,
-                total: grandTotal,
-                items,
-              })
-            }
-          >
+          <TouchableOpacity activeOpacity={0.9} style={styles.checkoutBtn} onPress={goToCheckout}>
             <View>
               <Text style={styles.checkoutSmall}>Payable</Text>
               <Text style={styles.checkoutAmount}>₹{grandTotal.toFixed(2)}</Text>
@@ -375,11 +452,53 @@ export default function CartScreen() {
 
             <View style={styles.checkoutRight}>
               <Text style={styles.checkoutText}>Checkout</Text>
-              <Icon name="arrow-forward-circle" size={22} color="#041008" />
+              <Icon name="arrow-forward-circle" size={22} color={THEME.black} />
             </View>
           </TouchableOpacity>
         </View>
       )}
+
+      <Modal
+        visible={clearModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setClearModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.confirmBox}>
+            <View style={styles.confirmIcon}>
+              <Icon name="trash-outline" size={28} color={THEME.danger} />
+            </View>
+
+            <Text style={styles.confirmTitle}>Clear cart?</Text>
+            <Text style={styles.confirmText}>
+              This will remove all items from your cart. You can add them again anytime.
+            </Text>
+
+            <View style={styles.confirmActions}>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => setClearModalVisible(false)}
+                disabled={clearing}
+              >
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.confirmBtn}
+                onPress={clearCart}
+                disabled={clearing}
+              >
+                {clearing ? (
+                  <ActivityIndicator color={THEME.black} />
+                ) : (
+                  <Text style={styles.confirmBtnText}>Clear Cart</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -388,65 +507,74 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
+    paddingTop: Platform.OS === "ios" ? 54 : 18,
     backgroundColor: THEME.bg,
   },
-
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: THEME.bg,
   },
-
+  loadingLogo: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 18,
+  },
+  loadingLogoText: {
+    color: THEME.yellow,
+    fontSize: 38,
+    fontWeight: "900",
+  },
   loadingText: {
     marginTop: 12,
     color: THEME.muted,
-    fontWeight: "700",
+    fontWeight: "800",
   },
-
   header: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    marginTop: 8,
     marginBottom: 14,
   },
-
   iconBtn: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 18,
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
     justifyContent: "center",
     alignItems: "center",
   },
-
   heading: {
     fontSize: 25,
     fontWeight: "900",
     color: THEME.text,
   },
-
   subHeading: {
     color: THEME.muted,
     marginTop: 3,
     fontSize: 13,
+    fontWeight: "700",
   },
-
   clearBtn: {
     backgroundColor: THEME.green,
     width: 42,
     height: 42,
-    borderRadius: 21,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
   },
-
   offerStrip: {
-    backgroundColor: "#141B0E",
-    borderColor: "#453A10",
+    backgroundColor: "#252109",
+    borderColor: "#57470A",
     borderWidth: 1,
     borderRadius: 16,
     paddingHorizontal: 14,
@@ -456,14 +584,12 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 14,
   },
-
   offerText: {
     flex: 1,
     color: THEME.yellow,
-    fontWeight: "800",
+    fontWeight: "900",
     fontSize: 13,
   },
-
   cartBox: {
     flexDirection: "row",
     marginBottom: 14,
@@ -473,7 +599,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   image: {
     width: 92,
     height: 104,
@@ -481,17 +606,14 @@ const styles = StyleSheet.create({
     marginRight: 14,
     backgroundColor: THEME.card2,
   },
-
   cardContent: {
     flex: 1,
   },
-
   titleRowInside: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
-
   title: {
     flex: 1,
     fontSize: 17,
@@ -499,119 +621,111 @@ const styles = StyleSheet.create({
     color: THEME.text,
     marginRight: 8,
   },
-
   trashBtn: {
     width: 32,
     height: 32,
-    borderRadius: 16,
+    borderRadius: 14,
     backgroundColor: "#1D1111",
+    borderWidth: 1,
+    borderColor: "#3A1919",
     justifyContent: "center",
     alignItems: "center",
   },
-
   storeText: {
     fontSize: 13,
     marginTop: 5,
     color: THEME.muted,
-    fontWeight: "600",
+    fontWeight: "700",
   },
-
   noteBox: {
     marginTop: 8,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#17170B",
+    backgroundColor: "#252109",
+    borderWidth: 1,
+    borderColor: "#57470A",
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 10,
   },
-
   noteText: {
     flex: 1,
     color: THEME.yellow,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
-
   bottomRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginTop: 14,
   },
-
   qtyRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#07110B",
+    backgroundColor: THEME.card2,
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: THEME.border,
     borderRadius: 14,
     padding: 3,
   },
-
   qtyBtn: {
     width: 29,
     height: 29,
     borderRadius: 10,
-    backgroundColor: THEME.greenDark,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  disabledBtn: {
-    opacity: 0.45,
-  },
-
-  qtyText: {
-    color: THEME.text,
-    fontWeight: "900",
-    marginHorizontal: 13,
-  },
-
-  itemPrice: {
-    color: THEME.green,
-    fontWeight: "900",
-    fontSize: 16,
-  },
-
-  singlePrice: {
-    color: THEME.muted,
-    fontSize: 11,
-    marginTop: 2,
-  },
-
-  emptyBox: {
-    alignItems: "center",
-    paddingHorizontal: 26,
-  },
-
-  emptyIcon: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
   },
-
+  disabledBtn: {
+    opacity: 0.45,
+  },
+  qtyText: {
+    color: THEME.text,
+    fontWeight: "900",
+    marginHorizontal: 13,
+  },
+  itemPrice: {
+    color: THEME.green,
+    fontWeight: "900",
+    fontSize: 16,
+  },
+  singlePrice: {
+    color: THEME.muted,
+    fontSize: 11,
+    marginTop: 2,
+    fontWeight: "700",
+  },
+  emptyBox: {
+    alignItems: "center",
+    paddingHorizontal: 26,
+  },
+  emptyIcon: {
+    width: 104,
+    height: 104,
+    borderRadius: 36,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   emptyTitle: {
     color: THEME.text,
     fontSize: 21,
     fontWeight: "900",
     marginTop: 18,
   },
-
   emptyText: {
     color: THEME.muted,
     textAlign: "center",
     marginTop: 8,
     lineHeight: 20,
+    fontWeight: "700",
   },
-
   exploreBtn: {
     marginTop: 22,
     backgroundColor: THEME.green,
@@ -622,25 +736,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-
   exploreText: {
-    color: "#041008",
+    color: THEME.black,
     fontWeight: "900",
     fontSize: 15,
   },
-
   footer: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "#08100C",
+    backgroundColor: THEME.bg,
     borderTopWidth: 1,
     borderTopColor: THEME.border,
     padding: 16,
     paddingBottom: 26,
   },
-
   billCard: {
     backgroundColor: THEME.card,
     borderRadius: 20,
@@ -649,49 +760,41 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
-
   billRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 9,
   },
-
   billLabel: {
     color: THEME.muted,
     fontSize: 13,
     fontWeight: "700",
   },
-
   billValue: {
     color: THEME.text,
     fontSize: 13,
     fontWeight: "800",
   },
-
   freeText: {
     color: THEME.green,
     fontSize: 13,
     fontWeight: "900",
   },
-
   divider: {
     height: 1,
     backgroundColor: THEME.border,
     marginVertical: 5,
   },
-
   totalLabel: {
     color: THEME.text,
     fontSize: 16,
     fontWeight: "900",
   },
-
   totalValue: {
     color: THEME.green,
     fontSize: 18,
     fontWeight: "900",
   },
-
   checkoutBtn: {
     backgroundColor: THEME.green,
     borderRadius: 20,
@@ -701,28 +804,90 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-
   checkoutSmall: {
-    color: "#05210E",
+    color: THEME.black,
     fontSize: 11,
     fontWeight: "800",
   },
-
   checkoutAmount: {
-    color: "#041008",
+    color: THEME.black,
     fontSize: 19,
     fontWeight: "900",
   },
-
   checkoutRight: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-
   checkoutText: {
-    color: "#041008",
+    color: THEME.black,
     fontSize: 17,
+    fontWeight: "900",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.72)",
+    justifyContent: "center",
+    padding: 22,
+  },
+  confirmBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 26,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 20,
+    alignItems: "center",
+  },
+  confirmIcon: {
+    width: 62,
+    height: 62,
+    borderRadius: 22,
+    backgroundColor: "#1D1111",
+    borderWidth: 1,
+    borderColor: "#3A1919",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  confirmTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  confirmText: {
+    color: THEME.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginTop: 8,
+    fontWeight: "700",
+  },
+  confirmActions: {
+    flexDirection: "row",
+    marginTop: 20,
+    gap: 10,
+  },
+  cancelBtn: {
+    flex: 1,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    paddingVertical: 13,
+    borderRadius: 16,
+    alignItems: "center",
+  },
+  cancelText: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  confirmBtn: {
+    flex: 1,
+    backgroundColor: THEME.green,
+    paddingVertical: 13,
+    borderRadius: 16,
+    alignItems: "center",
+  },
+  confirmBtnText: {
+    color: THEME.black,
     fontWeight: "900",
   },
 });

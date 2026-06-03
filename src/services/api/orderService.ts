@@ -1,13 +1,16 @@
 import apiClient from "@/api/apiClient";
 
-export type PaymentMethod = "COD" | "ONLINE";
-export type PaymentStatus = "PENDING" | "PAID" | "FAILED";
+export type PaymentMethod = "COD" | "ONLINE" | "WALLET";
+export type PaymentStatus = "PENDING" | "PAID" | "FAILED" | "REFUNDED";
+
 export type OrderStatus =
   | "PLACED"
-  | "ACCEPTED"
+  | "ACCEPTED_BY_VENDOR"
   | "PREPARING"
-  | "READY"
+  | "READY_FOR_PICKUP"
+  | "ASSIGNED_TO_RIDER"
   | "PICKED_UP"
+  | "OUT_FOR_DELIVERY"
   | "DELIVERED"
   | "CANCELLED";
 
@@ -18,6 +21,13 @@ export type OrderItem = {
   totalPrice?: number | string;
   total_price?: number | string;
   itemName?: string | null;
+  item_name?: string | null;
+
+  customizationJson?: any;
+  customization_json?: any;
+  addonJson?: any;
+  addon_json?: any;
+
   menuItem?: {
     id: string;
     name: string;
@@ -25,6 +35,7 @@ export type OrderItem = {
     imageUrl?: string | null;
     image_url?: string | null;
   } | null;
+
   menu_item?: {
     id: string;
     name: string;
@@ -34,33 +45,110 @@ export type OrderItem = {
   } | null;
 };
 
-export type Order = {
-  id: string;
-  userId?: string;
-  user_id?: string;
-  restaurantId?: string;
-  restaurant_id?: string;
-  addressId?: string;
-  address_id?: string;
-  orderNumber?: string;
-  order_number?: string;
-  totalAmount?: number | string;
-  total_amount?: number | string;
+export type OrderTax = {
+  cgstRate?: number | string;
+  sgstRate?: number | string;
+  cgst?: number | string;
+  sgst?: number | string;
+  total?: number | string;
+};
+
+export type OrderPricing = {
+  cartValue?: number | string;
+  subtotal?: number | string;
   deliveryFee?: number | string;
   delivery_fee?: number | string;
   platformFee?: number | string;
   platform_fee?: number | string;
+  tax?: OrderTax;
+  taxAmount?: number | string;
+  tax_amount?: number | string;
+  discount?: number | string;
+  totalAmount?: number | string;
+  total_amount?: number | string;
+  grandTotal?: number | string;
+};
+
+export type Order = {
+  id: string;
+
+  userId?: string;
+  user_id?: string;
+
+  restaurantId?: string;
+  restaurant_id?: string;
+
+  vendorId?: string;
+  vendor_id?: string;
+
+  riderId?: string | null;
+  rider_id?: string | null;
+
+  addressId?: string;
+  address_id?: string;
+
+  orderNumber?: string;
+  order_number?: string;
+
+  itemTotal?: number | string;
+  item_total?: number | string;
+
+  totalAmount?: number | string;
+  total_amount?: number | string;
+
+  deliveryFee?: number | string;
+  delivery_fee?: number | string;
+
+  platformFee?: number | string;
+  platform_fee?: number | string;
+
+  discount?: number | string;
+
+  taxAmount?: number | string;
+  tax_amount?: number | string;
+
+  cgstAmount?: number | string;
+  cgst_amount?: number | string;
+
+  sgstAmount?: number | string;
+  sgst_amount?: number | string;
+
+  cgstRate?: number | string;
+  cgst_rate?: number | string;
+
+  sgstRate?: number | string;
+  sgst_rate?: number | string;
+
   paymentMethod?: PaymentMethod;
   payment_method?: PaymentMethod;
+
   paymentStatus?: PaymentStatus;
   payment_status?: PaymentStatus;
+
   status: OrderStatus | string;
+
   customerNote?: string | null;
   customer_note?: string | null;
+
+  cancelReason?: string | null;
+  cancel_reason?: string | null;
+
+  estimatedPreparationMinutes?: number | null;
+  estimated_preparation_minutes?: number | null;
+
   createdAt?: string;
   created_at?: string;
+
   updatedAt?: string;
   updated_at?: string;
+
+  restaurant?: any;
+  user?: any;
+  rider?: any;
+  address?: any;
+  coupon?: any;
+  history?: any[];
+
   items?: OrderItem[];
   orderItems?: OrderItem[];
 };
@@ -68,8 +156,8 @@ export type Order = {
 export type CreateOrderPayload = {
   addressId: string;
   paymentMethod: PaymentMethod;
-  paymentStatus?: PaymentStatus;
   customerNote?: string | null;
+  couponCode?: string | null;
 };
 
 type ApiResult<T> = {
@@ -105,18 +193,18 @@ export const orderService = {
       apiClient.post("/orders", {
         addressId: payload.addressId,
         paymentMethod: payload.paymentMethod,
-        paymentStatus: payload.paymentStatus ?? "PENDING",
         customerNote: payload.customerNote ?? null,
+        couponCode: payload.couponCode ?? null,
       })
     );
   },
 
   getMyOrders: async () => {
-    return safe<Order[]>(() => apiClient.get("/orders/my-orders"));
+    return safe<Order[]>(() => apiClient.get("/orders/my"));
   },
 
   getOrdersByUser: async () => {
-    return safe<Order[]>(() => apiClient.get("/orders/my-orders"));
+    return safe<Order[]>(() => apiClient.get("/orders/my"));
   },
 
   getOrderById: async (orderId: string) => {
@@ -125,16 +213,18 @@ export const orderService = {
 
   cancelOrder: async (orderId: string, reason?: string) => {
     return safe<Order>(() =>
-      apiClient.patch(`/orders/${orderId}/cancel`, {
-        reason: reason || "Cancelled by customer",
+      apiClient.patch(`/orders/${orderId}/status`, {
+        status: "CANCELLED",
+        note: reason || "Cancelled by customer",
       })
     );
   },
 
-  updateOrderStatus: async (orderId: string, status: OrderStatus) => {
+  updateOrderStatus: async (orderId: string, status: OrderStatus, note?: string) => {
     return safe<Order>(() =>
       apiClient.patch(`/orders/${orderId}/status`, {
         status,
+        note: note || null,
       })
     );
   },

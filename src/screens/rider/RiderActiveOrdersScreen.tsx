@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import { riderService } from "@/services/api/riderService";
+import { riderService } from "@/services/api/riderApi";
 
 const T = {
   bg: "#070A08",

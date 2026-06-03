@@ -9,36 +9,39 @@ import {
   Image,
   ActivityIndicator,
   RefreshControl,
-  Alert,
   PermissionsAndroid,
   Platform,
+  StatusBar,
+  Modal,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import Geolocation from "react-native-geolocation-service";
+import Toast from "react-native-toast-message";
 
 import { useAuth } from "@/context/AuthContext";
 import {
   restaurantService,
   Category,
   Restaurant,
-  cartService,
 } from "@/services/api/restaurantService";
+import { cartService } from "@/services/api/cartService";
 import { discountService, Discount } from "@/services/api/discountService";
-import apiClient from "@/api/apiClient";
+import { favoriteService } from "@/services/api/favouriteService";
 
 const THEME = {
-  bg: "#F7FFF9",
+  bg: "#F7FAF6",
+  soft: "#ECFDF3",
   card: "#FFFFFF",
+  card2: "#F1F8F3",
   green: "#16A34A",
-  greenDark: "#0B7A34",
-  mint: "#DCFCE7",
+  green2: "#22C55E",
   yellow: "#FACC15",
-  text: "#101510",
-  muted: "#6B7280",
-  border: "#E5E7EB",
-  soft: "#F1F5F9",
-  black: "#050807",
+  yellow2: "#FFF7CC",
+  text: "#101713",
+  muted: "#647067",
+  border: "#DDE7DE",
+  black: "#07110B",
   danger: "#EF4444",
 };
 
@@ -46,7 +49,7 @@ const quickServices = [
   { id: "food", title: "Food", icon: "fast-food-outline" },
   { id: "grocery", title: "Grocery", icon: "basket-outline" },
   { id: "medicine", title: "Medicine", icon: "medkit-outline" },
-  { id: "daily", title: "Daily Needs", icon: "bag-handle-outline" },
+  { id: "daily", title: "Daily", icon: "bag-handle-outline" },
 ];
 
 const trustChips = [
@@ -55,14 +58,13 @@ const trustChips = [
   { id: "local", title: "Local stores", icon: "storefront-outline" },
 ];
 
-const img = (item: any) =>
-  item?.image_url ||
-  item?.imageUrl ||
-  item?.image ||
-  "https://images.unsplash.com/photo-1504674900247-0877df9cc836";
+const getImage = (item: any) =>
+  item?.image_url || item?.imageUrl || item?.image || null;
 
-const name = (item: any) =>
+const getName = (item: any) =>
   item?.restaurant_name || item?.name || item?.title || "Karto Store";
+
+const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
 
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
@@ -71,15 +73,21 @@ export default function HomeScreen() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [featuredRestaurants, setFeaturedRestaurants] = useState<Restaurant[]>([]);
   const [discounts, setDiscounts] = useState<Discount[]>([]);
-  const [recentlyViewed, setRecentlyViewed] = useState<any[]>([]);
-  const [favoriteItems, setFavoriteItems] = useState<any[]>([]);
   const [favoriteRestaurants, setFavoriteRestaurants] = useState<any[]>([]);
+  const [favoriteItems, setFavoriteItems] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [locationText, setLocationText] = useState("Fetching location...");
+  const [locationText, setLocationText] = useState("Select delivery location");
   const [cartSummary, setCartSummary] = useState({ itemCount: 0, total: 0 });
+
+  const [authModal, setAuthModal] = useState(false);
+  const [authMessage, setAuthMessage] = useState(
+    "Please login to use cart, orders, profile and checkout."
+  );
+
+  const isLoggedIn = !!user?.id;
 
   const topRated = useMemo(() => {
     return [...featuredRestaurants]
@@ -96,13 +104,41 @@ export default function HomeScreen() {
     useCallback(() => {
       loadCartSummary();
       loadPersonalSections();
-    }, [])
+    }, [user?.id])
   );
 
+  const showToast = (
+    type: "success" | "error" | "info",
+    text1: string,
+    text2?: string
+  ) => {
+    Toast.show({
+      type,
+      text1,
+      text2,
+      position: "bottom",
+      visibilityTime: 1900,
+    });
+  };
+
+  const requireAuth = (message: string) => {
+    if (isLoggedIn) return true;
+    setAuthMessage(message);
+    setAuthModal(true);
+    return false;
+  };
+
+  const openLogin = () => {
+    setAuthModal(false);
+    navigation.navigate("Auth");
+  };
+
   const getUserName = () =>
-    ((user as any)?.fullName ||
-      (user as any)?.user_metadata?.full_name ||
-      "Customer")
+    (
+      (user as any)?.fullName ||
+      (user as any)?.name ||
+      "Customer"
+    )
       .toString()
       .split(" ")[0];
 
@@ -124,26 +160,29 @@ export default function HomeScreen() {
           const { latitude, longitude } = position.coords;
           setLocationText(`Near you • ${latitude.toFixed(2)}, ${longitude.toFixed(2)}`);
         },
-        error => {
-          console.log("Location error:", error);
+        () => {
           setLocationText("Tap to select location");
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
       );
-    } catch (error) {
-      console.log("Permission/location error:", error);
+    } catch {
       setLocationText("Tap to select location");
     }
   };
 
   const loadCartSummary = async () => {
+    if (!isLoggedIn) {
+      setCartSummary({ itemCount: 0, total: 0 });
+      return;
+    }
+
     try {
       const cartRes = await cartService.getCartTotal();
 
       if (!cartRes.error && cartRes.data) {
         setCartSummary({
           itemCount: Number(cartRes.data.itemCount || 0),
-          total: Number(cartRes.data.total || 0),
+          total: Number(cartRes.data.total || cartRes.data.totalAmount || 0),
         });
       } else {
         setCartSummary({ itemCount: 0, total: 0 });
@@ -154,28 +193,18 @@ export default function HomeScreen() {
   };
 
   const loadPersonalSections = async () => {
-    if (!user?.id) return;
+    if (!isLoggedIn) {
+      setFavoriteItems([]);
+      setFavoriteRestaurants([]);
+      return;
+    }
 
     try {
-      const [recentRes, favRes] = await Promise.allSettled([
-        apiClient.get("recently-viewed"),
-        apiClient.get("favorites"),
-      ]);
+      const { data } = await favoriteService.getFavorites();
 
-      if (recentRes.status === "fulfilled") {
-        const data = recentRes.value.data?.data || recentRes.value.data?.items || [];
-        setRecentlyViewed(Array.isArray(data) ? data : []);
-      }
-
-      if (favRes.status === "fulfilled") {
-        const favData = favRes.value.data?.data || {};
-        setFavoriteItems(favData.items || favRes.value.data?.items || []);
-        setFavoriteRestaurants(
-          favData.restaurants || favRes.value.data?.restaurants || []
-        );
-      }
+      setFavoriteRestaurants(Array.isArray((data as any)?.restaurants) ? (data as any).restaurants : []);
+      setFavoriteItems(Array.isArray((data as any)?.items) ? (data as any).items : []);
     } catch {
-      setRecentlyViewed([]);
       setFavoriteItems([]);
       setFavoriteRestaurants([]);
     }
@@ -195,9 +224,8 @@ export default function HomeScreen() {
 
       await loadCartSummary();
       await loadPersonalSections();
-    } catch (err) {
-      console.error(err);
-      Alert.alert("Error", "Something went wrong");
+    } catch {
+      showToast("error", "Something went wrong", "Unable to refresh home right now.");
     } finally {
       setLoading(false);
     }
@@ -211,38 +239,67 @@ export default function HomeScreen() {
   };
 
   const openCart = () => {
-    if (!user?.id) {
-      Alert.alert("Login Required", "Please login to view your cart.");
+    if (!requireAuth("Login to view your cart and continue checkout.")) return;
+    navigation.navigate("Cart", { userId: user?.id });
+  };
+
+  const openNotifications = () => {
+    if (!requireAuth("Login to view your notifications and order updates.")) return;
+    navigation.navigate("Notifications");
+  };
+
+  const openCoupons = () => {
+    if (!requireAuth("Login to unlock coupons and personal offers.")) return;
+    navigation.navigate("Coupons");
+  };
+
+  const openSearch = () => navigation.navigate("SearchScreen");
+
+  const openRestaurant = (restaurantId: string) => {
+    if (!restaurantId) {
+      showToast("error", "Store unavailable", "This store cannot be opened right now.");
       return;
     }
 
-    navigation.navigate("Cart", { userId: user.id });
-  };
-
-  const openRestaurant = (restaurantId: string) => {
     navigation.navigate("RestaurantDetail", { restaurantId });
   };
 
   const openMenuItem = (itemId: string, restaurantId?: string) => {
-    navigation.navigate("MenuItemDetail", {
-      itemId,
-      restaurantId,
-    });
+    if (!itemId) {
+      showToast("error", "Item unavailable", "This item cannot be opened right now.");
+      return;
+    }
+
+    navigation.navigate("MenuItemDetail", { itemId, restaurantId });
   };
 
-  const openSearch = () => {
-    navigation.navigate("SearchScreen");
-  };
+  const RenderImage = ({
+    item,
+    style,
+    icon = "storefront-outline",
+  }: {
+    item: any;
+    style: any;
+    icon?: string;
+  }) => {
+    const uri = getImage(item);
 
-  const openNotifications = () => {
-    navigation.navigate("Notifications");
+    if (uri) {
+      return <Image source={{ uri }} style={style} />;
+    }
+
+    return (
+      <View style={[style, styles.imageFallback]}>
+        <Icon name={icon as any} size={28} color={THEME.green} />
+      </View>
+    );
   };
 
   const renderRestaurant = (rest: any) => {
     const deliveryFee = Number(rest.delivery_fee ?? rest.deliveryFee ?? 0);
-    const isFreeDelivery = deliveryFee === 0;
     const rating = Number(rest.rating || 4);
     const restaurantId = rest.id;
+    const isOpen = rest.isOpen !== false && rest.is_open !== false;
 
     return (
       <TouchableOpacity
@@ -252,23 +309,13 @@ export default function HomeScreen() {
         onPress={() => openRestaurant(restaurantId)}
       >
         <View>
-          <Image source={{ uri: img(rest) }} style={styles.restaurantImage} />
+          <RenderImage item={rest} style={styles.restaurantImage} />
 
           <View style={styles.imageTopBadges}>
-            <View style={styles.openBadge}>
-              <View
-                style={[
-                  styles.liveDot,
-                  !rest.isOpen && { backgroundColor: THEME.danger },
-                ]}
-              />
-              <Text
-                style={[
-                  styles.openBadgeText,
-                  !rest.isOpen && { color: THEME.danger },
-                ]}
-              >
-                {rest.isOpen === false ? "CLOSED" : "OPEN"}
+            <View style={[styles.openBadge, !isOpen && styles.closedBadge]}>
+              <View style={[styles.liveDot, !isOpen && { backgroundColor: THEME.danger }]} />
+              <Text style={[styles.openBadgeText, !isOpen && { color: THEME.danger }]}>
+                {isOpen ? "OPEN" : "CLOSED"}
               </Text>
             </View>
 
@@ -276,7 +323,7 @@ export default function HomeScreen() {
               <View style={styles.topRatedBadge}>
                 <Text style={styles.topRatedText}>⭐ TOP RATED</Text>
               </View>
-            ) : isFreeDelivery ? (
+            ) : deliveryFee === 0 ? (
               <View style={styles.freeBadge}>
                 <Text style={styles.freeBadgeText}>FREE DELIVERY</Text>
               </View>
@@ -287,10 +334,10 @@ export default function HomeScreen() {
         <View style={styles.restaurantInfo}>
           <View style={styles.restaurantTitleRow}>
             <Text style={styles.restaurantName} numberOfLines={1}>
-              {name(rest)}
+              {getName(rest)}
             </Text>
 
-            {rest.isPureVeg && (
+            {(rest.isPureVeg || rest.is_pure_veg) && (
               <View style={styles.vegBadge}>
                 <View style={styles.vegDot} />
                 <Text style={styles.vegText}>Pure Veg</Text>
@@ -302,7 +349,7 @@ export default function HomeScreen() {
             <View style={styles.ratingPill}>
               <Icon name="star" size={13} color={THEME.black} />
               <Text style={styles.ratingText}>
-                {rating.toFixed(1)} ({rest.total_reviews || rest.totalReviews || 0})
+                {rating.toFixed(1)}
               </Text>
             </View>
 
@@ -314,22 +361,17 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <View style={styles.priceRow}>
-            <Text style={styles.deliveryFee}>
-              Delivery: {isFreeDelivery ? "Free" : `₹${deliveryFee}`}
-            </Text>
-            <Text style={styles.dotSep}>•</Text>
-            <Text style={styles.deliveryFee}>
-              Min ₹{rest.minimum_order || rest.minimumOrder || 0}
-            </Text>
-          </View>
+          <Text style={styles.deliveryLine}>
+            Delivery {deliveryFee === 0 ? "Free" : money(deliveryFee)} • Min{" "}
+            {money(rest.minimum_order || rest.minimumOrder || 0)}
+          </Text>
         </View>
       </TouchableOpacity>
     );
   };
 
   const renderSmallItem = ({ item }: { item: any }) => {
-    const menuItem = item?.menuItem || item;
+    const menuItem = item?.menuItem || item?.menu_item || item;
     const restaurant = menuItem?.restaurant || item?.restaurant;
 
     return (
@@ -338,7 +380,7 @@ export default function HomeScreen() {
         activeOpacity={0.9}
         onPress={() => openMenuItem(menuItem.id, restaurant?.id || menuItem.restaurantId)}
       >
-        <Image source={{ uri: img(menuItem) }} style={styles.smallItemImage} />
+        <RenderImage item={menuItem} style={styles.smallItemImage} icon="fast-food-outline" />
 
         <View style={styles.smallItemInfo}>
           <Text style={styles.smallItemName} numberOfLines={1}>
@@ -349,9 +391,7 @@ export default function HomeScreen() {
             {restaurant?.name || restaurant?.restaurant_name || "Karto Store"}
           </Text>
 
-          <Text style={styles.smallItemPrice}>
-            ₹{Number(menuItem.price || 0).toFixed(0)}
-          </Text>
+          <Text style={styles.smallItemPrice}>{money(menuItem.price)}</Text>
         </View>
       </TouchableOpacity>
     );
@@ -366,9 +406,9 @@ export default function HomeScreen() {
         activeOpacity={0.9}
         onPress={() => openRestaurant(rest.id)}
       >
-        <Image source={{ uri: img(rest) }} style={styles.favoriteStoreImage} />
+        <RenderImage item={rest} style={styles.favoriteStoreImage} />
         <Text style={styles.favoriteStoreName} numberOfLines={1}>
-          {name(rest)}
+          {getName(rest)}
         </Text>
         <Text style={styles.favoriteStoreSub}>Tap to order again</Text>
       </TouchableOpacity>
@@ -378,6 +418,7 @@ export default function HomeScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
@@ -389,6 +430,8 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
+
       <ScrollView
         style={styles.container}
         contentContainerStyle={{
@@ -412,7 +455,7 @@ export default function HomeScreen() {
               activeOpacity={0.8}
             >
               <View style={styles.locationIconWrap}>
-                <Icon name="location" size={18} color={THEME.green} />
+                <Icon name="location" size={17} color={THEME.card} />
               </View>
 
               <View style={{ flex: 1 }}>
@@ -422,33 +465,31 @@ export default function HomeScreen() {
                 </Text>
               </View>
 
-              <Icon name="chevron-down" size={18} color="#D1FAE5" />
+              <Icon name="chevron-down" size={17} color={THEME.green} />
             </TouchableOpacity>
 
-            <View style={styles.headerIcons}>
-              <TouchableOpacity style={styles.iconBtn} onPress={openCart}>
-                <Icon name="cart-outline" size={24} color={THEME.text} />
-                {cartSummary.itemCount > 0 && (
-                  <View style={styles.cartDot}>
-                    <Text style={styles.cartDotText}>
-                      {cartSummary.itemCount > 9 ? "9+" : cartSummary.itemCount}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={openCart}>
+              <Icon name="cart-outline" size={23} color={THEME.text} />
+              {cartSummary.itemCount > 0 && (
+                <View style={styles.cartDot}>
+                  <Text style={styles.cartDotText}>
+                    {cartSummary.itemCount > 9 ? "9+" : cartSummary.itemCount}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
 
-              <TouchableOpacity style={styles.iconBtn} onPress={openNotifications}>
-                <Icon name="notifications-outline" size={24} color={THEME.text} />
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={styles.headerIconBtn} onPress={openNotifications}>
+              <Icon name="notifications-outline" size={23} color={THEME.text} />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.heroCard}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.brand}>Karto</Text>
+              <Text style={styles.heroKicker}>KARTO LOCAL</Text>
               <Text style={styles.heroTitle}>Hi {getUserName()} 👋</Text>
               <Text style={styles.heroSubtitle}>
-                Food, grocery, medicines and daily needs from nearby trusted stores.
+                Fresh food, groceries and daily needs from trusted stores near you.
               </Text>
 
               <TouchableOpacity
@@ -456,13 +497,13 @@ export default function HomeScreen() {
                 activeOpacity={0.9}
                 onPress={openSearch}
               >
-                <Text style={styles.heroActionText}>Explore nearby stores</Text>
-                <Icon name="arrow-forward" size={17} color={THEME.black} />
+                <Text style={styles.heroActionText}>Explore stores</Text>
+                <Icon name="arrow-forward" size={17} color={THEME.card} />
               </TouchableOpacity>
             </View>
 
             <View style={styles.heroCircle}>
-              <Icon name="bicycle-outline" size={42} color={THEME.greenDark} />
+              <Icon name="bicycle-outline" size={42} color={THEME.black} />
             </View>
           </View>
         </View>
@@ -473,7 +514,7 @@ export default function HomeScreen() {
             Search food, grocery, medicines...
           </Text>
           <View style={styles.searchMiniBtn}>
-            <Icon name="options-outline" size={18} color={THEME.greenDark} />
+            <Icon name="options-outline" size={18} color={THEME.card} />
           </View>
         </TouchableOpacity>
 
@@ -486,7 +527,7 @@ export default function HomeScreen() {
           renderItem={({ item }) => (
             <TouchableOpacity style={styles.quickCard} activeOpacity={0.9}>
               <View style={styles.quickIcon}>
-                <Icon name={item.icon as any} size={23} color={THEME.green} />
+                <Icon name={item.icon as any} size={23} color={THEME.black} />
               </View>
               <Text style={styles.quickText}>{item.title}</Text>
             </TouchableOpacity>
@@ -511,36 +552,32 @@ export default function HomeScreen() {
           <View style={styles.section}>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionTitleNoMargin}>Today’s best offers</Text>
-              <Text style={styles.sectionHint}>View all</Text>
+              <TouchableOpacity onPress={openCoupons}>
+                <Text style={styles.sectionHint}>View all</Text>
+              </TouchableOpacity>
             </View>
 
             <FlatList
               horizontal
               data={discounts}
               showsHorizontalScrollIndicator={false}
-              keyExtractor={item => item.id}
+              keyExtractor={(item: any, index) => item?.id?.toString() || index.toString()}
               contentContainerStyle={{ paddingHorizontal: 20 }}
               renderItem={({ item }) => (
                 <TouchableOpacity style={styles.discountBanner} activeOpacity={0.9}>
-                  <Image source={{ uri: img(item) }} style={styles.discountImage} />
-
-                  <View style={styles.discountContent}>
-                    <View style={styles.offerPill}>
-                      <Icon name="pricetag" size={13} color={THEME.black} />
-                      <Text style={styles.offerPillText}>LIMITED DEAL</Text>
-                    </View>
-
-                    <Text style={styles.discountText}>
-                      {(item as any).discount_percent ||
-                        (item as any).discountPercent ||
-                        10}
-                      % OFF
-                    </Text>
-
-                    <Text style={styles.discountSubText} numberOfLines={2}>
-                      {item.description || "Save more on your next Karto order"}
-                    </Text>
+                  <View style={styles.discountDecor} />
+                  <View style={styles.offerPill}>
+                    <Icon name="pricetag" size={13} color={THEME.card} />
+                    <Text style={styles.offerPillText}>LIMITED DEAL</Text>
                   </View>
+
+                  <Text style={styles.discountText}>
+                    {(item as any).discount_percent || (item as any).discountPercent || 10}% OFF
+                  </Text>
+
+                  <Text style={styles.discountSubText} numberOfLines={2}>
+                    {item.description || "Save more on your next Karto order"}
+                  </Text>
                 </TouchableOpacity>
               )}
             />
@@ -560,7 +597,7 @@ export default function HomeScreen() {
               horizontal
               data={categories}
               showsHorizontalScrollIndicator={false}
-              keyExtractor={(item: any) => item.id}
+              keyExtractor={(item: any, index) => item?.id?.toString() || index.toString()}
               contentContainerStyle={styles.categoriesList}
               renderItem={({ item }: any) => (
                 <TouchableOpacity
@@ -573,7 +610,7 @@ export default function HomeScreen() {
                   }
                 >
                   <View style={styles.categoryImageWrap}>
-                    <Image source={{ uri: img(item) }} style={styles.categoryImage} />
+                    <RenderImage item={item} style={styles.categoryImage} icon="grid-outline" />
                   </View>
                   <Text style={styles.categoryName} numberOfLines={1}>
                     {item.category_name || item.name}
@@ -583,24 +620,6 @@ export default function HomeScreen() {
             />
           )}
         </View>
-
-        {recentlyViewed.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleNoMargin}>Recently viewed</Text>
-              <Text style={styles.sectionHint}>Continue</Text>
-            </View>
-
-            <FlatList
-              horizontal
-              data={recentlyViewed}
-              showsHorizontalScrollIndicator={false}
-              keyExtractor={(item: any) => item.id}
-              contentContainerStyle={{ paddingHorizontal: 20 }}
-              renderItem={renderSmallItem}
-            />
-          </View>
-        )}
 
         {favoriteRestaurants.length > 0 && (
           <View style={styles.section}>
@@ -613,7 +632,7 @@ export default function HomeScreen() {
               horizontal
               data={favoriteRestaurants}
               showsHorizontalScrollIndicator={false}
-              keyExtractor={(item: any) => item.id}
+              keyExtractor={(item: any, index) => item?.id?.toString() || index.toString()}
               contentContainerStyle={{ paddingHorizontal: 20 }}
               renderItem={renderFavoriteRestaurant}
             />
@@ -631,7 +650,7 @@ export default function HomeScreen() {
               horizontal
               data={favoriteItems}
               showsHorizontalScrollIndicator={false}
-              keyExtractor={(item: any) => item.id}
+              keyExtractor={(item: any, index) => item?.id?.toString() || index.toString()}
               contentContainerStyle={{ paddingHorizontal: 20 }}
               renderItem={renderSmallItem}
             />
@@ -669,11 +688,7 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
 
-      <TouchableOpacity
-        style={styles.offerFloating}
-        activeOpacity={0.9}
-        onPress={() => navigation.navigate("Coupons")}
-      >
+      <TouchableOpacity style={styles.offerFloating} activeOpacity={0.9} onPress={openCoupons}>
         <Text style={styles.offerFloatingText}>🎁</Text>
       </TouchableOpacity>
 
@@ -681,70 +696,102 @@ export default function HomeScreen() {
         <TouchableOpacity style={styles.cartBanner} onPress={openCart} activeOpacity={0.92}>
           <View style={styles.cartLeft}>
             <View style={styles.cartIconCircle}>
-              <Icon name="bag-handle" size={19} color={THEME.green} />
+              <Icon name="bag-handle" size={19} color={THEME.card} />
             </View>
 
             <View>
               <Text style={styles.cartBannerTitle}>
                 {cartSummary.itemCount} item{cartSummary.itemCount > 1 ? "s" : ""} in cart
               </Text>
-              <Text style={styles.cartBannerSub}>
-                ₹{cartSummary.total.toFixed(2)}
-              </Text>
+              <Text style={styles.cartBannerSub}>₹{cartSummary.total.toFixed(2)}</Text>
             </View>
           </View>
 
           <View style={styles.cartBannerRight}>
             <Text style={styles.cartBannerBtn}>View Cart</Text>
-            <Icon name="arrow-forward" size={18} color={THEME.black} />
+            <Icon name="arrow-forward" size={18} color={THEME.card} />
           </View>
         </TouchableOpacity>
       )}
+
+      <Modal
+        visible={authModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAuthModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.authBox}>
+            <View style={styles.authIcon}>
+              <Icon name="lock-closed-outline" size={32} color={THEME.yellow} />
+            </View>
+
+            <Text style={styles.authTitle}>Login required</Text>
+            <Text style={styles.authMessage}>{authMessage}</Text>
+
+            <TouchableOpacity style={styles.loginBtn} onPress={openLogin}>
+              <Text style={styles.loginBtnText}>Login / Sign up</Text>
+              <Icon name="arrow-forward" size={20} color={THEME.card} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.browseBtn} onPress={() => setAuthModal(false)}>
+              <Text style={styles.browseText}>Continue Browsing</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#FACC15" },
-  container: { flex: 1, backgroundColor: "#FACC15" },
+  screen: { flex: 1, backgroundColor: THEME.bg },
+  container: { flex: 1, backgroundColor: THEME.bg },
 
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#FACC15",
+    backgroundColor: THEME.bg,
   },
   loadingLogo: {
-    width: 72,
-    height: 72,
-    borderRadius: 24,
-    backgroundColor: "#111111",
+    width: 76,
+    height: 76,
+    borderRadius: 26,
+    backgroundColor: THEME.yellow,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 18,
   },
   loadingLogoText: {
-    color: "#22C55E",
+    color: THEME.black,
     fontSize: 38,
     fontWeight: "900",
   },
   loadingText: {
     marginTop: 12,
-    color: "#111111",
+    color: THEME.text,
     fontWeight: "800",
   },
 
+  imageFallback: {
+    backgroundColor: THEME.soft,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
   topArea: {
-    backgroundColor: "#FACC15",
-    paddingBottom: 26,
-    borderBottomLeftRadius: 34,
-    borderBottomRightRadius: 34,
+    backgroundColor: THEME.soft,
+    paddingBottom: 24,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
   },
   header: {
     flexDirection: "row",
-    justifyContent: "space-between",
     paddingHorizontal: 20,
-    paddingTop: 18,
+    paddingTop: Platform.OS === "ios" ? 54 : 18,
     paddingBottom: 16,
     alignItems: "center",
   },
@@ -752,43 +799,44 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     padding: 10,
     borderRadius: 18,
-    marginRight: 12,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
   locationIconWrap: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 9,
   },
   locationLabel: {
-    color: "#FACC15",
+    color: THEME.green,
     fontSize: 11,
     fontWeight: "900",
   },
   locationText: {
-    color: "#FFFFFF",
+    color: THEME.text,
     fontWeight: "900",
     maxWidth: 190,
     marginTop: 1,
   },
-  headerIcons: { flexDirection: "row", alignItems: "center" },
-  iconBtn: {
-    marginLeft: 9,
+  headerIconBtn: {
+    marginLeft: 8,
     width: 43,
     height: 43,
     borderRadius: 18,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     justifyContent: "center",
     alignItems: "center",
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
-
   cartDot: {
     position: "absolute",
     top: -5,
@@ -796,59 +844,61 @@ const styles = StyleSheet.create({
     minWidth: 19,
     height: 19,
     borderRadius: 10,
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.yellow,
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 4,
     borderWidth: 1,
-    borderColor: "#111111",
+    borderColor: THEME.card,
   },
   cartDotText: {
-    color: "#111111",
+    color: THEME.black,
     fontSize: 10,
     fontWeight: "900",
   },
 
   heroCard: {
     marginHorizontal: 20,
-    backgroundColor: "#111111",
-    borderRadius: 28,
+    backgroundColor: THEME.card,
+    borderRadius: 30,
     padding: 20,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 7,
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
-  brand: {
-    color: "#FACC15",
-    fontSize: 34,
+  heroKicker: {
+    color: THEME.green,
+    fontSize: 12,
     fontWeight: "900",
-    letterSpacing: 0.5,
+    letterSpacing: 1,
   },
   heroTitle: {
-    fontSize: 22,
+    fontSize: 25,
     fontWeight: "900",
-    color: "#FFFFFF",
+    color: THEME.text,
     marginTop: 6,
   },
   heroSubtitle: {
     fontSize: 13,
-    color: "#C9C9C9",
+    color: THEME.muted,
     marginTop: 7,
     lineHeight: 19,
     maxWidth: 220,
+    fontWeight: "700",
   },
   heroAction: {
     marginTop: 16,
     alignSelf: "flex-start",
-    backgroundColor: "#22C55E",
-    paddingHorizontal: 13,
-    paddingVertical: 9,
+    backgroundColor: THEME.green,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
     borderRadius: 99,
     flexDirection: "row",
     alignItems: "center",
   },
   heroActionText: {
-    color: "#111111",
+    color: THEME.card,
     fontWeight: "900",
     fontSize: 12,
     marginRight: 6,
@@ -856,8 +906,8 @@ const styles = StyleSheet.create({
   heroCircle: {
     width: 78,
     height: 78,
-    borderRadius: 39,
-    backgroundColor: "#FACC15",
+    borderRadius: 28,
+    backgroundColor: THEME.yellow,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -865,18 +915,17 @@ const styles = StyleSheet.create({
   searchBar: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     marginHorizontal: 20,
-    marginTop: -16,
+    marginTop: 18,
     padding: 14,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: "#2A2A2A",
-    elevation: 4,
+    borderColor: THEME.border,
   },
   searchPlaceholder: {
     marginLeft: 10,
-    color: "#C9C9C9",
+    color: THEME.muted,
     flex: 1,
     fontWeight: "700",
   },
@@ -884,7 +933,7 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 13,
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -896,26 +945,25 @@ const styles = StyleSheet.create({
   },
   quickCard: {
     width: 92,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     borderRadius: 22,
     paddingVertical: 15,
     alignItems: "center",
     marginRight: 12,
     borderWidth: 1,
-    borderColor: "#2A2A2A",
-    elevation: 3,
+    borderColor: THEME.border,
   },
   quickIcon: {
-    width: 44,
-    height: 44,
+    width: 46,
+    height: 46,
     borderRadius: 18,
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.yellow,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 9,
   },
   quickText: {
-    color: "#FFFFFF",
+    color: THEME.text,
     fontSize: 12,
     fontWeight: "900",
   },
@@ -927,20 +975,22 @@ const styles = StyleSheet.create({
   trustChip: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 99,
     marginRight: 9,
+    borderWidth: 1,
+    borderColor: THEME.border,
   },
   trustText: {
     marginLeft: 6,
-    color: "#FFFFFF",
+    color: THEME.text,
     fontSize: 12,
     fontWeight: "800",
   },
 
-  section: { marginTop: 18 },
+  section: { marginTop: 20 },
   sectionHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -951,64 +1001,65 @@ const styles = StyleSheet.create({
   sectionTitleNoMargin: {
     fontSize: 20,
     fontWeight: "900",
-    color: "#111111",
+    color: THEME.text,
   },
   sectionHint: {
-    color: "#111111",
+    color: THEME.green,
     fontWeight: "900",
     fontSize: 13,
   },
   emptyText: {
-    color: "#111111",
+    color: THEME.muted,
     marginHorizontal: 20,
     fontWeight: "800",
   },
 
   discountBanner: {
     width: 305,
-    height: 155,
+    minHeight: 150,
     borderRadius: 26,
     overflow: "hidden",
     marginRight: 14,
-    backgroundColor: "#111111",
-    elevation: 5,
-  },
-  discountImage: {
-    ...StyleSheet.absoluteFillObject,
-    width: "100%",
-    height: "100%",
-    opacity: 0.28,
-  },
-  discountContent: {
-    flex: 1,
+    backgroundColor: THEME.yellow2,
+    borderWidth: 1,
+    borderColor: "#F4DE7A",
     padding: 18,
-    justifyContent: "flex-end",
+  },
+  discountDecor: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: THEME.yellow,
+    right: -35,
+    top: -30,
+    opacity: 0.8,
   },
   offerPill: {
     alignSelf: "flex-start",
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 99,
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 14,
   },
   offerPillText: {
     marginLeft: 5,
-    color: "#111111",
+    color: THEME.card,
     fontSize: 10,
     fontWeight: "900",
   },
   discountText: {
-    fontSize: 27,
+    fontSize: 29,
     fontWeight: "900",
-    color: "#FFFFFF",
+    color: THEME.black,
   },
   discountSubText: {
     fontSize: 13,
-    color: "#FACC15",
-    marginTop: 4,
+    color: THEME.muted,
+    marginTop: 5,
     fontWeight: "800",
     maxWidth: 230,
   },
@@ -1019,20 +1070,19 @@ const styles = StyleSheet.create({
   },
   categoryItem: {
     alignItems: "center",
-    marginRight: 16,
-    width: 84,
-    backgroundColor: "#111111",
+    marginRight: 14,
+    width: 86,
+    backgroundColor: THEME.card,
     borderRadius: 24,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: "#2A2A2A",
-    elevation: 3,
+    borderColor: THEME.border,
   },
   categoryImageWrap: {
     width: 58,
     height: 58,
     borderRadius: 20,
-    backgroundColor: "#FACC15",
+    backgroundColor: THEME.yellow2,
     padding: 4,
     marginBottom: 8,
   },
@@ -1043,26 +1093,25 @@ const styles = StyleSheet.create({
   },
   categoryName: {
     fontSize: 12,
-    color: "#FFFFFF",
+    color: THEME.text,
     textAlign: "center",
     fontWeight: "900",
     maxWidth: 70,
   },
 
   restaurantCard: {
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     borderRadius: 26,
     marginBottom: 18,
     marginHorizontal: 20,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#2A2A2A",
-    elevation: 5,
+    borderColor: THEME.border,
   },
   restaurantImage: {
     width: "100%",
     height: 178,
-    backgroundColor: "#1F1F1F",
+    backgroundColor: THEME.soft,
   },
   imageTopBadges: {
     position: "absolute",
@@ -1073,44 +1122,47 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   openBadge: {
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 99,
     flexDirection: "row",
     alignItems: "center",
   },
+  closedBadge: {
+    backgroundColor: "#FFF1F1",
+  },
   liveDot: {
     width: 7,
     height: 7,
     borderRadius: 4,
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     marginRight: 6,
   },
   openBadgeText: {
-    color: "#22C55E",
+    color: THEME.green,
     fontSize: 10,
     fontWeight: "900",
   },
   freeBadge: {
-    backgroundColor: "#FACC15",
+    backgroundColor: THEME.yellow,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 99,
   },
   freeBadgeText: {
-    color: "#111111",
+    color: THEME.black,
     fontSize: 10,
     fontWeight: "900",
   },
   topRatedBadge: {
-    backgroundColor: "#FACC15",
+    backgroundColor: THEME.yellow,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 99,
   },
   topRatedText: {
-    color: "#111111",
+    color: THEME.black,
     fontSize: 10,
     fontWeight: "900",
   },
@@ -1123,12 +1175,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 18,
     fontWeight: "900",
-    color: "#FFFFFF",
+    color: THEME.text,
   },
   vegBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.soft,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 99,
@@ -1138,11 +1190,11 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: 4,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.green,
     marginRight: 5,
   },
   vegText: {
-    color: "#111111",
+    color: THEME.green,
     fontSize: 10,
     fontWeight: "900",
   },
@@ -1154,7 +1206,7 @@ const styles = StyleSheet.create({
   ratingPill: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FACC15",
+    backgroundColor: THEME.yellow,
     paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 99,
@@ -1162,7 +1214,7 @@ const styles = StyleSheet.create({
   },
   ratingText: {
     marginLeft: 4,
-    color: "#111111",
+    color: THEME.black,
     fontSize: 12,
     fontWeight: "900",
   },
@@ -1172,55 +1224,45 @@ const styles = StyleSheet.create({
   },
   metaText: {
     marginLeft: 4,
-    color: "#C9C9C9",
+    color: THEME.muted,
     fontSize: 13,
     fontWeight: "700",
   },
-  priceRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 10,
-  },
-  deliveryFee: {
+  deliveryLine: {
     fontSize: 13,
-    color: "#C9C9C9",
+    color: THEME.muted,
     fontWeight: "800",
-  },
-  dotSep: {
-    marginHorizontal: 7,
-    color: "#C9C9C9",
-    fontWeight: "900",
+    marginTop: 10,
   },
 
   smallItemCard: {
     width: 158,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     borderRadius: 22,
     marginRight: 14,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#2A2A2A",
-    elevation: 3,
+    borderColor: THEME.border,
   },
   smallItemImage: {
     width: "100%",
     height: 92,
-    backgroundColor: "#1F1F1F",
+    backgroundColor: THEME.soft,
   },
   smallItemInfo: { padding: 11 },
   smallItemName: {
-    color: "#FFFFFF",
+    color: THEME.text,
     fontWeight: "900",
     fontSize: 13,
   },
   smallItemStore: {
-    color: "#C9C9C9",
+    color: THEME.muted,
     fontWeight: "700",
     fontSize: 11,
     marginTop: 3,
   },
   smallItemPrice: {
-    color: "#22C55E",
+    color: THEME.green,
     fontWeight: "900",
     fontSize: 13,
     marginTop: 6,
@@ -1228,28 +1270,27 @@ const styles = StyleSheet.create({
 
   favoriteStoreCard: {
     width: 130,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     borderRadius: 22,
     marginRight: 14,
     padding: 10,
     borderWidth: 1,
-    borderColor: "#2A2A2A",
-    elevation: 3,
+    borderColor: THEME.border,
   },
   favoriteStoreImage: {
     width: "100%",
     height: 78,
     borderRadius: 17,
-    backgroundColor: "#1F1F1F",
+    backgroundColor: THEME.soft,
   },
   favoriteStoreName: {
-    color: "#FFFFFF",
+    color: THEME.text,
     fontWeight: "900",
     fontSize: 13,
     marginTop: 8,
   },
   favoriteStoreSub: {
-    color: "#C9C9C9",
+    color: THEME.muted,
     fontWeight: "700",
     fontSize: 11,
     marginTop: 3,
@@ -1257,21 +1298,21 @@ const styles = StyleSheet.create({
 
   emptyCard: {
     marginHorizontal: 20,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     borderRadius: 24,
     padding: 26,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#2A2A2A",
+    borderColor: THEME.border,
   },
   emptyTitle: {
-    color: "#FFFFFF",
+    color: THEME.text,
     fontWeight: "900",
     fontSize: 16,
     marginTop: 10,
   },
   emptySub: {
-    color: "#C9C9C9",
+    color: THEME.muted,
     fontWeight: "700",
     fontSize: 13,
     textAlign: "center",
@@ -1285,9 +1326,11 @@ const styles = StyleSheet.create({
     width: 54,
     height: 54,
     borderRadius: 22,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.yellow,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#F4DE7A",
     elevation: 8,
   },
   offerFloatingText: {
@@ -1299,13 +1342,15 @@ const styles = StyleSheet.create({
     bottom: 14,
     left: 16,
     right: 16,
-    backgroundColor: "#111111",
+    backgroundColor: THEME.card,
     borderRadius: 22,
     paddingVertical: 14,
     paddingHorizontal: 15,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    borderWidth: 1,
+    borderColor: THEME.border,
     elevation: 10,
   },
   cartLeft: {
@@ -1316,32 +1361,101 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 16,
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 10,
   },
   cartBannerTitle: {
-    color: "#FFFFFF",
+    color: THEME.text,
     fontWeight: "900",
     fontSize: 15,
   },
   cartBannerSub: {
-    color: "#C9C9C9",
+    color: THEME.muted,
     fontWeight: "800",
     marginTop: 2,
   },
   cartBannerRight: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderRadius: 99,
   },
   cartBannerBtn: {
-    color: "#111111",
+    color: THEME.card,
     fontWeight: "900",
     marginRight: 6,
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(7,17,11,0.56)",
+    justifyContent: "center",
+    padding: 22,
+  },
+  authBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 22,
+    alignItems: "center",
+  },
+  authIcon: {
+    width: 70,
+    height: 70,
+    borderRadius: 25,
+    backgroundColor: THEME.yellow2,
+    borderWidth: 1,
+    borderColor: "#F4DE7A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  authTitle: {
+    color: THEME.text,
+    fontSize: 23,
+    fontWeight: "900",
+  },
+  authMessage: {
+    color: THEME.muted,
+    textAlign: "center",
+    lineHeight: 20,
+    marginTop: 8,
+    fontWeight: "700",
+  },
+  loginBtn: {
+    marginTop: 22,
+    width: "100%",
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: THEME.green,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  loginBtnText: {
+    color: THEME.card,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  browseBtn: {
+    marginTop: 12,
+    width: "100%",
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: THEME.soft,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  browseText: {
+    color: THEME.text,
+    fontWeight: "900",
   },
 });

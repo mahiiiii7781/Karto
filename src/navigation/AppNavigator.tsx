@@ -29,42 +29,23 @@ import RoleSelectionScreen from "@/screens/auth/RoleSelectionScreen";
 
 const Stack = createNativeStackNavigator();
 
-const renderCommonUserScreens = () => (
+const renderBrowseScreens = () => (
+  <>
+    <Stack.Screen name="RestaurantDetail" component={RestaurantDetailScreen} />
+    <Stack.Screen name="MenuItemDetail" component={MenuItemDetailScreen} />
+    <Stack.Screen name="CategoryRestaurants" component={CategoryRestaurantsScreen} />
+    <Stack.Screen name="SearchScreen" component={SearchScreen} />
+  </>
+);
+
+const renderProtectedUserScreens = () => (
   <>
     <Stack.Screen name="Cart" component={CartScreen} />
     <Stack.Screen name="Checkout" component={CheckoutScreen} />
-    <Stack.Screen
-      name="RestaurantDetail"
-      component={RestaurantDetailScreen}
-    />
-    <Stack.Screen
-      name="MenuItemDetail"
-      component={MenuItemDetailScreen}
-    />
-    <Stack.Screen
-      name="CategoryRestaurants"
-      component={CategoryRestaurantsScreen}
-    />
-    <Stack.Screen
-      name="SearchScreen"
-      component={SearchScreen}
-    />
-    <Stack.Screen
-      name="Coupons"
-      component={CouponsScreen}
-    />
-    <Stack.Screen
-      name="Notifications"
-      component={NotificationsScreen}
-    />
-    <Stack.Screen
-      name="OrderDetail"
-      component={OrderDetailScreen}
-    />
-    <Stack.Screen
-      name="HelpSupport"
-      component={HelpSupportScreen}
-    />
+    <Stack.Screen name="Coupons" component={CouponsScreen} />
+    <Stack.Screen name="Notifications" component={NotificationsScreen} />
+    <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
+    <Stack.Screen name="HelpSupport" component={HelpSupportScreen} />
   </>
 );
 
@@ -72,10 +53,8 @@ export default function AppNavigator() {
   const { user } = useAuth();
 
   const [booting, setBooting] = useState(true);
-  const [isFirstLaunch, setIsFirstLaunch] =
-    useState(false);
-  const [permissionPending, setPermissionPending] =
-    useState(false);
+  const [isFirstLaunch, setIsFirstLaunch] = useState(false);
+  const [permissionPending, setPermissionPending] = useState(false);
 
   useEffect(() => {
     checkAppState();
@@ -83,22 +62,11 @@ export default function AppNavigator() {
 
   const checkAppState = async () => {
     try {
-      const hasLaunched =
-        await AsyncStorage.getItem("hasLaunched");
+      const hasLaunched = await AsyncStorage.getItem("hasLaunched");
+      const permissionSetupDone = await AsyncStorage.getItem("permissionSetupDone");
+      const permissionSetupPending = await AsyncStorage.getItem("permissionSetupPending");
 
-      const permissionSetupDone =
-        await AsyncStorage.getItem(
-          "permissionSetupDone"
-        );
-
-      const permissionSetupPending =
-        await AsyncStorage.getItem(
-          "permissionSetupPending"
-        );
-
-      setIsFirstLaunch(
-        hasLaunched !== "true"
-      );
+      setIsFirstLaunch(hasLaunched !== "true");
 
       setPermissionPending(
         hasLaunched === "true" &&
@@ -114,37 +82,24 @@ export default function AppNavigator() {
   };
 
   const handlePermissionDone = async () => {
-    await AsyncStorage.setItem(
-      "permissionSetupDone",
-      "true"
-    );
-
-    await AsyncStorage.removeItem(
-      "permissionSetupPending"
-    );
+    await AsyncStorage.setItem("permissionSetupDone", "true");
+    await AsyncStorage.removeItem("permissionSetupPending");
 
     setPermissionPending(false);
     setIsFirstLaunch(false);
   };
 
-  if (booting) {
-    return <SplashScreen />;
-  }
+  const role = String(user?.role || "CUSTOMER").toUpperCase();
+
+  if (booting) return <SplashScreen />;
 
   return (
-    <Stack.Navigator
-      screenOptions={{
-        headerShown: false,
-      }}
-    >
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
       {isFirstLaunch ? (
-        <Stack.Screen
-          name="Onboarding"
-          component={OnboardingNavigator}
-        />
+        <Stack.Screen name="Onboarding" component={OnboardingNavigator} />
       ) : permissionPending ? (
         <Stack.Screen name="PermissionSetup">
-          {(props) => (
+          {props => (
             <PermissionSetupScreen
               {...props}
               route={{
@@ -158,62 +113,38 @@ export default function AppNavigator() {
           )}
         </Stack.Screen>
       ) : !user ? (
-        <Stack.Screen
-          name="Auth"
-          component={AuthNavigator}
-        />
-      ) : user.role === "ADMIN" ? (
         <>
-          <Stack.Screen
-            name="RoleSelection"
-            component={RoleSelectionScreen}
-          />
-
-          <Stack.Screen
-            name="AdminPanel"
-            component={AdminNavigator}
-          />
-
-          <Stack.Screen
-            name="UserApp"
-            component={TabNavigator}
-          />
-
-          <Stack.Screen
-            name="VendorApp"
-            component={VendorNavigator}
-          />
-
-          <Stack.Screen
-            name="RiderApp"
-            component={RiderNavigator}
-          />
-
-          {renderCommonUserScreens()}
+          <Stack.Screen name="UserApp" component={TabNavigator} />
+          <Stack.Screen name="Auth" component={AuthNavigator} />
+          {renderBrowseScreens()}
         </>
-      ) : user.role === "VENDOR" ? (
+      ) : role === "ADMIN" ? (
         <>
-          <Stack.Screen
-            name="VendorApp"
-            component={VendorNavigator}
-          />
-          {renderCommonUserScreens()}
+          <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
+          <Stack.Screen name="UserApp" component={TabNavigator} />
+          <Stack.Screen name="VendorApp" component={VendorNavigator} />
+          <Stack.Screen name="RiderApp" component={RiderNavigator} />
+          <Stack.Screen name="AdminPanel" component={AdminNavigator} />
+          {renderBrowseScreens()}
+          {renderProtectedUserScreens()}
         </>
-      ) : user.role === "RIDER" ? (
+      ) : role === "VENDOR" ? (
         <>
-          <Stack.Screen
-            name="RiderApp"
-            component={RiderNavigator}
-          />
-          {renderCommonUserScreens()}
+          <Stack.Screen name="VendorApp" component={VendorNavigator} />
+          {renderBrowseScreens()}
+          {renderProtectedUserScreens()}
+        </>
+      ) : role === "RIDER" ? (
+        <>
+          <Stack.Screen name="RiderApp" component={RiderNavigator} />
+          {renderBrowseScreens()}
+          {renderProtectedUserScreens()}
         </>
       ) : (
         <>
-          <Stack.Screen
-            name="UserApp"
-            component={TabNavigator}
-          />
-          {renderCommonUserScreens()}
+          <Stack.Screen name="UserApp" component={TabNavigator} />
+          {renderBrowseScreens()}
+          {renderProtectedUserScreens()}
         </>
       )}
     </Stack.Navigator>

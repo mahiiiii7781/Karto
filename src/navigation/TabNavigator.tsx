@@ -2,7 +2,8 @@ import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import Icon from "react-native-vector-icons/Ionicons";
-import Colors from "@/utils/constants/colors";
+
+import { useAuth } from "@/context/AuthContext";
 
 import HomeScreen from "../screens/main/home/HomeScreen";
 import RestaurantDetailScreen from "../screens/main/restaurant/RestaurantDetailScreen";
@@ -20,6 +21,13 @@ import FavoritesScreen from "../screens/main/profile/FavoritesScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+
+const COLORS = {
+  bg: "#070A08",
+  green: "#22C55E",
+  muted: "#8A94A6",
+  border: "#1E2A22",
+};
 
 const HomeStackNavigator = () => (
   <Stack.Navigator screenOptions={{ headerShown: false }}>
@@ -39,57 +47,63 @@ const ProfileStackNavigator = () => (
   </Stack.Navigator>
 );
 
-const TabNavigator = () => (
-  <Tab.Navigator
-    initialRouteName="Home"
-    screenOptions={({ route }) => ({
-      headerShown: false,
-      tabBarHideOnKeyboard: true,
-      tabBarActiveTintColor: Colors.primary,
-      tabBarInactiveTintColor: Colors.secondary,
-      tabBarStyle: {
-        backgroundColor: Colors.background,
-        borderTopWidth: 1,
-        borderTopColor: "#E5E7EB",
-        paddingBottom: 8,
-        paddingTop: 8,
-        height: 62,
-      },
-      tabBarLabelStyle: {
-        fontSize: 12,
-        fontWeight: "700",
-      },
-      tabBarIcon: ({ focused, color, size }) => {
-        let iconName = "home-outline";
+export default function TabNavigator() {
+  const { user } = useAuth();
 
-        switch (route.name) {
-          case "Home":
-            iconName = focused ? "home" : "home-outline";
-            break;
-          case "Orders":
-            iconName = focused ? "receipt" : "receipt-outline";
-            break;
-          case "Wallet":
-            iconName = focused ? "wallet" : "wallet-outline";
-            break;
-          case "Messages":
-            iconName = focused ? "chatbubbles" : "chatbubbles-outline";
-            break;
-          case "Profile":
-            iconName = focused ? "person" : "person-outline";
-            break;
-        }
+  if (!user?.id) {
+    return <HomeStackNavigator />;
+  }
 
-        return <Icon name={iconName} size={size} color={color} />;
-      },
-    })}
-  >
-    <Tab.Screen name="Home" component={HomeStackNavigator} />
-    <Tab.Screen name="Orders" component={OrdersScreen} />
-    <Tab.Screen name="Wallet" component={WalletScreen} />
-    <Tab.Screen name="Messages" component={MessagesScreen} />
-    <Tab.Screen name="Profile" component={ProfileStackNavigator} />
-  </Tab.Navigator>
-);
+  return (
+    <Tab.Navigator
+      initialRouteName="Home"
+      screenOptions={({ route }) => ({
+        headerShown: false,
+        tabBarHideOnKeyboard: true,
+        tabBarActiveTintColor: COLORS.green,
+        tabBarInactiveTintColor: COLORS.muted,
+        tabBarStyle: {
+          backgroundColor: COLORS.bg,
+          borderTopWidth: 1,
+          borderTopColor: COLORS.border,
+          paddingBottom: 8,
+          paddingTop: 8,
+          height: 64,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: "900",
+        },
+        tabBarIcon: ({ focused, color, size }) => {
+          let iconName = "home-outline";
 
-export default TabNavigator;
+          switch (route.name) {
+            case "Home":
+              iconName = focused ? "home" : "home-outline";
+              break;
+            case "Orders":
+              iconName = focused ? "receipt" : "receipt-outline";
+              break;
+            case "Wallet":
+              iconName = focused ? "wallet" : "wallet-outline";
+              break;
+            case "Messages":
+              iconName = focused ? "chatbubbles" : "chatbubbles-outline";
+              break;
+            case "Profile":
+              iconName = focused ? "person" : "person-outline";
+              break;
+          }
+
+          return <Icon name={iconName} size={size} color={color} />;
+        },
+      })}
+    >
+      <Tab.Screen name="Home" component={HomeStackNavigator} />
+      <Tab.Screen name="Orders" component={OrdersScreen} />
+      <Tab.Screen name="Wallet" component={WalletScreen} />
+      <Tab.Screen name="Messages" component={MessagesScreen} />
+      <Tab.Screen name="Profile" component={ProfileStackNavigator} />
+    </Tab.Navigator>
+  );
+}

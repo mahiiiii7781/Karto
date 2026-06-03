@@ -5,128 +5,159 @@ import {
   TouchableOpacity,
   StyleSheet,
   Dimensions,
+  StatusBar,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 
 const { width } = Dimensions.get("window");
 
+const COLORS = {
+  bg: "#070A08",
+  card: "#101713",
+  cardDark: "#0B120E",
+  yellow: "#FACC15",
+  green: "#22C55E",
+  text: "#F8FAFC",
+  muted: "#8A94A6",
+  border: "#1E2A22",
+};
+
 export default function RoleSelectionScreen({ navigation }: any) {
+  const openPanel = (routeName: string) => {
+    navigation.replace(routeName);
+  };
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Welcome to Karto</Text>
-      <Text style={styles.subtitle}>Admin access panel</Text>
+      <StatusBar backgroundColor={COLORS.bg} barStyle="light-content" />
 
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => navigation.replace("UserApp")}
-      >
-        <View style={styles.iconWrapper}>
-          <Icon name="person-outline" size={36} color="#22C55E" />
-        </View>
-        <View style={styles.textWrapper}>
-          <Text style={styles.cardTitle}>User App</Text>
-          <Text style={styles.cardSub}>Open customer shopping experience</Text>
-        </View>
-      </TouchableOpacity>
+      <View style={styles.header}>
+        <Text style={styles.brand}>Karto</Text>
+        <Text style={styles.title}>Admin Control Hub</Text>
+        <Text style={styles.subtitle}>
+          Choose which panel you want to open
+        </Text>
+      </View>
 
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => navigation.replace("VendorApp")}
-      >
-        <View style={styles.iconWrapper}>
-          <Icon name="storefront-outline" size={36} color="#22C55E" />
-        </View>
-        <View style={styles.textWrapper}>
-          <Text style={styles.cardTitle}>Vendor App</Text>
-          <Text style={styles.cardSub}>Manage stores, menu and orders</Text>
-        </View>
-      </TouchableOpacity>
+      <PanelCard
+        icon="person-outline"
+        title="User App"
+        subtitle="Open customer shopping experience"
+        onPress={() => openPanel("UserApp")}
+      />
 
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => navigation.replace("RiderApp")}
-      >
-        <View style={styles.iconWrapper}>
-          <Icon name="bicycle-outline" size={36} color="#22C55E" />
-        </View>
-        <View style={styles.textWrapper}>
-          <Text style={styles.cardTitle}>Rider App</Text>
-          <Text style={styles.cardSub}>Manage deliveries and earnings</Text>
-        </View>
-      </TouchableOpacity>
+      <PanelCard
+        icon="storefront-outline"
+        title="Vendor App"
+        subtitle="Manage stores, menu and orders"
+        onPress={() => openPanel("VendorApp")}
+      />
 
-      <TouchableOpacity
-        style={[styles.card, styles.adminCard]}
-        onPress={() => navigation.replace("AdminPanel")}
-      >
-        <View style={styles.iconWrapper}>
-          <Icon name="shield-checkmark-outline" size={36} color="#22C55E" />
-        </View>
-        <View style={styles.textWrapper}>
-          <Text style={styles.cardTitle}>Admin Panel</Text>
-          <Text style={styles.cardSub}>Create vendors, riders and manage roles</Text>
-        </View>
-      </TouchableOpacity>
+      <PanelCard
+        icon="bicycle-outline"
+        title="Rider App"
+        subtitle="Manage deliveries and earnings"
+        onPress={() => openPanel("RiderApp")}
+      />
+
+      <PanelCard
+        icon="shield-checkmark-outline"
+        title="Admin Panel"
+        subtitle="Create vendors, riders and manage roles"
+        onPress={() => openPanel("AdminPanel")}
+        admin
+      />
     </View>
+  );
+}
+
+function PanelCard({ icon, title, subtitle, onPress, admin }: any) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      style={[styles.card, admin && styles.adminCard]}
+      onPress={onPress}
+    >
+      <View style={styles.iconWrapper}>
+        <Icon name={icon} size={32} color={COLORS.green} />
+      </View>
+
+      <View style={styles.textWrapper}>
+        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={styles.cardSub}>{subtitle}</Text>
+      </View>
+
+      <Icon name="chevron-forward" size={22} color={COLORS.yellow} />
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#0B0F0D",
+    backgroundColor: COLORS.bg,
     alignItems: "center",
     justifyContent: "center",
     padding: 20,
+  },
+  header: {
+    width: width - 40,
+    marginBottom: 24,
+  },
+  brand: {
+    color: COLORS.yellow,
+    fontSize: 18,
+    fontWeight: "900",
+    letterSpacing: 1,
+    marginBottom: 8,
   },
   title: {
     fontSize: 30,
     fontWeight: "900",
-    color: "#22C55E",
-    marginBottom: 4,
+    color: COLORS.text,
   },
   subtitle: {
-    fontSize: 15,
-    color: "#9CA3AF",
-    marginBottom: 24,
+    fontSize: 14,
+    color: COLORS.muted,
+    marginTop: 8,
   },
   card: {
     flexDirection: "row",
-    backgroundColor: "#111827",
-    borderRadius: 18,
+    backgroundColor: COLORS.card,
+    borderRadius: 20,
     width: width - 40,
-    padding: 20,
-    marginBottom: 16,
+    padding: 18,
+    marginBottom: 14,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#1F2937",
-    elevation: 4,
+    borderColor: COLORS.border,
+    elevation: 5,
   },
   adminCard: {
-    borderColor: "#173923",
-    backgroundColor: "#0A120E",
+    backgroundColor: COLORS.cardDark,
+    borderColor: COLORS.green,
   },
   iconWrapper: {
-    width: 60,
-    height: 60,
-    borderRadius: 16,
-    backgroundColor: "#0A120E",
+    width: 58,
+    height: 58,
+    borderRadius: 18,
+    backgroundColor: "#07100B",
     borderWidth: 1,
     borderColor: "#173923",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 16,
+    marginRight: 14,
   },
   textWrapper: {
     flex: 1,
   },
   cardTitle: {
-    color: "#22C55E",
-    fontSize: 18,
+    color: COLORS.text,
+    fontSize: 17,
     fontWeight: "900",
   },
   cardSub: {
-    color: "#9CA3AF",
+    color: COLORS.muted,
     fontSize: 13,
     marginTop: 4,
     lineHeight: 18,
