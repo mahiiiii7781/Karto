@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -9,17 +9,13 @@ import {
   ActivityIndicator,
   StatusBar,
   Platform,
+  RefreshControl,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useRoute, useNavigation } from "@react-navigation/native";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Toast from "react-native-toast-message";
 
 import { restaurantService, Restaurant } from "@/services/api/restaurantService";
-
-type RootStackParamList = {
-  RestaurantDetail: { restaurantId: string };
-};
 
 const THEME = {
   bg: "#070A08",
@@ -27,6 +23,8 @@ const THEME = {
   card2: "#151F19",
   green: "#22C55E",
   yellow: "#FACC15",
+  blue: "#38BDF8",
+  orange: "#FB923C",
   text: "#F8FAFC",
   muted: "#8A94A6",
   border: "#1E2A22",
@@ -34,28 +32,52 @@ const THEME = {
   danger: "#EF4444",
 };
 
-const fallbackImage =
-  "https://images.unsplash.com/photo-1504674900247-0877df9cc836";
+const normalizeList = (res: any): Restaurant[] => {
+  const value =
+    res?.data?.data ||
+    res?.data?.restaurants ||
+    res?.data?.stores ||
+    res?.data ||
+    [];
 
-const img = (item: any) =>
-  item?.image_url || item?.imageUrl || item?.image || fallbackImage;
+  return Array.isArray(value) ? value : [];
+};
 
-const storeName = (item: any) =>
-  item?.restaurant_name || item?.name || item?.title || "Karto Store";
+const getImage = (item: any) =>
+  item?.image_url ||
+  item?.imageUrl ||
+  item?.image ||
+  item?.coverImage ||
+  item?.cover_image ||
+  "";
+
+const getStoreName = (item: any) =>
+  item?.restaurant_name || item?.restaurantName || item?.name || item?.title || "Karto Store";
+
+const getStoreCuisine = (item: any) =>
+  item?.cuisine || item?.category?.name || item?.category_name || "Local store";
+
+const money = (value: any) => `₹${Number(value || 0).toFixed(0)}`;
 
 export default function CategoryRestaurantsScreen() {
   const route = useRoute<any>();
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<any>();
 
   const categoryId = route.params?.categoryId;
+  const categoryName =
+    route.params?.categoryName ||
+    route.params?.name ||
+    route.params?.title ||
+    "Stores";
 
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const openStores = useMemo(() => {
-    return restaurants.filter((item: any) => item.is_open !== false && item.isOpen !== false);
-  }, [restaurants]);
+  const openStores = useMemo(
+    () => restaurants.filter((item: any) => item.is_open !== false && item.isOpen !== false),
+    [restaurants]
+  );
 
   const showToast = (
     type: "success" | "error" | "info",
@@ -71,36 +93,42 @@ export default function CategoryRestaurantsScreen() {
     });
   };
 
-  useEffect(() => {
-    if (!categoryId) {
-      setLoading(false);
-      showToast("error", "Category unavailable", "Please go back and try again.");
-      return;
-    }
-
-    loadRestaurants();
-  }, [categoryId]);
-
-  const loadRestaurants = async () => {
-    try {
-      setLoading(true);
-
-      const res = await restaurantService.getRestaurantsByCategory(categoryId);
-
-      if (res.error) {
+  const loadRestaurants = useCallback(
+    async (isRefresh = false) => {
+      if (!categoryId) {
         setRestaurants([]);
-        showToast("error", "Unable to load stores", "Please try again.");
+        setLoading(false);
+        setRefreshing(false);
+        showToast("error", "Category unavailable", "Please go back and try again.");
         return;
       }
 
-      setRestaurants(Array.isArray(res.data) ? res.data : []);
-    } catch {
-      setRestaurants([]);
-      showToast("error", "Something went wrong", "Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
+      isRefresh ? setRefreshing(true) : setLoading(true);
+
+      try {
+        const res = await restaurantService.getRestaurantsByCategory(categoryId);
+
+        if (res?.error) {
+          setRestaurants([]);
+          showToast("error", "Unable to load stores", res.error?.message || "Please try again.");
+          return;
+        }
+
+        setRestaurants(normalizeList(res));
+      } catch {
+        setRestaurants([]);
+        showToast("error", "Something went wrong", "Please try again.");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [categoryId]
+  );
+
+  useEffect(() => {
+    loadRestaurants(false);
+  }, [loadRestaurants]);
 
   const openRestaurant = (restaurantId?: string) => {
     if (!restaurantId) {
@@ -111,13 +139,27 @@ export default function CategoryRestaurantsScreen() {
     navigation.navigate("RestaurantDetail", { restaurantId });
   };
 
+  const renderStoreImage = (item: any) => {
+    const imageUri = getImage(item);
+
+    if (imageUri) {
+      return <Image source={{ uri: imageUri }} style={styles.restaurantImage} />;
+    }
+
+    return (
+      <View style={[styles.restaurantImage, styles.imageFallback]}>
+        <Icon name="storefront-outline" size={36} color={THEME.yellow} />
+      </View>
+    );
+  };
+
   const renderRestaurant = ({ item }: { item: any }) => {
     const isOpen = item.is_open !== false && item.isOpen !== false;
     const rating = Number(item.rating || 4.2);
     const deliveryFee = Number(item.delivery_fee ?? item.deliveryFee ?? 0);
     const deliveryTime = item.delivery_time || item.deliveryTime || "25-35 min";
     const minOrder = Number(item.minimum_order ?? item.minimumOrder ?? 0);
-    const totalReviews = item.total_reviews || item.totalReviews || 0;
+    const totalReviews = Number(item.total_reviews ?? item.totalReviews ?? 0);
 
     return (
       <TouchableOpacity
@@ -126,14 +168,14 @@ export default function CategoryRestaurantsScreen() {
         onPress={() => openRestaurant(item.id)}
       >
         <View>
-          <Image source={{ uri: img(item) }} style={styles.restaurantImage} />
+          {renderStoreImage(item)}
 
           <View style={styles.imageOverlay} />
 
           <View style={styles.imageBadges}>
             <View style={[styles.statusBadge, !isOpen && styles.closedBadge]}>
-              <View style={[styles.statusDot, !isOpen && { backgroundColor: THEME.danger }]} />
-              <Text style={[styles.statusText, !isOpen && { color: THEME.danger }]}>
+              <View style={[styles.statusDot, !isOpen && styles.closedDot]} />
+              <Text style={[styles.statusText, !isOpen && styles.closedText]}>
                 {isOpen ? "OPEN NOW" : "CLOSED"}
               </Text>
             </View>
@@ -148,7 +190,12 @@ export default function CategoryRestaurantsScreen() {
                 <Icon name="bicycle" size={12} color={THEME.black} />
                 <Text style={styles.topBadgeText}>FREE DELIVERY</Text>
               </View>
-            ) : null}
+            ) : (
+              <View style={styles.blueBadge}>
+                <Icon name="flash" size={12} color={THEME.black} />
+                <Text style={styles.blueBadgeText}>FAST</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -156,11 +203,11 @@ export default function CategoryRestaurantsScreen() {
           <View style={styles.cardHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.restaurantName} numberOfLines={1}>
-                {storeName(item)}
+                {getStoreName(item)}
               </Text>
 
               <Text style={styles.restaurantSub} numberOfLines={1}>
-                Fresh picks from your nearby trusted store
+                {getStoreCuisine(item)}
               </Text>
             </View>
 
@@ -173,7 +220,7 @@ export default function CategoryRestaurantsScreen() {
             <View style={styles.ratingPill}>
               <Icon name="star" size={13} color={THEME.black} />
               <Text style={styles.ratingText}>
-                {rating.toFixed(1)} ({totalReviews})
+                {rating.toFixed(1)}{totalReviews > 0 ? ` (${totalReviews})` : ""}
               </Text>
             </View>
 
@@ -185,12 +232,14 @@ export default function CategoryRestaurantsScreen() {
 
           <View style={styles.bottomRow}>
             <Text style={styles.deliveryFee}>
-              Delivery {deliveryFee === 0 ? "Free" : `₹${deliveryFee}`}
+              Delivery {deliveryFee === 0 ? "Free" : money(deliveryFee)}
             </Text>
 
             <View style={styles.dot} />
 
-            <Text style={styles.deliveryFee}>Min ₹{minOrder}</Text>
+            <Text style={styles.deliveryFee}>
+              {minOrder > 0 ? `Min ${money(minOrder)}` : "No minimum"}
+            </Text>
           </View>
         </View>
       </TouchableOpacity>
@@ -220,14 +269,24 @@ export default function CategoryRestaurantsScreen() {
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
-          <Text style={styles.title}>Stores Near You</Text>
+          <Text style={styles.title} numberOfLines={1}>
+            {categoryName}
+          </Text>
           <Text style={styles.subtitle}>
             {restaurants.length} stores • {openStores.length} open now
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.refreshBtn} onPress={loadRestaurants}>
-          <Icon name="refresh" size={21} color={THEME.black} />
+        <TouchableOpacity
+          style={[styles.refreshBtn, refreshing && styles.disabledBtn]}
+          onPress={() => loadRestaurants(true)}
+          disabled={refreshing}
+        >
+          {refreshing ? (
+            <ActivityIndicator size="small" color={THEME.black} />
+          ) : (
+            <Icon name="refresh" size={21} color={THEME.black} />
+          )}
         </TouchableOpacity>
       </View>
 
@@ -236,7 +295,7 @@ export default function CategoryRestaurantsScreen() {
           <Text style={styles.heroTag}>CURATED FOR YOU</Text>
           <Text style={styles.heroTitle}>Premium local stores</Text>
           <Text style={styles.heroSub}>
-            Explore trusted stores with quick delivery, fresh products and safe packing.
+            Trusted stores, fresh products and quick delivery around you.
           </Text>
         </View>
 
@@ -245,30 +304,37 @@ export default function CategoryRestaurantsScreen() {
         </View>
       </View>
 
-      {restaurants.length === 0 ? (
-        <View style={styles.emptyBox}>
-          <View style={styles.emptyIcon}>
-            <Icon name="storefront-outline" size={44} color={THEME.yellow} />
-          </View>
-          <Text style={styles.emptyTitle}>No stores available</Text>
-          <Text style={styles.emptyText}>
-            We couldn't find any stores in this category. Please try another category.
-          </Text>
+      <FlatList
+        data={restaurants}
+        keyExtractor={(item: any, index) => item?.id?.toString() || String(index)}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={restaurants.length === 0 ? styles.emptyList : styles.listContent}
+        renderItem={renderRestaurant}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadRestaurants(true)}
+            tintColor={THEME.green}
+            colors={[THEME.green]}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyBox}>
+            <View style={styles.emptyIcon}>
+              <Icon name="storefront-outline" size={44} color={THEME.yellow} />
+            </View>
+            <Text style={styles.emptyTitle}>No stores available</Text>
+            <Text style={styles.emptyText}>
+              We could not find stores in this category right now.
+            </Text>
 
-          <TouchableOpacity style={styles.retryBtn} onPress={loadRestaurants}>
-            <Text style={styles.retryText}>Try Again</Text>
-            <Icon name="refresh" size={17} color={THEME.black} />
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={restaurants}
-          keyExtractor={(item: any, index) => item?.id || String(index)}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContent}
-          renderItem={renderRestaurant}
-        />
-      )}
+            <TouchableOpacity style={styles.retryBtn} onPress={() => loadRestaurants(true)}>
+              <Text style={styles.retryText}>Try Again</Text>
+              <Icon name="refresh" size={17} color={THEME.black} />
+            </TouchableOpacity>
+          </View>
+        }
+      />
     </View>
   );
 }
@@ -311,6 +377,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 20,
     marginBottom: 18,
+    gap: 12,
   },
   backBtn: {
     width: 44,
@@ -321,7 +388,6 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
   },
   refreshBtn: {
     width: 44,
@@ -330,10 +396,12 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 12,
+  },
+  disabledBtn: {
+    opacity: 0.65,
   },
   title: {
-    fontSize: 23,
+    fontSize: 24,
     fontWeight: "900",
     color: THEME.text,
   },
@@ -352,7 +420,6 @@ const styles = StyleSheet.create({
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 5,
   },
   heroTag: {
     color: THEME.yellow,
@@ -371,6 +438,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 6,
+    fontWeight: "700",
   },
   heroIcon: {
     width: 62,
@@ -384,6 +452,10 @@ const styles = StyleSheet.create({
   listContent: {
     paddingBottom: 34,
   },
+  emptyList: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
   restaurantCard: {
     backgroundColor: THEME.card,
     borderRadius: 26,
@@ -392,12 +464,15 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: 1,
     borderColor: THEME.border,
-    elevation: 5,
   },
   restaurantImage: {
     width: "100%",
     height: 170,
     backgroundColor: THEME.card2,
+  },
+  imageFallback: {
+    justifyContent: "center",
+    alignItems: "center",
   },
   imageOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -432,10 +507,16 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.green,
     marginRight: 6,
   },
+  closedDot: {
+    backgroundColor: THEME.danger,
+  },
   statusText: {
     color: THEME.green,
     fontSize: 10,
     fontWeight: "900",
+  },
+  closedText: {
+    color: THEME.danger,
   },
   topBadge: {
     backgroundColor: THEME.yellow,
@@ -446,6 +527,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   topBadgeText: {
+    color: THEME.black,
+    fontSize: 10,
+    fontWeight: "900",
+    marginLeft: 4,
+  },
+  blueBadge: {
+    backgroundColor: THEME.blue,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 99,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  blueBadgeText: {
     color: THEME.black,
     fontSize: 10,
     fontWeight: "900",
@@ -532,7 +627,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
   },
   emptyBox: {
-    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 30,

@@ -43,9 +43,42 @@ const ACTIVE_STATUSES = [
   "OUT_FOR_DELIVERY",
 ];
 
-const HISTORY_STATUSES = ["DELIVERED", "CANCELLED"];
+const HISTORY_STATUSES = ["DELIVERED", "CANCELLED", "REJECTED", "FAILED"];
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
+
+const normalizeStatus = (statusRaw: any) => {
+  const status = String(statusRaw || "PLACED").toUpperCase();
+
+  switch (status) {
+    case "ACCEPTED":
+    case "VENDOR_ACCEPTED":
+      return "ACCEPTED_BY_VENDOR";
+    case "READY":
+      return "READY_FOR_PICKUP";
+    case "ASSIGNED":
+    case "RIDER_ASSIGNED":
+      return "ASSIGNED_TO_RIDER";
+    case "PICKUP_DONE":
+      return "PICKED_UP";
+    case "ON_THE_WAY":
+      return "OUT_FOR_DELIVERY";
+    default:
+      return status;
+  }
+};
+
+const normalizeOrders = (res: any) => {
+  const list =
+    res?.data?.data?.orders ||
+    res?.data?.orders ||
+    res?.data?.data ||
+    res?.data ||
+    res ||
+    [];
+
+  return Array.isArray(list) ? list : [];
+};
 
 export default function OrdersScreen() {
   const navigation = useNavigation<any>();
@@ -57,6 +90,8 @@ export default function OrdersScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [cancelTarget, setCancelTarget] = useState<Order | null>(null);
+
+  const isGuest = !user?.id;
 
   const showToast = (
     type: "success" | "error" | "info",
@@ -73,79 +108,71 @@ export default function OrdersScreen() {
   };
 
   const requireAuth = (message = "Please sign in to continue.") => {
-    if (user?.id) return true;
+    if (!isGuest) return true;
 
     showToast("info", "Login required", message);
     navigation.navigate("Auth");
     return false;
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!requireAuth("Please sign in to view your orders.")) {
+  const loadOrders = useCallback(
+    async (isRefresh = false) => {
+      if (isGuest) {
+        setOrders([]);
         setLoading(false);
+        setRefreshing(false);
         return;
       }
 
-      loadOrders(false);
-    }, [user?.id])
+      isRefresh ? setRefreshing(true) : setLoading(true);
+
+      try {
+        const res = await orderService.getMyOrders();
+        const { error } = res || {};
+
+        if (error) {
+          setOrders([]);
+          showToast(
+            "error",
+            "Unable to load orders",
+            error?.message || "Please try again."
+          );
+          return;
+        }
+
+        setOrders(normalizeOrders(res));
+      } catch {
+        setOrders([]);
+        showToast("error", "Unable to load orders", "Please try again.");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [isGuest]
   );
 
-  const loadOrders = async (isRefresh = false) => {
-    if (!user?.id) {
-      setOrders([]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-
-    isRefresh ? setRefreshing(true) : setLoading(true);
-
-    try {
-      const { data, error } = await orderService.getMyOrders();
-
-      if (error) {
-        setOrders([]);
-        showToast(
-          "error",
-          "Unable to load orders",
-          error?.message || "Please try again."
-        );
-        return;
-      }
-
-      setOrders(Array.isArray(data) ? data : []);
-    } catch {
-      setOrders([]);
-      showToast("error", "Unable to load orders", "Please try again.");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+  useFocusEffect(
+    useCallback(() => {
+      loadOrders(false);
+    }, [loadOrders])
+  );
 
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
-      const status = String(order.status || "PLACED").toUpperCase();
+      const status = normalizeStatus(order.status);
 
-      if (activeTab === "ACTIVE") {
-        return ACTIVE_STATUSES.includes(status);
-      }
-
+      if (activeTab === "ACTIVE") return ACTIVE_STATUSES.includes(status);
       return HISTORY_STATUSES.includes(status);
     });
   }, [orders, activeTab]);
 
   const activeCount = useMemo(() => {
-    return orders.filter(order =>
-      ACTIVE_STATUSES.includes(String(order.status || "PLACED").toUpperCase())
-    ).length;
+    return orders.filter(order => ACTIVE_STATUSES.includes(normalizeStatus(order.status))).length;
   }, [orders]);
 
   const historyCount = useMemo(() => {
-    return orders.filter(order =>
-      HISTORY_STATUSES.includes(String(order.status || "").toUpperCase())
-    ).length;
+    return orders.filter(order => HISTORY_STATUSES.includes(normalizeStatus(order.status))).length;
   }, [orders]);
 
   const getOrderNumber = (order: Order) =>
@@ -163,8 +190,7 @@ export default function OrdersScreen() {
     });
   };
 
-  const getAmount = (order: Order) =>
-    order.totalAmount ?? order.total_amount ?? 0;
+  const getAmount = (order: Order) => order.totalAmount ?? order.total_amount ?? 0;
 
   const getRestaurantName = (order: any) =>
     order.restaurant?.name ||
@@ -174,15 +200,15 @@ export default function OrdersScreen() {
     order.vendor?.name ||
     "Karto Store";
 
-  const getItemsCount = (order: Order) => {
-    const items = order.items || order.orderItems || [];
+  const getItemsCount = (order: any) => {
+    const items = order.items || order.orderItems || order.order_items || [];
     return Array.isArray(items)
       ? items.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
       : 0;
   };
 
   const getStatusMeta = (statusRaw: string) => {
-    const status = String(statusRaw || "PLACED").toUpperCase();
+    const status = normalizeStatus(statusRaw);
 
     switch (status) {
       case "PLACED":
@@ -193,7 +219,6 @@ export default function OrdersScreen() {
           color: THEME.yellow,
           message: "Your order has been placed successfully.",
         };
-
       case "ACCEPTED_BY_VENDOR":
         return {
           label: "Accepted by Store",
@@ -202,7 +227,6 @@ export default function OrdersScreen() {
           color: THEME.green,
           message: "The store has accepted your order.",
         };
-
       case "PREPARING":
         return {
           label: "Preparing",
@@ -211,7 +235,6 @@ export default function OrdersScreen() {
           color: THEME.yellow,
           message: "Your order is being prepared.",
         };
-
       case "READY_FOR_PICKUP":
         return {
           label: "Ready for Pickup",
@@ -220,7 +243,6 @@ export default function OrdersScreen() {
           color: THEME.green,
           message: "Your order is ready for rider pickup.",
         };
-
       case "ASSIGNED_TO_RIDER":
         return {
           label: "Rider Assigned",
@@ -229,7 +251,6 @@ export default function OrdersScreen() {
           color: THEME.green,
           message: "A delivery partner has been assigned.",
         };
-
       case "PICKED_UP":
         return {
           label: "Picked Up",
@@ -238,7 +259,6 @@ export default function OrdersScreen() {
           color: THEME.green,
           message: "Your order has been picked up.",
         };
-
       case "OUT_FOR_DELIVERY":
         return {
           label: "Out for Delivery",
@@ -247,7 +267,6 @@ export default function OrdersScreen() {
           color: THEME.green,
           message: "Your order is on the way.",
         };
-
       case "DELIVERED":
         return {
           label: "Delivered",
@@ -256,7 +275,6 @@ export default function OrdersScreen() {
           color: THEME.green,
           message: "Order completed successfully.",
         };
-
       case "CANCELLED":
         return {
           label: "Cancelled",
@@ -265,7 +283,6 @@ export default function OrdersScreen() {
           color: THEME.danger,
           message: "This order has been cancelled.",
         };
-
       default:
         return {
           label: status.replaceAll("_", " "),
@@ -278,7 +295,7 @@ export default function OrdersScreen() {
   };
 
   const canCancel = (order: Order) => {
-    const status = String(order.status || "").toUpperCase();
+    const status = normalizeStatus(order.status);
     return ["PLACED", "ACCEPTED_BY_VENDOR"].includes(status);
   };
 
@@ -309,12 +326,7 @@ export default function OrdersScreen() {
 
       setOrders(prev =>
         prev.map(order =>
-          order.id === cancelTarget.id
-            ? {
-                ...order,
-                status: "CANCELLED",
-              }
-            : order
+          order.id === cancelTarget.id ? { ...order, status: "CANCELLED" } : order
         )
       );
 
@@ -334,6 +346,10 @@ export default function OrdersScreen() {
       orderId: order.id,
       order,
     });
+  };
+
+  const goExplore = () => {
+    navigation.navigate("UserApp", { screen: "Home" });
   };
 
   const renderOrder = ({ item }: { item: Order }) => {
@@ -356,11 +372,9 @@ export default function OrdersScreen() {
             <Text style={styles.date}>{getDate(item)}</Text>
           </View>
 
-          <View style={[styles.statusPill, { borderColor: meta.color }]}>
+          <View style={[styles.statusPill, { borderColor: meta.color }]}> 
             <Icon name={meta.icon as any} size={13} color={meta.color} />
-            <Text style={[styles.statusText, { color: meta.color }]}>
-              {meta.short}
-            </Text>
+            <Text style={[styles.statusText, { color: meta.color }]}> {meta.short} </Text>
           </View>
         </View>
 
@@ -403,9 +417,7 @@ export default function OrdersScreen() {
 
           <View style={styles.metaBox}>
             <Text style={styles.metaLabel}>Status</Text>
-            <Text style={[styles.metaValue, { color: meta.color }]}>
-              {meta.short}
-            </Text>
+            <Text style={[styles.metaValue, { color: meta.color }]}>{meta.short}</Text>
           </View>
         </View>
 
@@ -421,6 +433,7 @@ export default function OrdersScreen() {
                 disabled={isCancelling}
                 style={styles.cancelBtn}
                 onPress={() => confirmCancelOrder(item)}
+                activeOpacity={0.85}
               >
                 {isCancelling ? (
                   <ActivityIndicator size="small" color={THEME.danger} />
@@ -433,10 +446,9 @@ export default function OrdersScreen() {
             <TouchableOpacity
               style={styles.trackBtn}
               onPress={() => goToDetails(item)}
+              activeOpacity={0.85}
             >
-              <Text style={styles.trackText}>
-                {activeTab === "ACTIVE" ? "Track" : "Details"}
-              </Text>
+              <Text style={styles.trackText}>{activeTab === "ACTIVE" ? "Track" : "Details"}</Text>
               <Icon name="arrow-forward" size={16} color={THEME.black} />
             </TouchableOpacity>
           </View>
@@ -466,7 +478,7 @@ export default function OrdersScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>My Orders</Text>
           <Text style={styles.subtitle}>
-            Track active orders and review your order history
+            {isGuest ? "Login to track orders" : "Track active orders and order history"}
           </Text>
         </View>
 
@@ -476,6 +488,7 @@ export default function OrdersScreen() {
             if (!requireAuth("Please sign in to view your orders.")) return;
             loadOrders(true);
           }}
+          activeOpacity={0.85}
         >
           <Icon name="refresh" size={21} color={THEME.black} />
         </TouchableOpacity>
@@ -485,13 +498,13 @@ export default function OrdersScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.heroTag}>KARTO ORDER TRACKING</Text>
           <Text style={styles.heroTitle}>
-            {activeCount > 0
+            {isGuest
+              ? "Login to view orders"
+              : activeCount > 0
               ? `${activeCount} active order${activeCount > 1 ? "s" : ""}`
               : "No active orders"}
           </Text>
-          <Text style={styles.heroSub}>
-            Live updates from store acceptance to delivery.
-          </Text>
+          <Text style={styles.heroSub}>Live updates from store acceptance to delivery.</Text>
         </View>
 
         <View style={styles.heroIcon}>
@@ -503,13 +516,9 @@ export default function OrdersScreen() {
         <TouchableOpacity
           style={[styles.tabBtn, activeTab === "ACTIVE" && styles.tabBtnActive]}
           onPress={() => setActiveTab("ACTIVE")}
+          activeOpacity={0.85}
         >
-          <Text
-            style={[
-              styles.tabText,
-              activeTab === "ACTIVE" && styles.tabTextActive,
-            ]}
-          >
+          <Text style={[styles.tabText, activeTab === "ACTIVE" && styles.tabTextActive]}>
             Active
           </Text>
           <View style={styles.countBadge}>
@@ -520,13 +529,9 @@ export default function OrdersScreen() {
         <TouchableOpacity
           style={[styles.tabBtn, activeTab === "HISTORY" && styles.tabBtnActive]}
           onPress={() => setActiveTab("HISTORY")}
+          activeOpacity={0.85}
         >
-          <Text
-            style={[
-              styles.tabText,
-              activeTab === "HISTORY" && styles.tabTextActive,
-            ]}
-          >
+          <Text style={[styles.tabText, activeTab === "HISTORY" && styles.tabTextActive]}>
             History
           </Text>
           <View style={styles.countBadge}>
@@ -537,7 +542,7 @@ export default function OrdersScreen() {
 
       <FlatList
         data={filteredOrders}
-        keyExtractor={item => item.id}
+        keyExtractor={(item, index) => item?.id || String(index)}
         renderItem={renderOrder}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -551,42 +556,41 @@ export default function OrdersScreen() {
             colors={[THEME.green]}
           />
         }
-        contentContainerStyle={
-          filteredOrders.length === 0 ? styles.emptyList : styles.list
-        }
+        contentContainerStyle={filteredOrders.length === 0 ? styles.emptyList : styles.list}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <View style={styles.emptyIcon}>
               <Icon
-                name={
-                  activeTab === "ACTIVE"
-                    ? "receipt-outline"
-                    : "archive-outline"
-                }
+                name={isGuest ? "person-circle-outline" : activeTab === "ACTIVE" ? "receipt-outline" : "archive-outline"}
                 size={54}
                 color={THEME.yellow}
               />
             </View>
 
             <Text style={styles.emptyTitle}>
-              {activeTab === "ACTIVE" ? "No active orders" : "No order history"}
+              {isGuest
+                ? "Login to view orders"
+                : activeTab === "ACTIVE"
+                ? "No active orders"
+                : "No order history"}
             </Text>
 
             <Text style={styles.emptyText}>
-              {activeTab === "ACTIVE"
+              {isGuest
+                ? "Your active and past orders will appear here after login."
+                : activeTab === "ACTIVE"
                 ? "Your live orders will appear here once you place an order."
                 : "Delivered and cancelled orders will appear here."}
             </Text>
 
-            {activeTab === "ACTIVE" && (
-              <TouchableOpacity
-                style={styles.exploreBtn}
-                onPress={() => navigation.navigate("Home")}
-              >
-                <Text style={styles.exploreText}>Explore Stores</Text>
-                <Icon name="arrow-forward" size={17} color={THEME.black} />
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={styles.exploreBtn}
+              onPress={isGuest ? () => navigation.navigate("Auth") : goExplore}
+              activeOpacity={0.9}
+            >
+              <Text style={styles.exploreText}>{isGuest ? "Login / Signup" : "Explore Stores"}</Text>
+              <Icon name="arrow-forward" size={17} color={THEME.black} />
+            </TouchableOpacity>
           </View>
         }
       />
@@ -605,8 +609,7 @@ export default function OrdersScreen() {
 
             <Text style={styles.confirmTitle}>Cancel order?</Text>
             <Text style={styles.confirmText}>
-              This action will request cancellation for Order #
-              {cancelTarget ? getOrderNumber(cancelTarget) : ""}.
+              This action will request cancellation for Order #{cancelTarget ? getOrderNumber(cancelTarget) : ""}.
             </Text>
 
             <View style={styles.confirmActions}>
@@ -751,16 +754,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-  tabBtnActive: {
-    backgroundColor: THEME.green,
-  },
-  tabText: {
-    color: THEME.muted,
-    fontWeight: "900",
-  },
-  tabTextActive: {
-    color: THEME.black,
-  },
+  tabBtnActive: { backgroundColor: THEME.green },
+  tabText: { color: THEME.muted, fontWeight: "900" },
+  tabTextActive: { color: THEME.black },
   countBadge: {
     minWidth: 22,
     height: 22,
@@ -770,26 +766,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 6,
   },
-  countText: {
-    color: THEME.green,
-    fontWeight: "900",
-    fontSize: 11,
-  },
-  list: {
-    padding: 20,
-    paddingTop: 8,
-    paddingBottom: 35,
-  },
+  countText: { color: THEME.green, fontWeight: "900", fontSize: 11 },
+  list: { padding: 20, paddingTop: 8, paddingBottom: 35 },
   emptyList: {
     flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 25,
   },
-  emptyBox: {
-    alignItems: "center",
-    paddingHorizontal: 25,
-  },
+  emptyBox: { alignItems: "center", paddingHorizontal: 25 },
   emptyIcon: {
     width: 104,
     height: 104,
@@ -823,10 +808,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  exploreText: {
-    color: THEME.black,
-    fontWeight: "900",
-  },
+  exploreText: { color: THEME.black, fontWeight: "900" },
   card: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -841,17 +823,8 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 12,
   },
-  orderNo: {
-    color: THEME.text,
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  date: {
-    color: THEME.muted,
-    marginTop: 4,
-    fontSize: 12,
-    fontWeight: "700",
-  },
+  orderNo: { color: THEME.text, fontSize: 16, fontWeight: "900" },
+  date: { color: THEME.muted, marginTop: 4, fontSize: 12, fontWeight: "700" },
   statusPill: {
     backgroundColor: THEME.black,
     borderWidth: 1,
@@ -862,15 +835,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  statusText: {
-    fontSize: 11,
-    fontWeight: "900",
-  },
-  storeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 18,
-  },
+  statusText: { fontSize: 11, fontWeight: "900" },
+  storeRow: { flexDirection: "row", alignItems: "center", marginTop: 18 },
   storeIcon: {
     width: 44,
     height: 44,
@@ -882,17 +848,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 11,
   },
-  storeName: {
-    color: THEME.text,
-    fontSize: 15,
-    fontWeight: "900",
-  },
-  itemCount: {
-    color: THEME.muted,
-    marginTop: 3,
-    fontSize: 12,
-    fontWeight: "700",
-  },
+  storeName: { color: THEME.text, fontSize: 15, fontWeight: "900" },
+  itemCount: { color: THEME.muted, marginTop: 3, fontSize: 12, fontWeight: "700" },
   timelineBox: {
     marginTop: 16,
     backgroundColor: THEME.card2,
@@ -904,28 +861,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  timelineDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-  },
+  timelineDot: { width: 9, height: 9, borderRadius: 5 },
   timelineLine: {
     width: 28,
     height: 1,
     backgroundColor: THEME.border,
     marginHorizontal: 8,
   },
-  timelineText: {
-    flex: 1,
-    color: THEME.muted,
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  metaGrid: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 14,
-  },
+  timelineText: { flex: 1, color: THEME.muted, fontSize: 12, fontWeight: "800" },
+  metaGrid: { flexDirection: "row", gap: 10, marginTop: 14 },
   metaBox: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -935,17 +879,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  metaLabel: {
-    color: THEME.muted,
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  metaValue: {
-    color: THEME.text,
-    fontSize: 13,
-    fontWeight: "900",
-    marginTop: 3,
-  },
+  metaLabel: { color: THEME.muted, fontSize: 11, fontWeight: "800" },
+  metaValue: { color: THEME.text, fontSize: 13, fontWeight: "900", marginTop: 3 },
   bottomRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -953,22 +888,9 @@ const styles = StyleSheet.create({
     marginTop: 18,
     gap: 12,
   },
-  amountLabel: {
-    color: THEME.muted,
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  amount: {
-    color: THEME.green,
-    fontSize: 21,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-  actionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
+  amountLabel: { color: THEME.muted, fontSize: 11, fontWeight: "800" },
+  amount: { color: THEME.green, fontSize: 21, fontWeight: "900", marginTop: 2 },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   cancelBtn: {
     borderWidth: 1,
     borderColor: "#3F1717",
@@ -979,11 +901,7 @@ const styles = StyleSheet.create({
     minWidth: 70,
     alignItems: "center",
   },
-  cancelText: {
-    color: THEME.danger,
-    fontWeight: "900",
-    fontSize: 12,
-  },
+  cancelText: { color: THEME.danger, fontWeight: "900", fontSize: 12 },
   trackBtn: {
     backgroundColor: THEME.green,
     borderRadius: 14,
@@ -992,11 +910,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  trackText: {
-    color: THEME.black,
-    fontWeight: "900",
-    marginRight: 6,
-  },
+  trackText: { color: THEME.black, fontWeight: "900", marginRight: 6 },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.72)",
@@ -1022,11 +936,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 14,
   },
-  confirmTitle: {
-    color: THEME.text,
-    fontSize: 22,
-    fontWeight: "900",
-  },
+  confirmTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
   confirmText: {
     color: THEME.muted,
     textAlign: "center",
@@ -1034,11 +944,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontWeight: "700",
   },
-  confirmActions: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 20,
-  },
+  confirmActions: { flexDirection: "row", gap: 10, marginTop: 20 },
   keepBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -1048,10 +954,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  keepText: {
-    color: THEME.text,
-    fontWeight: "900",
-  },
+  keepText: { color: THEME.text, fontWeight: "900" },
   cancelConfirmBtn: {
     flex: 1,
     backgroundColor: THEME.green,
@@ -1059,8 +962,5 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  cancelConfirmText: {
-    color: THEME.black,
-    fontWeight: "900",
-  },
+  cancelConfirmText: { color: THEME.black, fontWeight: "900" },
 });

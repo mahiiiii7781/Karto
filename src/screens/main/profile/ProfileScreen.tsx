@@ -12,7 +12,7 @@ import {
   Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import { CommonActions, useFocusEffect, useNavigation } from "@react-navigation/native";
+import { CommonActions, useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Toast from "react-native-toast-message";
 
@@ -23,7 +23,12 @@ const THEME = {
   card: "#101713",
   card2: "#151F19",
   green: "#22C55E",
+  greenDark: "#15803D",
   yellow: "#FACC15",
+  orange: "#FB923C",
+  blue: "#38BDF8",
+  purple: "#A78BFA",
+  pink: "#F472B6",
   text: "#F8FAFC",
   muted: "#8A94A6",
   border: "#1E2A22",
@@ -45,13 +50,19 @@ const showToast = (
   });
 };
 
-const MenuRow = ({ icon, title, subtitle, danger, badge, onPress }: any) => (
+const MenuRow = ({ icon, title, subtitle, danger, badge, color, onPress }: any) => (
   <TouchableOpacity style={styles.menuRow} activeOpacity={0.85} onPress={onPress}>
-    <View style={[styles.menuIconBox, danger && styles.dangerIconBox]}>
-      <Icon name={icon} size={21} color={danger ? THEME.danger : THEME.green} />
+    <View
+      style={[
+        styles.menuIconBox,
+        danger && styles.dangerIconBox,
+        !!color && !danger && { borderColor: `${color}55`, backgroundColor: `${color}18` },
+      ]}
+    >
+      <Icon name={icon} size={21} color={danger ? THEME.danger : color || THEME.green} />
     </View>
 
-    <View style={{ flex: 1 }}>
+    <View style={styles.menuTextBox}>
       <View style={styles.menuTitleRow}>
         <Text style={[styles.menuTitle, danger && { color: THEME.danger }]}>
           {title}
@@ -71,12 +82,23 @@ const MenuRow = ({ icon, title, subtitle, danger, badge, onPress }: any) => (
   </TouchableOpacity>
 );
 
-const StatCard = ({ icon, value, label }: any) => (
+const StatCard = ({ icon, value, label, color }: any) => (
   <View style={styles.statCard}>
-    <Icon name={icon} size={21} color={THEME.green} />
+    <View style={[styles.statIcon, { backgroundColor: `${color}18`, borderColor: `${color}55` }]}>
+      <Icon name={icon} size={20} color={color} />
+    </View>
     <Text style={styles.statValue}>{value}</Text>
     <Text style={styles.statLabel}>{label}</Text>
   </View>
+);
+
+const QuickAction = ({ icon, label, color, onPress }: any) => (
+  <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.85}>
+    <View style={[styles.quickIcon, { backgroundColor: `${color}18`, borderColor: `${color}55` }]}>
+      <Icon name={icon} size={23} color={color} />
+    </View>
+    <Text style={styles.quickText}>{label}</Text>
+  </TouchableOpacity>
 );
 
 export default function ProfileScreen() {
@@ -86,36 +108,34 @@ export default function ProfileScreen() {
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
 
-  const requireAuth = useCallback(() => {
-    if (user?.id) return true;
-
-    showToast("info", "Login required", "Please sign in to access your profile.");
-    navigation.navigate("Auth");
-    return false;
-  }, [user?.id, navigation]);
-
-  useFocusEffect(
-    useCallback(() => {
-      requireAuth();
-    }, [requireAuth])
-  );
+  const isLoggedIn = !!user?.id;
 
   const profile = useMemo(() => {
     const fullName =
       user?.fullName ||
       (user as any)?.name ||
       user?.email?.split("@")?.[0] ||
-      "Karto User";
+      "Guest User";
 
     return {
       fullName,
-      email: user?.email || "Not available",
+      email: user?.email || "Login to manage your account",
       phone: (user as any)?.phone || "Add phone number",
       avatarUrl: (user as any)?.avatarUrl || (user as any)?.avatar_url || "",
-      role: user?.role || "CUSTOMER",
+      role: user?.role || "GUEST",
       isActive: (user as any)?.isActive ?? (user as any)?.is_active ?? true,
     };
   }, [user]);
+
+  const requireAuth = useCallback(
+    (message = "Please sign in to continue.") => {
+      if (isLoggedIn) return true;
+      showToast("info", "Login required", message);
+      navigation.navigate("Auth");
+      return false;
+    },
+    [isLoggedIn, navigation]
+  );
 
   const resetToAuth = () => {
     navigation.dispatch(
@@ -153,14 +173,16 @@ export default function ProfileScreen() {
     }
   };
 
-  const openComingSoon = (title: string) => {
-    showToast("info", "Coming soon", `${title} will be available soon.`);
+  const safeNavigate = (screen: string, params?: any) => {
+    if (!requireAuth()) return;
+    navigation.navigate(screen, params);
   };
 
-  const safeNavigate = (screen: string) => {
-    if (!requireAuth()) return;
-    navigation.navigate(screen);
+  const openCoupons = () => {
+    navigation.navigate("Coupons");
   };
+
+  const openAuth = () => navigation.navigate("Auth");
 
   return (
     <View style={styles.screen}>
@@ -168,12 +190,14 @@ export default function ProfileScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 35 }}
+        contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.header}>
-          <View style={{ flex: 1 }}>
+          <View style={styles.headerTextBox}>
             <Text style={styles.headerTitle}>Profile</Text>
-            <Text style={styles.headerSub}>Manage your Karto account</Text>
+            <Text style={styles.headerSub}>
+              {isLoggedIn ? "Manage your Karto account" : "Login for orders, coupons and rewards"}
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -181,21 +205,31 @@ export default function ProfileScreen() {
             onPress={() => safeNavigate("EditProfile")}
             activeOpacity={0.85}
           >
-            <Icon name="create-outline" size={22} color={THEME.black} />
+            <Icon name={isLoggedIn ? "create-outline" : "log-in-outline"} size={22} color={THEME.black} />
           </TouchableOpacity>
         </View>
 
         <View style={styles.heroBanner}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.heroTag}>KARTO MEMBER</Text>
-            <Text style={styles.heroTitle}>Fast local delivery</Text>
+          <View style={styles.heroGlowOne} />
+          <View style={styles.heroGlowTwo} />
+
+          <View style={styles.heroContent}>
+            <Text style={styles.heroTag}>KARTO LOCAL PASS</Text>
+            <Text style={styles.heroTitle}>Your city, delivered faster</Text>
             <Text style={styles.heroSub}>
-              Track orders, manage addresses, payments and rewards from one place.
+              Orders, addresses, coupons and support in one clean place.
             </Text>
+
+            {!isLoggedIn && (
+              <TouchableOpacity style={styles.loginHeroBtn} onPress={openAuth} activeOpacity={0.9}>
+                <Text style={styles.loginHeroText}>Login / Signup</Text>
+                <Icon name="arrow-forward" size={16} color={THEME.black} />
+              </TouchableOpacity>
+            )}
           </View>
 
           <View style={styles.heroIcon}>
-            <Icon name="person-circle-outline" size={40} color={THEME.black} />
+            <Icon name="sparkles" size={34} color={THEME.black} />
           </View>
         </View>
 
@@ -210,7 +244,7 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          <View style={{ flex: 1 }}>
+          <View style={styles.profileInfo}>
             <Text style={styles.name} numberOfLines={1}>
               {profile.fullName}
             </Text>
@@ -219,9 +253,11 @@ export default function ProfileScreen() {
               {profile.email}
             </Text>
 
-            <Text style={styles.phone} numberOfLines={1}>
-              {profile.phone}
-            </Text>
+            {isLoggedIn && (
+              <Text style={styles.phone} numberOfLines={1}>
+                {profile.phone}
+              </Text>
+            )}
 
             <View style={styles.roleRow}>
               <View style={styles.rolePill}>
@@ -229,54 +265,28 @@ export default function ProfileScreen() {
                 <Text style={styles.roleText}>{profile.role}</Text>
               </View>
 
-              <View style={[styles.statusPill, !profile.isActive && styles.inactivePill]}>
-                <Text
-                  style={[
-                    styles.statusText,
-                    !profile.isActive && { color: THEME.danger },
-                  ]}
-                >
-                  {profile.isActive ? "Active" : "Inactive"}
-                </Text>
-              </View>
+              {isLoggedIn && (
+                <View style={[styles.statusPill, !profile.isActive && styles.inactivePill]}>
+                  <Text style={[styles.statusText, !profile.isActive && { color: THEME.danger }]}>
+                    {profile.isActive ? "Active" : "Inactive"}
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
         </View>
 
         <View style={styles.statsRow}>
-          <StatCard icon="bag-check-outline" value="0" label="Orders" />
-          <StatCard icon="wallet-outline" value="₹0" label="Wallet" />
-          <StatCard icon="gift-outline" value="0" label="Rewards" />
+          <StatCard icon="bag-check-outline" value="0" label="Orders" color={THEME.green} />
+          <StatCard icon="pricetag-outline" value="Live" label="Coupons" color={THEME.yellow} />
+          <StatCard icon="sparkles-outline" value="New" label="Rewards" color={THEME.purple} />
         </View>
 
         <View style={styles.quickCard}>
-          <TouchableOpacity style={styles.quickAction} onPress={() => safeNavigate("Orders")}>
-            <View style={styles.quickIcon}>
-              <Icon name="receipt-outline" size={23} color={THEME.green} />
-            </View>
-            <Text style={styles.quickText}>Orders</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.quickAction} onPress={() => safeNavigate("Address")}>
-            <View style={styles.quickIcon}>
-              <Icon name="location-outline" size={23} color={THEME.green} />
-            </View>
-            <Text style={styles.quickText}>Address</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.quickAction} onPress={() => openComingSoon("Coupons")}>
-            <View style={styles.quickIcon}>
-              <Icon name="pricetag-outline" size={23} color={THEME.green} />
-            </View>
-            <Text style={styles.quickText}>Coupons</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.quickAction} onPress={() => openComingSoon("Support")}>
-            <View style={styles.quickIcon}>
-              <Icon name="headset-outline" size={23} color={THEME.green} />
-            </View>
-            <Text style={styles.quickText}>Support</Text>
-          </TouchableOpacity>
+          <QuickAction icon="receipt-outline" label="Orders" color={THEME.green} onPress={() => safeNavigate("Orders")} />
+          <QuickAction icon="location-outline" label="Address" color={THEME.blue} onPress={() => safeNavigate("Address")} />
+          <QuickAction icon="pricetag-outline" label="Coupons" color={THEME.yellow} onPress={openCoupons} />
+          <QuickAction icon="headset-outline" label="Support" color={THEME.orange} onPress={() => safeNavigate("HelpSupport")} />
         </View>
 
         <View style={styles.infoCard}>
@@ -285,7 +295,8 @@ export default function ProfileScreen() {
           <MenuRow
             icon="person-outline"
             title="Personal Information"
-            subtitle={`${profile.phone} • Manage name, phone and avatar`}
+            subtitle="Manage name, phone and profile photo"
+            color={THEME.green}
             onPress={() => safeNavigate("EditProfile")}
           />
 
@@ -293,6 +304,7 @@ export default function ProfileScreen() {
             icon="location-outline"
             title="Saved Addresses"
             subtitle="Home, work and delivery locations"
+            color={THEME.blue}
             onPress={() => safeNavigate("Address")}
           />
 
@@ -300,27 +312,41 @@ export default function ProfileScreen() {
             icon="receipt-outline"
             title="My Orders"
             subtitle="Track current and past orders"
+            color={THEME.yellow}
             onPress={() => safeNavigate("Orders")}
           />
 
+          {/* Coming soon hidden for final UI */}
+          {/*
           <MenuRow
             icon="heart-outline"
             title="Favorites"
             subtitle="Your saved stores and restaurants"
             badge="Soon"
-            onPress={() => openComingSoon("Favorites")}
+            onPress={() => {}}
           />
+          */}
         </View>
 
         <View style={styles.infoCard}>
-          <Text style={styles.sectionTitle}>Payments & Benefits</Text>
+          <Text style={styles.sectionTitle}>Benefits</Text>
 
+          <MenuRow
+            icon="gift-outline"
+            title="Rewards & Coupons"
+            subtitle="Offers, referral rewards and discounts"
+            color={THEME.yellow}
+            onPress={openCoupons}
+          />
+
+          {/* Coming soon hidden for final UI */}
+          {/*
           <MenuRow
             icon="wallet-outline"
             title="Wallet"
             subtitle="Balance, refunds and credits"
             badge="Soon"
-            onPress={() => openComingSoon("Wallet")}
+            onPress={() => {}}
           />
 
           <MenuRow
@@ -328,16 +354,9 @@ export default function ProfileScreen() {
             title="Payment Methods"
             subtitle="UPI, cards and cash on delivery"
             badge="Soon"
-            onPress={() => openComingSoon("Payment Methods")}
+            onPress={() => {}}
           />
-
-          <MenuRow
-            icon="gift-outline"
-            title="Rewards & Coupons"
-            subtitle="Offers, referral rewards and discounts"
-            badge="Soon"
-            onPress={() => openComingSoon("Rewards & Coupons")}
-          />
+          */}
         </View>
 
         <View style={styles.infoCard}>
@@ -347,35 +366,52 @@ export default function ProfileScreen() {
             icon="chatbubble-ellipses-outline"
             title="Help & Support"
             subtitle="Get help with orders and payments"
+            color={THEME.orange}
             onPress={() => safeNavigate("HelpSupport")}
           />
 
+          {/* Coming soon hidden for final UI */}
+          {/*
           <MenuRow
             icon="document-text-outline"
             title="Terms & Policies"
             subtitle="Privacy policy, refund policy and terms"
-            onPress={() => openComingSoon("Terms & Policies")}
+            onPress={() => {}}
           />
 
           <MenuRow
             icon="information-circle-outline"
             title="About Karto"
             subtitle="Fast local delivery for your city"
-            onPress={() => openComingSoon("About Karto")}
+            onPress={() => {}}
           />
+          */}
         </View>
 
-        <View style={styles.infoCard}>
-          <MenuRow
-            icon="log-out-outline"
-            title={loggingOut ? "Logging out..." : "Logout"}
-            subtitle="Sign out from this device"
-            danger
-            onPress={loggingOut ? undefined : () => setLogoutModalVisible(true)}
-          />
+        {isLoggedIn ? (
+          <View style={styles.infoCard}>
+            <MenuRow
+              icon="log-out-outline"
+              title={loggingOut ? "Logging out..." : "Logout"}
+              subtitle="Sign out from this device"
+              danger
+              onPress={loggingOut ? undefined : () => setLogoutModalVisible(true)}
+            />
 
-          {loggingOut && <ActivityIndicator color={THEME.green} style={{ marginTop: 12 }} />}
-        </View>
+            {loggingOut && <ActivityIndicator color={THEME.green} style={styles.logoutLoader} />}
+          </View>
+        ) : (
+          <TouchableOpacity style={styles.guestLoginCard} onPress={openAuth} activeOpacity={0.9}>
+            <View style={styles.guestIcon}>
+              <Icon name="log-in-outline" size={25} color={THEME.black} />
+            </View>
+            <View style={styles.guestTextBox}>
+              <Text style={styles.guestTitle}>Login to unlock your account</Text>
+              <Text style={styles.guestSub}>Track orders, save addresses and use coupons.</Text>
+            </View>
+            <Icon name="arrow-forward" size={20} color={THEME.green} />
+          </TouchableOpacity>
+        )}
 
         <Text style={styles.footerText}>Karto • Fast local delivery experience</Text>
       </ScrollView>
@@ -427,6 +463,7 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: THEME.bg },
+  scrollContent: { paddingBottom: 35 },
   header: {
     paddingTop: Platform.OS === "ios" ? 54 : 34,
     paddingHorizontal: 20,
@@ -435,6 +472,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
+  headerTextBox: { flex: 1 },
   headerTitle: {
     color: THEME.text,
     fontSize: 32,
@@ -453,6 +491,7 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
+    marginLeft: 12,
   },
   heroBanner: {
     marginHorizontal: 20,
@@ -460,11 +499,31 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
-    borderRadius: 26,
+    borderRadius: 28,
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
+    overflow: "hidden",
   },
+  heroGlowOne: {
+    position: "absolute",
+    width: 130,
+    height: 130,
+    borderRadius: 70,
+    backgroundColor: "rgba(34,197,94,0.16)",
+    right: -45,
+    top: -35,
+  },
+  heroGlowTwo: {
+    position: "absolute",
+    width: 120,
+    height: 120,
+    borderRadius: 65,
+    backgroundColor: "rgba(250,204,21,0.13)",
+    left: -40,
+    bottom: -55,
+  },
+  heroContent: { flex: 1 },
   heroTag: {
     color: THEME.yellow,
     fontSize: 11,
@@ -484,6 +543,18 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: "700",
   },
+  loginHeroBtn: {
+    marginTop: 14,
+    alignSelf: "flex-start",
+    backgroundColor: THEME.green,
+    borderRadius: 99,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  loginHeroText: { color: THEME.black, fontWeight: "900", fontSize: 13 },
   heroIcon: {
     width: 62,
     height: 62,
@@ -516,33 +587,12 @@ const styles = StyleSheet.create({
     marginRight: 15,
     overflow: "hidden",
   },
-  avatar: {
-    width: "100%",
-    height: "100%",
-    borderRadius: 30,
-  },
-  avatarText: {
-    color: THEME.green,
-    fontSize: 34,
-    fontWeight: "900",
-  },
-  name: {
-    color: THEME.text,
-    fontSize: 21,
-    fontWeight: "900",
-  },
-  email: {
-    color: THEME.muted,
-    marginTop: 4,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  phone: {
-    color: THEME.muted,
-    marginTop: 3,
-    fontSize: 13,
-    fontWeight: "700",
-  },
+  avatar: { width: "100%", height: "100%", borderRadius: 30 },
+  avatarText: { color: THEME.green, fontSize: 34, fontWeight: "900" },
+  profileInfo: { flex: 1 },
+  name: { color: THEME.text, fontSize: 21, fontWeight: "900" },
+  email: { color: THEME.muted, marginTop: 4, fontSize: 13, fontWeight: "700" },
+  phone: { color: THEME.muted, marginTop: 3, fontSize: 13, fontWeight: "700" },
   roleRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -561,11 +611,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
   },
-  roleText: {
-    color: THEME.green,
-    fontSize: 12,
-    fontWeight: "900",
-  },
+  roleText: { color: THEME.green, fontSize: 12, fontWeight: "900" },
   statusPill: {
     backgroundColor: "#102116",
     borderWidth: 1,
@@ -574,15 +620,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
   },
-  inactivePill: {
-    backgroundColor: "#1B0E0E",
-    borderColor: "#3F1717",
-  },
-  statusText: {
-    color: THEME.green,
-    fontSize: 12,
-    fontWeight: "900",
-  },
+  inactivePill: { backgroundColor: "#1B0E0E", borderColor: "#3F1717" },
+  statusText: { color: THEME.green, fontSize: 12, fontWeight: "900" },
   statsRow: {
     flexDirection: "row",
     paddingHorizontal: 20,
@@ -593,23 +632,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: THEME.card,
     borderRadius: 20,
-    paddingVertical: 15,
+    paddingVertical: 14,
     alignItems: "center",
     borderWidth: 1,
     borderColor: THEME.border,
   },
-  statValue: {
-    color: THEME.text,
-    fontSize: 20,
-    fontWeight: "900",
-    marginTop: 6,
+  statIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  statLabel: {
-    color: THEME.muted,
-    fontSize: 12,
-    marginTop: 3,
-    fontWeight: "700",
-  },
+  statValue: { color: THEME.text, fontSize: 18, fontWeight: "900", marginTop: 7 },
+  statLabel: { color: THEME.muted, fontSize: 12, marginTop: 3, fontWeight: "700" },
   quickCard: {
     marginHorizontal: 20,
     marginBottom: 16,
@@ -621,26 +658,16 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
   },
-  quickAction: {
-    flex: 1,
-    alignItems: "center",
-    gap: 7,
-  },
+  quickAction: { flex: 1, alignItems: "center", gap: 7 },
   quickIcon: {
     width: 44,
     height: 44,
     borderRadius: 16,
-    backgroundColor: THEME.card2,
     borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
   },
-  quickText: {
-    color: THEME.text,
-    fontSize: 12,
-    fontWeight: "800",
-  },
+  quickText: { color: THEME.text, fontSize: 12, fontWeight: "800" },
   infoCard: {
     marginHorizontal: 20,
     marginBottom: 16,
@@ -676,21 +703,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginRight: 12,
   },
-  dangerIconBox: {
-    backgroundColor: "#1B0E0E",
-    borderColor: "#3F1717",
-  },
-  menuTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    flexWrap: "wrap",
-  },
-  menuTitle: {
-    color: THEME.text,
-    fontSize: 15,
-    fontWeight: "900",
-  },
+  dangerIconBox: { backgroundColor: "#1B0E0E", borderColor: "#3F1717" },
+  menuTextBox: { flex: 1 },
+  menuTitleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  menuTitle: { color: THEME.text, fontSize: 15, fontWeight: "900" },
   menuSubtitle: {
     color: THEME.muted,
     fontSize: 12,
@@ -698,17 +714,32 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: "700",
   },
-  badge: {
-    backgroundColor: THEME.yellow,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 999,
+  badge: { backgroundColor: THEME.yellow, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999 },
+  badgeText: { color: THEME.black, fontSize: 10, fontWeight: "900" },
+  guestLoginCard: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
   },
-  badgeText: {
-    color: THEME.black,
-    fontSize: 10,
-    fontWeight: "900",
+  guestIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 18,
+    backgroundColor: THEME.green,
+    alignItems: "center",
+    justifyContent: "center",
   },
+  guestTextBox: { flex: 1 },
+  guestTitle: { color: THEME.text, fontSize: 15, fontWeight: "900" },
+  guestSub: { color: THEME.muted, marginTop: 4, fontSize: 12, fontWeight: "700" },
+  logoutLoader: { marginTop: 12 },
   footerText: {
     color: THEME.muted,
     textAlign: "center",
@@ -741,11 +772,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 14,
   },
-  confirmTitle: {
-    color: THEME.text,
-    fontSize: 22,
-    fontWeight: "900",
-  },
+  confirmTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
   confirmText: {
     color: THEME.muted,
     textAlign: "center",
@@ -753,11 +780,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontWeight: "700",
   },
-  confirmActions: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 20,
-  },
+  confirmActions: { flexDirection: "row", gap: 10, marginTop: 20 },
   keepBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -767,10 +790,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  keepText: {
-    color: THEME.text,
-    fontWeight: "900",
-  },
+  keepText: { color: THEME.text, fontWeight: "900" },
   logoutConfirmBtn: {
     flex: 1,
     backgroundColor: THEME.green,
@@ -778,8 +798,5 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  logoutConfirmText: {
-    color: THEME.black,
-    fontWeight: "900",
-  },
+  logoutConfirmText: { color: THEME.black, fontWeight: "900" },
 });

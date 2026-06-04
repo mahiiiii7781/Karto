@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,7 +9,11 @@ import {
   RefreshControl,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import apiClient from "@/api/apiClient";
+import {
+  vendorService,
+  VendorDashboard,
+  VendorEarningGraphItem,
+} from "@/services/api/vendorService";
 
 const THEME = {
   bg: "#070A07",
@@ -24,61 +28,99 @@ const THEME = {
   warning: "#F59E0B",
 };
 
-type Summary = {
-  todayOrders?: number;
-  todayRevenue?: number;
-  monthlyOrders?: number;
-  monthlyRevenue?: number;
-  activeOrders?: number;
-  completedOrders?: number;
-  cancelledOrders?: number;
-  averageOrderValue?: number;
-};
+type Summary = Pick<
+  VendorDashboard,
+  | "todayOrders"
+  | "todayRevenue"
+  | "monthlyOrders"
+  | "monthlyRevenue"
+  | "activeOrders"
+  | "completedOrders"
+  | "cancelledOrders"
+  | "averageOrderValue"
+  | "lifetimeRevenue"
+  | "totalOrders"
+>;
 
-type GraphItem = {
-  date: string;
-  label: string;
-  earnings: number;
-};
+type GraphItem = VendorEarningGraphItem;
 
-const money = (value: any, fixed = 0) =>
-  `₹${Number(value || 0).toFixed(fixed)}`;
+const money = (value: any, fixed = 0) => `₹${Number(value || 0).toFixed(fixed)}`;
+
+const normalizeGraph = (items: GraphItem[] = []) => {
+  return items.map((item, index) => ({
+    date: item?.date || String(index),
+    label: item?.label || item?.date || `D${index + 1}`,
+    earnings: Number(item?.earnings || 0),
+  }));
+};
 
 export default function VendorAnalyticsScreen() {
-  const [summary, setSummary] = useState<Summary>({});
+  const [summary, setSummary] = useState<Summary>({} as Summary);
   const [graph, setGraph] = useState<GraphItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [toast, setToast] = useState("");
 
-  const showToast = (msg: string) => {
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
-    setTimeout(() => setToast(""), 2200);
-  };
-
-  const loadAnalytics = useCallback(async () => {
-    try {
-      const [summaryRes, graphRes] = await Promise.all([
-        apiClient.get("/vendor-analytics/summary"),
-        apiClient.get("/vendor-analytics/earnings-graph"),
-      ]);
-
-      setSummary(summaryRes.data.data || {});
-      setGraph(graphRes.data.data || []);
-    } catch (error: any) {
-      setSummary({});
-      setGraph([]);
-      showToast(error?.response?.data?.message || "Failed to load analytics");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+    toastTimer.current = setTimeout(() => setToast(""), 2200);
   }, []);
 
+  const loadAnalytics = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+
+    const [dashboardRes, graphRes] = await Promise.all([
+      vendorService.getDashboard(),
+      vendorService.getEarningsGraph(),
+    ]);
+
+    if (!mounted.current) return;
+
+    if (dashboardRes.error) {
+      setSummary({} as Summary);
+      showToast(dashboardRes.error?.message || "Failed to load analytics");
+    } else if (dashboardRes.data) {
+      const dashboard = dashboardRes.data;
+      setSummary({
+        todayOrders: dashboard.todayOrders || 0,
+        todayRevenue: dashboard.todayRevenue || 0,
+        monthlyOrders: dashboard.monthlyOrders || 0,
+        monthlyRevenue: dashboard.monthlyRevenue || 0,
+        activeOrders: dashboard.activeOrders || 0,
+        completedOrders: dashboard.completedOrders || 0,
+        cancelledOrders: dashboard.cancelledOrders || 0,
+        averageOrderValue: dashboard.averageOrderValue || 0,
+        lifetimeRevenue: dashboard.lifetimeRevenue || 0,
+        totalOrders: dashboard.totalOrders || 0,
+      });
+    }
+
+    if (graphRes.error) {
+      setGraph([]);
+      if (!dashboardRes.error) {
+        showToast(graphRes.error?.message || "Earnings graph not available");
+      }
+    } else {
+      setGraph(normalizeGraph(graphRes.data || []));
+    }
+
+    setLoading(false);
+    setRefreshing(false);
+  }, [showToast]);
+
   useEffect(() => {
+    mounted.current = true;
     loadAnalytics();
+
+    return () => {
+      mounted.current = false;
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
   }, [loadAnalytics]);
 
   const insight = useMemo(() => {
@@ -94,16 +136,21 @@ export default function VendorAnalyticsScreen() {
       return Number(item.earnings || 0) > Number(best.earnings || 0) ? item : best;
     }, null);
 
+    const avgDailyRevenue = graph.length
+      ? graph.reduce((sum, item) => sum + Number(item.earnings || 0), 0) / graph.length
+      : 0;
+
     return {
       monthlyRevenue,
       monthlyOrders,
       cancelRate,
       bestDay,
-      avgDailyRevenue: graph.length ? monthlyRevenue / 30 : 0,
+      avgDailyRevenue,
+      healthScore: Math.max(0, 100 - Math.round(cancelRate)),
     };
   }, [summary, graph]);
 
-  if (loading) {
+  if (loading && !refreshing) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={THEME.green} />
@@ -132,7 +179,7 @@ export default function VendorAnalyticsScreen() {
             colors={[THEME.green]}
             onRefresh={() => {
               setRefreshing(true);
-              loadAnalytics();
+              loadAnalytics(true);
             }}
           />
         }
@@ -144,19 +191,25 @@ export default function VendorAnalyticsScreen() {
             <Text style={styles.subtitle}>Track earnings, orders and growth.</Text>
           </View>
 
-          <TouchableOpacity style={styles.filterBtn} activeOpacity={0.85}>
-            <Icon name="calendar-outline" size={18} color={THEME.bg} />
-            <Text style={styles.filterText}>7 Days</Text>
+          <TouchableOpacity
+            style={styles.filterBtn}
+            activeOpacity={0.85}
+            onPress={() => {
+              setRefreshing(true);
+              loadAnalytics(true);
+            }}
+          >
+            <Icon name="refresh" size={18} color={THEME.bg} />
+            <Text style={styles.filterText}>Live</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.heroCard}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.heroLabel}>Monthly Revenue</Text>
             <Text style={styles.heroValue}>{money(summary?.monthlyRevenue, 2)}</Text>
             <Text style={styles.heroSub}>
-              {summary?.monthlyOrders || 0} monthly orders • Avg{" "}
-              {money(summary?.averageOrderValue, 0)}
+              {summary?.monthlyOrders || 0} monthly orders • Avg {money(summary?.averageOrderValue, 0)}
             </Text>
           </View>
 
@@ -166,26 +219,10 @@ export default function VendorAnalyticsScreen() {
         </View>
 
         <View style={styles.grid}>
-          <StatCard
-            icon="receipt-outline"
-            label="Today Orders"
-            value={summary?.todayOrders || 0}
-          />
-          <StatCard
-            icon="cash-outline"
-            label="Today Revenue"
-            value={money(summary?.todayRevenue)}
-          />
-          <StatCard
-            icon="flame-outline"
-            label="Active Orders"
-            value={summary?.activeOrders || 0}
-          />
-          <StatCard
-            icon="checkmark-done-outline"
-            label="Completed"
-            value={summary?.completedOrders || 0}
-          />
+          <StatCard icon="receipt-outline" label="Today Orders" value={summary?.todayOrders || 0} />
+          <StatCard icon="cash-outline" label="Today Revenue" value={money(summary?.todayRevenue)} />
+          <StatCard icon="flame-outline" label="Active Orders" value={summary?.activeOrders || 0} />
+          <StatCard icon="checkmark-done-outline" label="Completed" value={summary?.completedOrders || 0} />
         </View>
 
         <View style={styles.chartCard}>
@@ -201,32 +238,24 @@ export default function VendorAnalyticsScreen() {
             <View style={styles.emptyChart}>
               <Icon name="bar-chart-outline" size={44} color={THEME.yellow} />
               <Text style={styles.emptyTitle}>No earnings yet</Text>
-              <Text style={styles.emptyText}>Graph will update after orders arrive.</Text>
+              <Text style={styles.emptyText}>Graph will update after delivered orders arrive.</Text>
             </View>
           ) : (
-            <BarGraph
-              graph={graph}
-              selectedIndex={selectedIndex}
-              onSelect={setSelectedIndex}
-            />
+            <BarGraph graph={graph} selectedIndex={selectedIndex} onSelect={setSelectedIndex} />
           )}
         </View>
 
         <View style={styles.scoreCard}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.scoreLabel}>Business Health</Text>
             <Text style={styles.scoreTitle}>
-              {Number(summary?.cancelledOrders || 0) > 5 ? "Needs Attention" : "Healthy"}
+              {insight.healthScore < 80 ? "Needs Attention" : "Healthy"}
             </Text>
-            <Text style={styles.scoreSub}>
-              Cancel rate: {insight.cancelRate.toFixed(1)}%
-            </Text>
+            <Text style={styles.scoreSub}>Cancel rate: {insight.cancelRate.toFixed(1)}%</Text>
           </View>
 
           <View style={styles.scoreCircle}>
-            <Text style={styles.scoreValue}>
-              {Math.max(0, 100 - Math.round(insight.cancelRate))}
-            </Text>
+            <Text style={styles.scoreValue}>{insight.healthScore}</Text>
             <Text style={styles.scoreText}>Score</Text>
           </View>
         </View>
@@ -234,34 +263,15 @@ export default function VendorAnalyticsScreen() {
         <View style={styles.insightCard}>
           <Text style={styles.sectionTitle}>Business Insights</Text>
 
-          <InsightRow
-            icon="flash-outline"
-            title="Active Orders"
-            value={`${summary?.activeOrders || 0} running now`}
-          />
-
+          <InsightRow icon="flash-outline" title="Active Orders" value={`${summary?.activeOrders || 0} running now`} />
           <InsightRow
             icon="trophy-outline"
             title="Best Day"
-            value={
-              insight.bestDay
-                ? `${insight.bestDay.label} • ${money(insight.bestDay.earnings)}`
-                : "No data yet"
-            }
+            value={insight.bestDay ? `${insight.bestDay.label} • ${money(insight.bestDay.earnings)}` : "No data yet"}
           />
-
-          <InsightRow
-            icon="analytics-outline"
-            title="Average Order Value"
-            value={money(summary?.averageOrderValue, 2)}
-          />
-
-          <InsightRow
-            icon="close-circle-outline"
-            title="Cancelled Orders"
-            value={`${summary?.cancelledOrders || 0} cancelled`}
-            danger
-          />
+          <InsightRow icon="analytics-outline" title="Average Order Value" value={money(summary?.averageOrderValue, 2)} />
+          <InsightRow icon="wallet-outline" title="Lifetime Revenue" value={money(summary?.lifetimeRevenue, 2)} />
+          <InsightRow icon="close-circle-outline" title="Cancelled Orders" value={`${summary?.cancelledOrders || 0} cancelled`} danger />
         </View>
 
         <View style={styles.tipCard}>
@@ -269,8 +279,7 @@ export default function VendorAnalyticsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.tipTitle}>Smart Tip</Text>
             <Text style={styles.tipText}>
-              Keep prep time accurate during rush hours. It improves customer trust
-              and reduces cancellations.
+              Keep prep time accurate during rush hours. It improves customer trust and reduces cancellations.
             </Text>
           </View>
         </View>
@@ -300,7 +309,7 @@ function BarGraph({
 
         return (
           <TouchableOpacity
-            key={item.date || index}
+            key={`${item.date}-${index}`}
             style={styles.barItem}
             activeOpacity={0.85}
             onPress={() => onSelect(index)}
@@ -321,7 +330,7 @@ function BarGraph({
               />
             </View>
 
-            <Text style={[styles.barLabel, selected && styles.barLabelActive]}>
+            <Text style={[styles.barLabel, selected && styles.barLabelActive]} numberOfLines={1}>
               {item.label}
             </Text>
           </TouchableOpacity>
@@ -337,7 +346,7 @@ function StatCard({ icon, label, value }: any) {
       <View style={styles.statIcon}>
         <Icon name={icon} size={20} color={THEME.bg} />
       </View>
-      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statValue} numberOfLines={1}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -393,6 +402,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 12,
   },
   kicker: {
     color: THEME.green,
@@ -421,11 +431,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 12,
   },
   heroLabel: { color: THEME.bg, fontWeight: "900", opacity: 0.76 },
   heroValue: {
     color: THEME.bg,
-    fontSize: 36,
+    fontSize: 34,
     fontWeight: "900",
     marginTop: 7,
   },
@@ -499,7 +510,7 @@ const styles = StyleSheet.create({
   emptyTitle: { color: THEME.text, fontWeight: "900", fontSize: 17, marginTop: 10 },
   emptyText: { color: THEME.muted, textAlign: "center", marginTop: 5, fontWeight: "700" },
   chartWrapper: {
-    height: 190,
+    minHeight: 190,
     flexDirection: "row",
     alignItems: "flex-end",
     justifyContent: "space-between",
@@ -507,14 +518,8 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
     paddingTop: 8,
   },
-  barItem: {
-    alignItems: "center",
-    flex: 1,
-  },
-  barContainer: {
-    height: 136,
-    justifyContent: "flex-end",
-  },
+  barItem: { alignItems: "center", flex: 1, minWidth: 34 },
+  barContainer: { height: 136, justifyContent: "flex-end" },
   bar: {
     width: 22,
     borderTopLeftRadius: 12,
@@ -529,18 +534,15 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     minHeight: 14,
   },
-  barValueActive: {
-    color: THEME.yellow,
-  },
+  barValueActive: { color: THEME.yellow },
   barLabel: {
     color: THEME.muted,
     fontSize: 11,
     marginTop: 8,
     fontWeight: "800",
+    maxWidth: 38,
   },
-  barLabelActive: {
-    color: THEME.yellow,
-  },
+  barLabelActive: { color: THEME.yellow },
   scoreCard: {
     marginHorizontal: 20,
     marginTop: 18,
@@ -552,6 +554,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 12,
   },
   scoreLabel: { color: THEME.green, fontWeight: "900", fontSize: 12 },
   scoreTitle: { color: THEME.text, fontSize: 22, fontWeight: "900", marginTop: 5 },

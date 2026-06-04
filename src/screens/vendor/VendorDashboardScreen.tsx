@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   View,
   Text,
@@ -13,16 +19,15 @@ import {
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { io, Socket } from "socket.io-client";
-const SOCKET_BASE_URL =
-  "https://karto-backend-kor1.onrender.com";
+
+import apiClient from "@/api/apiClient";
+import { useAuth } from "@/context/AuthContext";
 import {
   vendorService,
   VendorDashboard,
   VendorOrder,
   VendorOrderStatus,
 } from "@/services/api/vendorService";
-import { useAuth } from "@/context/AuthContext";
-import apiClient from "@/api/apiClient";
 
 const THEME = {
   bg: "#070A07",
@@ -34,31 +39,68 @@ const THEME = {
   muted: "#A7B0A5",
   border: "#273027",
   danger: "#EF4444",
+  orange: "#FB923C",
 };
 
 const PREP_TIMES = [15, 20, 25, 30, 40, 45];
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
 
-const getSocketUrl = () => SOCKET_BASE_URL.replace("/api/", "").replace("/api", "");
+const getSocketUrl = () => {
+  const baseUrl = String(apiClient.defaults.baseURL || "").trim();
+  return baseUrl.replace(/\/api\/?$/, "");
+};
+
+const getOrderNumber = (order?: VendorOrder | null) => {
+  return order?.orderNumber || order?.order_number || order?.id?.slice(0, 8) || "-";
+};
+
+const getOrderTotal = (order?: VendorOrder | null) => {
+  return Number(order?.totalAmount ?? order?.total_amount ?? 0);
+};
 
 const statusLabel = (status?: string) => {
   const map: Record<string, string> = {
     PLACED: "New",
+    ACCEPTED: "Accepted",
     ACCEPTED_BY_VENDOR: "Accepted",
+    REJECTED: "Rejected",
     PREPARING: "Preparing",
+    READY: "Ready",
     READY_FOR_PICKUP: "Ready",
-    ASSIGNED_TO_RIDER: "Rider",
+    ASSIGNED_TO_RIDER: "Rider Assigned",
     PICKED_UP: "Picked",
     OUT_FOR_DELIVERY: "On Way",
     DELIVERED: "Delivered",
     CANCELLED: "Cancelled",
   };
+
   return map[status || ""] || status || "-";
+};
+
+const isNewOrder = (status?: string) => status === "PLACED";
+
+const mergeRecentOrders = (
+  currentOrders: VendorOrder[],
+  nextOrder: VendorOrder
+): VendorOrder[] => {
+  const exists = currentOrders.some((order) => order.id === nextOrder.id);
+
+  if (exists) {
+    return currentOrders.map((order) =>
+      order.id === nextOrder.id ? { ...order, ...nextOrder } : order
+    );
+  }
+
+  return [nextOrder, ...currentOrders];
 };
 
 export default function VendorDashboardScreen({ navigation }: any) {
   const { user, signOut } = useAuth();
+
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seenOrderIdsRef = useRef<Set<string>>(new Set());
+  const socketRef = useRef<Socket | null>(null);
 
   const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,71 +113,159 @@ export default function VendorDashboardScreen({ navigation }: any) {
   const [alertVisible, setAlertVisible] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 2200);
-  };
-
-  const loadDashboard = useCallback(async () => {
-    const { data, error } = await vendorService.getDashboard();
-
-    if (error) {
-      showToast(error?.message || "Failed to load dashboard");
-    } else {
-      setDashboard(data);
+  const showToast = useCallback((msg: string) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
     }
 
-    setLoading(false);
-    setRefreshing(false);
+    setToast(msg);
+
+    toastTimerRef.current = setTimeout(() => {
+      setToast("");
+    }, 2400);
   }, []);
+
+  const loadDashboard = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
+
+      const { data, error } = await vendorService.getDashboard();
+
+      if (error) {
+        showToast(error?.message || "Failed to load dashboard");
+      } else if (data) {
+        setDashboard(data);
+
+        const orderIds = (data.recentOrders || [])
+          .filter((order) => Boolean(order?.id))
+          .map((order) => order.id);
+
+        seenOrderIdsRef.current = new Set([
+          ...Array.from(seenOrderIdsRef.current),
+          ...orderIds,
+        ]);
+      }
+
+      setLoading(false);
+      setRefreshing(false);
+    },
+    [showToast]
+  );
 
   useEffect(() => {
     loadDashboard();
+
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      Vibration.cancel();
+    };
   }, [loadDashboard]);
 
   useEffect(() => {
     if (!user?.id) return;
 
-    const socket: Socket = io(getSocketUrl(), {
+    const socketUrl = getSocketUrl();
+
+    if (!socketUrl) {
+      showToast("Realtime URL missing");
+      return;
+    }
+
+    const socket: Socket = io(socketUrl, {
       transports: ["websocket"],
       reconnection: true,
       reconnectionAttempts: 999,
       reconnectionDelay: 1200,
+      timeout: 12000,
+      auth: {
+        userId: user.id,
+        role: user.role,
+      },
     });
+
+    socketRef.current = socket;
 
     socket.on("connect", () => {
       setSocketConnected(true);
       socket.emit("joinVendorRoom", user.id);
+      socket.emit("join_vendor_room", user.id);
     });
 
     socket.on("disconnect", () => {
       setSocketConnected(false);
     });
 
-    socket.on("NEW_ORDER", (order: VendorOrder) => {
-      setIncomingOrder(order);
-      setAlertVisible(true);
-      Vibration.vibrate([700, 400, 700, 400], true);
-      showToast("New order received");
-      loadDashboard();
+    socket.on("connect_error", () => {
+      setSocketConnected(false);
     });
 
-    socket.on("VENDOR_DASHBOARD_REFRESH", () => {
-      loadDashboard();
-    });
+    const handleNewOrder = (order: VendorOrder) => {
+      if (!order?.id) {
+        loadDashboard(true);
+        return;
+      }
+
+      if (seenOrderIdsRef.current.has(order.id)) {
+        setDashboard((prev) =>
+          prev
+            ? {
+                ...prev,
+                recentOrders: mergeRecentOrders(prev.recentOrders || [], order),
+              }
+            : prev
+        );
+        return;
+      }
+
+      seenOrderIdsRef.current.add(order.id);
+
+      setIncomingOrder(order);
+      setAlertVisible(true);
+
+      Vibration.cancel();
+      Vibration.vibrate([700, 400, 700, 400], true);
+
+      showToast("New order received");
+
+      setDashboard((prev) => {
+        if (!prev) return prev;
+
+        return {
+          ...prev,
+          todayOrders: Number(prev.todayOrders || 0) + 1,
+          activeOrders: Number(prev.activeOrders || 0) + 1,
+          recentOrders: mergeRecentOrders(prev.recentOrders || [], order),
+        };
+      });
+
+      loadDashboard(true);
+    };
+
+    socket.on("NEW_ORDER", handleNewOrder);
+    socket.on("new_order", handleNewOrder);
+    socket.on("ORDER_CREATED", handleNewOrder);
+
+    socket.on("VENDOR_DASHBOARD_REFRESH", () => loadDashboard(true));
+    socket.on("ORDER_STATUS_UPDATED", () => loadDashboard(true));
+    socket.on("RIDER_ASSIGNED", () => loadDashboard(true));
 
     return () => {
       Vibration.cancel();
       socket.emit("leaveVendorRoom", user.id);
+      socket.emit("leave_vendor_room", user.id);
+      socket.off("NEW_ORDER", handleNewOrder);
+      socket.off("new_order", handleNewOrder);
+      socket.off("ORDER_CREATED", handleNewOrder);
       socket.disconnect();
+      socketRef.current = null;
     };
-  }, [user?.id, loadDashboard]);
+  }, [user?.id, user?.role, loadDashboard, showToast]);
 
   const recentOrders = dashboard?.recentOrders || [];
   const restaurant = dashboard?.restaurants?.[0];
 
   const newOrderCount = useMemo(() => {
-    return recentOrders.filter((x) => x.status === "PLACED").length;
+    return recentOrders.filter((order) => isNewOrder(order.status)).length;
   }, [recentOrders]);
 
   const quickStats = useMemo(
@@ -196,11 +326,31 @@ export default function VendorDashboardScreen({ navigation }: any) {
     setAlertVisible(false);
     setIncomingOrder(null);
     setActionLoading(false);
+
     showToast(status === "CANCELLED" ? "Order rejected" : "Order accepted");
-    loadDashboard();
+
+    setDashboard((prev) => {
+      if (!prev) return prev;
+
+      const updatedOrders = (prev.recentOrders || []).map((order) =>
+        order.id === data.id ? { ...order, ...data } : order
+      );
+
+      return {
+        ...prev,
+        recentOrders: updatedOrders,
+      };
+    });
+
+    loadDashboard(true);
   };
 
-  if (loading) {
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadDashboard(true);
+  };
+
+  if (loading && !dashboard) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={THEME.green} />
@@ -226,24 +376,25 @@ export default function VendorDashboardScreen({ navigation }: any) {
             refreshing={refreshing}
             tintColor={THEME.green}
             colors={[THEME.green]}
-            onRefresh={() => {
-              setRefreshing(true);
-              loadDashboard();
-            }}
+            onRefresh={onRefresh}
           />
         }
         contentContainerStyle={styles.content}
       >
         <View style={styles.header}>
-          <View style={{ flex: 1 }}>
+          <View style={styles.headerLeft}>
             <Text style={styles.kicker}>Karto Vendor</Text>
             <Text style={styles.title}>Dashboard</Text>
-            <Text style={styles.vendorName}>
+            <Text style={styles.vendorName} numberOfLines={1}>
               {restaurant?.name || user?.fullName || user?.email || "Vendor"}
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.logoutBtn} activeOpacity={0.85} onPress={signOut}>
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            activeOpacity={0.85}
+            onPress={signOut}
+          >
             <Icon name="log-out-outline" size={22} color={THEME.bg} />
           </TouchableOpacity>
         </View>
@@ -251,7 +402,9 @@ export default function VendorDashboardScreen({ navigation }: any) {
         <View style={styles.liveStrip}>
           <View style={[styles.liveDot, !socketConnected && styles.offlineDot]} />
           <Text style={styles.liveText}>
-            {socketConnected ? "Realtime alerts active" : "Connecting realtime alerts..."}
+            {socketConnected
+              ? "Realtime alerts active"
+              : "Connecting realtime alerts..."}
           </Text>
 
           {newOrderCount > 0 && (
@@ -262,11 +415,12 @@ export default function VendorDashboardScreen({ navigation }: any) {
         </View>
 
         <View style={styles.heroCard}>
-          <View style={{ flex: 1 }}>
+          <View style={styles.heroContent}>
             <Text style={styles.heroLabel}>Today Revenue</Text>
             <Text style={styles.heroAmount}>{money(dashboard?.todayRevenue)}</Text>
             <Text style={styles.heroSub}>
-              {dashboard?.todayOrders || 0} orders today • {dashboard?.activeOrders || 0} active
+              {dashboard?.todayOrders || 0} orders today •{" "}
+              {dashboard?.activeOrders || 0} active
             </Text>
           </View>
 
@@ -276,11 +430,14 @@ export default function VendorDashboardScreen({ navigation }: any) {
         </View>
 
         <View style={styles.storeCard}>
-          <View>
+          <View style={styles.storeInfo}>
             <Text style={styles.storeLabel}>Store Status</Text>
-            <Text style={styles.storeName}>{restaurant?.name || "Your Store"}</Text>
-            <Text style={styles.storeMeta}>
-              {restaurant?.deliveryTime || "30-45 mins"} • Rating {restaurant?.rating || "0"}
+            <Text style={styles.storeName} numberOfLines={1}>
+              {restaurant?.name || "Your Store"}
+            </Text>
+            <Text style={styles.storeMeta} numberOfLines={1}>
+              {restaurant?.deliveryTime || "30-45 mins"} • Rating{" "}
+              {restaurant?.rating || "0"}
             </Text>
           </View>
 
@@ -303,18 +460,47 @@ export default function VendorDashboardScreen({ navigation }: any) {
         </View>
 
         <View style={styles.quickGrid}>
-          <QuickAction icon="bag-check-outline" title="Orders" highlight onPress={() => navigation.navigate("VendorOrders")} />
-          <QuickAction icon="fast-food-outline" title="Menu" onPress={() => navigation.navigate("VendorMenu")} />
-          <QuickAction icon="pricetags-outline" title="Categories" onPress={() => navigation.navigate("VendorCategories")} />
-          <QuickAction icon="card-outline" title="Payments" onPress={() => navigation.navigate("VendorPayments")} />
-          <QuickAction icon="bar-chart-outline" title="Analytics" onPress={() => navigation.navigate("VendorAnalytics")} />
-          <QuickAction icon="settings-outline" title="Settings" onPress={() => navigation.navigate("VendorSettings")} />
+          <QuickAction
+            icon="bag-check-outline"
+            title="Orders"
+            highlight
+            badge={newOrderCount}
+            onPress={() => navigation.navigate("VendorOrders")}
+          />
+          <QuickAction
+            icon="fast-food-outline"
+            title="Menu"
+            onPress={() => navigation.navigate("VendorMenu")}
+          />
+          <QuickAction
+            icon="pricetags-outline"
+            title="Categories"
+            onPress={() => navigation.navigate("VendorCategories")}
+          />
+          <QuickAction
+            icon="card-outline"
+            title="Payments"
+            onPress={() => navigation.navigate("VendorPayments")}
+          />
+          <QuickAction
+            icon="bar-chart-outline"
+            title="Analytics"
+            onPress={() => navigation.navigate("VendorAnalytics")}
+          />
+          <QuickAction
+            icon="settings-outline"
+            title="Settings"
+            onPress={() => navigation.navigate("VendorSettings")}
+          />
         </View>
 
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Orders</Text>
 
-          <TouchableOpacity activeOpacity={0.85} onPress={() => navigation.navigate("VendorOrders")}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate("VendorOrders")}
+          >
             <Text style={styles.viewAll}>View all</Text>
           </TouchableOpacity>
         </View>
@@ -325,7 +511,9 @@ export default function VendorDashboardScreen({ navigation }: any) {
               <Icon name="receipt-outline" size={32} color={THEME.yellow} />
             </View>
             <Text style={styles.emptyTitle}>No recent orders</Text>
-            <Text style={styles.emptyText}>New customer orders will appear here.</Text>
+            <Text style={styles.emptyText}>
+              New customer orders will appear here instantly.
+            </Text>
           </View>
         ) : (
           recentOrders.map((order) => (
@@ -344,7 +532,9 @@ export default function VendorDashboardScreen({ navigation }: any) {
         loading={actionLoading}
         onClose={closeAlert}
         onAccept={(min) => updateIncomingOrder("ACCEPTED_BY_VENDOR", min)}
-        onReject={() => updateIncomingOrder("CANCELLED", undefined, "Rejected by vendor")}
+        onReject={() =>
+          updateIncomingOrder("CANCELLED", undefined, "Rejected by vendor")
+        }
       />
     </View>
   );
@@ -367,13 +557,15 @@ function NewOrderModal({
 }) {
   if (!order) return null;
 
-  const orderNumber = order.orderNumber || order.order_number || order.id?.slice(0, 8);
-  const total = Number(order.totalAmount ?? order.total_amount ?? 0);
+  const orderNumber = getOrderNumber(order);
+  const total = getOrderTotal(order);
   const items = order.items || [];
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
-      <Pressable style={styles.alertOverlay}>
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.alertOverlay}>
+        <Pressable style={styles.alertBackdrop} onPress={onClose} />
+
         <View style={styles.alertCard}>
           <View style={styles.ringIcon}>
             <Icon name="notifications" size={36} color={THEME.bg} />
@@ -386,8 +578,8 @@ function NewOrderModal({
           <View style={styles.alertInfoRow}>
             <View style={styles.alertInfoPill}>
               <Icon name="person-outline" size={14} color={THEME.yellow} />
-              <Text style={styles.alertInfoText}>
-                {order.user?.fullName|| "Customer"}
+              <Text style={styles.alertInfoText} numberOfLines={1}>
+                {order.user?.fullName || "Customer"}
               </Text>
             </View>
 
@@ -399,7 +591,7 @@ function NewOrderModal({
 
           <View style={styles.alertItemsBox}>
             {items.slice(0, 4).map((item: any) => (
-              <Text key={item.id} style={styles.alertItemLine}>
+              <Text key={item.id} style={styles.alertItemLine} numberOfLines={1}>
                 {item.quantity}x {item.menuItem?.name || item.itemName || "Item"}
               </Text>
             ))}
@@ -417,7 +609,7 @@ function NewOrderModal({
             {PREP_TIMES.map((min) => (
               <TouchableOpacity
                 key={min}
-                style={styles.prepChip}
+                style={[styles.prepChip, loading && styles.disabledBtn]}
                 activeOpacity={0.85}
                 disabled={loading}
                 onPress={() => onAccept(min)}
@@ -430,7 +622,7 @@ function NewOrderModal({
 
           <View style={styles.alertActions}>
             <TouchableOpacity
-              style={styles.rejectBtn}
+              style={[styles.rejectBtn, loading && styles.disabledBtn]}
               activeOpacity={0.85}
               disabled={loading}
               onPress={onReject}
@@ -440,7 +632,7 @@ function NewOrderModal({
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.viewBtn}
+              style={[styles.viewBtn, loading && styles.disabledBtn]}
               activeOpacity={0.85}
               disabled={loading}
               onPress={onClose}
@@ -455,7 +647,7 @@ function NewOrderModal({
             </View>
           )}
         </View>
-      </Pressable>
+      </View>
     </Modal>
   );
 }
@@ -472,17 +664,25 @@ function StatCard({ icon, label, value }: any) {
   );
 }
 
-function QuickAction({ icon, title, onPress, highlight }: any) {
+function QuickAction({ icon, title, onPress, highlight, badge }: any) {
   return (
     <TouchableOpacity
       style={[styles.quickCard, highlight && styles.quickCardHighlight]}
       activeOpacity={0.85}
       onPress={onPress}
     >
+      {!!badge && (
+        <View style={styles.quickBadge}>
+          <Text style={styles.quickBadgeText}>{badge}</Text>
+        </View>
+      )}
+
       <View style={[styles.quickIcon, highlight && styles.quickIconHighlight]}>
         <Icon name={icon} size={24} color={highlight ? THEME.bg : THEME.green} />
       </View>
-      <Text style={[styles.quickText, highlight && styles.quickTextHighlight]}>{title}</Text>
+      <Text style={[styles.quickText, highlight && styles.quickTextHighlight]}>
+        {title}
+      </Text>
     </TouchableOpacity>
   );
 }
@@ -494,8 +694,8 @@ function OrderMiniCard({
   order: VendorOrder;
   onPress: () => void;
 }) {
-  const orderNumber = order.orderNumber || order.order_number || order.id.slice(0, 8);
-  const total = Number(order.totalAmount ?? order.total_amount ?? 0);
+  const orderNumber = getOrderNumber(order);
+  const total = getOrderTotal(order);
 
   return (
     <TouchableOpacity style={styles.orderCard} activeOpacity={0.9} onPress={onPress}>
@@ -503,14 +703,14 @@ function OrderMiniCard({
         <Icon name="receipt-outline" size={20} color={THEME.yellow} />
       </View>
 
-      <View style={{ flex: 1 }}>
+      <View style={styles.orderInfo}>
         <Text style={styles.orderTitle}>#{orderNumber}</Text>
-        <Text style={styles.orderMeta}>
+        <Text style={styles.orderMeta} numberOfLines={1}>
           {order.user?.fullName || "Customer"} • {order.items?.length || 0} item(s)
         </Text>
       </View>
 
-      <View style={{ alignItems: "flex-end" }}>
+      <View style={styles.orderRight}>
         <Text style={styles.orderAmount}>{money(total)}</Text>
         <Text style={styles.statusText}>{statusLabel(order.status)}</Text>
       </View>
@@ -522,7 +722,12 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
   container: { flex: 1, backgroundColor: THEME.bg },
   content: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 40 },
-  center: { flex: 1, backgroundColor: THEME.bg, alignItems: "center", justifyContent: "center" },
+  center: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "800" },
 
   toast: {
@@ -544,7 +749,14 @@ const styles = StyleSheet.create({
   toastText: { color: THEME.text, fontWeight: "900", flex: 1 },
 
   header: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
-  kicker: { color: THEME.green, fontSize: 12, fontWeight: "900", letterSpacing: 1, textTransform: "uppercase" },
+  headerLeft: { flex: 1, paddingRight: 12 },
+  kicker: {
+    color: THEME.green,
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
   title: { color: THEME.text, fontSize: 34, fontWeight: "900", marginTop: 2 },
   vendorName: { color: THEME.muted, marginTop: 5, fontWeight: "700" },
   logoutBtn: {
@@ -589,6 +801,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
+  heroContent: { flex: 1, paddingRight: 12 },
   heroLabel: { color: THEME.bg, fontWeight: "900", opacity: 0.8 },
   heroAmount: { color: THEME.bg, fontSize: 34, fontWeight: "900", marginTop: 5 },
   heroSub: { color: THEME.bg, marginTop: 5, fontWeight: "800", opacity: 0.8 },
@@ -612,7 +825,13 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-  storeLabel: { color: THEME.green, fontWeight: "900", fontSize: 12, textTransform: "uppercase" },
+  storeInfo: { flex: 1 },
+  storeLabel: {
+    color: THEME.green,
+    fontWeight: "900",
+    fontSize: 12,
+    textTransform: "uppercase",
+  },
   storeName: { color: THEME.text, fontSize: 18, fontWeight: "900", marginTop: 4 },
   storeMeta: { color: THEME.muted, marginTop: 4, fontWeight: "700" },
   openBadge: {
@@ -626,7 +845,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
-  closedBadge: { backgroundColor: "rgba(239,68,68,0.12)", borderColor: "rgba(239,68,68,0.35)" },
+  closedBadge: {
+    backgroundColor: "rgba(239,68,68,0.12)",
+    borderColor: "rgba(239,68,68,0.35)",
+  },
   dot: { width: 8, height: 8, borderRadius: 99, backgroundColor: THEME.green },
   dotClosed: { backgroundColor: THEME.danger },
   openText: { color: THEME.green, fontWeight: "900", fontSize: 12 },
@@ -653,7 +875,13 @@ const styles = StyleSheet.create({
   statValue: { color: THEME.text, fontSize: 22, fontWeight: "900" },
   statLabel: { color: THEME.muted, fontWeight: "700", marginTop: 4, fontSize: 12 },
 
-  sectionHeader: { marginTop: 24, marginBottom: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  sectionHeader: {
+    marginTop: 24,
+    marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   sectionTitle: { color: THEME.text, fontSize: 20, fontWeight: "900" },
   viewAll: { color: THEME.green, fontWeight: "900" },
 
@@ -666,8 +894,23 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: THEME.border,
+    position: "relative",
   },
   quickCardHighlight: { backgroundColor: THEME.green, borderColor: THEME.green },
+  quickBadge: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    minWidth: 22,
+    height: 22,
+    borderRadius: 999,
+    backgroundColor: THEME.danger,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 6,
+    zIndex: 2,
+  },
+  quickBadgeText: { color: THEME.text, fontSize: 11, fontWeight: "900" },
   quickIcon: {
     width: 44,
     height: 44,
@@ -677,7 +920,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   quickIconHighlight: { backgroundColor: THEME.yellow },
-  quickText: { color: THEME.text, fontWeight: "900", fontSize: 12, marginTop: 9, textAlign: "center" },
+  quickText: {
+    color: THEME.text,
+    fontWeight: "900",
+    fontSize: 12,
+    marginTop: 9,
+    textAlign: "center",
+  },
   quickTextHighlight: { color: THEME.bg },
 
   emptyBox: {
@@ -719,8 +968,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  orderInfo: { flex: 1, minWidth: 0 },
   orderTitle: { color: THEME.text, fontWeight: "900", fontSize: 15 },
   orderMeta: { color: THEME.muted, marginTop: 4, fontWeight: "700" },
+  orderRight: { alignItems: "flex-end" },
   orderAmount: { color: THEME.green, fontWeight: "900" },
   statusText: { color: THEME.yellow, marginTop: 4, fontSize: 12, fontWeight: "900" },
 
@@ -729,6 +980,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.82)",
     justifyContent: "center",
     padding: 18,
+  },
+  alertBackdrop: {
+    ...StyleSheet.absoluteFillObject,
   },
   alertCard: {
     backgroundColor: THEME.card,
@@ -747,11 +1001,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 14,
   },
-  alertKicker: { color: THEME.green, fontWeight: "900", letterSpacing: 1, textTransform: "uppercase" },
+  alertKicker: {
+    color: THEME.green,
+    fontWeight: "900",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
   alertTitle: { color: THEME.text, fontSize: 28, fontWeight: "900", marginTop: 5 },
   alertAmount: { color: THEME.green, fontSize: 34, fontWeight: "900", marginTop: 5 },
-  alertInfoRow: { flexDirection: "row", gap: 8, marginTop: 12, flexWrap: "wrap", justifyContent: "center" },
+  alertInfoRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+    flexWrap: "wrap",
+    justifyContent: "center",
+  },
   alertInfoPill: {
+    maxWidth: "46%",
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
@@ -807,4 +1073,5 @@ const styles = StyleSheet.create({
   },
   viewText: { color: THEME.text, fontWeight: "900" },
   alertLoader: { marginTop: 12 },
+  disabledBtn: { opacity: 0.55 },
 });

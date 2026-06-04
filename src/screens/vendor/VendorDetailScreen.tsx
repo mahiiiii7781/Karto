@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,12 +9,15 @@ import {
   TextInput,
   Modal,
   Pressable,
+  FlatList,
+  RefreshControl,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import {
   vendorService,
   VendorOrder,
   VendorOrderStatus,
+  RiderItem,
 } from "@/services/api/vendorService";
 
 const THEME = {
@@ -27,17 +30,43 @@ const THEME = {
   muted: "#A7B0A5",
   border: "#273027",
   danger: "#EF4444",
+  warning: "#F59E0B",
 };
 
 const PREP_TIMES = [15, 20, 25, 30, 40, 45, 60];
 
+const ACTIVE_VENDOR_STATUSES = [
+  "PLACED",
+  "ACCEPTED_BY_VENDOR",
+  "PREPARING",
+  "READY_FOR_PICKUP",
+] as VendorOrderStatus[];
+
+const RIDER_ASSIGN_STATUSES = [
+  "READY_FOR_PICKUP",
+  "ASSIGNED_TO_RIDER",
+] as VendorOrderStatus[];
+
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
+
+const normalizeOrder = (value: any): VendorOrder => ({
+  ...(value || {}),
+  status: value?.status || "PLACED",
+  items: Array.isArray(value?.items) ? value.items : [],
+});
+
+const getOrderNumber = (order?: Partial<VendorOrder> | null) => {
+  return order?.orderNumber || order?.order_number || order?.id?.slice(0, 8) || "ORDER";
+};
 
 const statusLabel = (status?: string) => {
   const map: Record<string, string> = {
     PLACED: "New Order",
+    ACCEPTED: "Accepted",
     ACCEPTED_BY_VENDOR: "Accepted",
+    REJECTED: "Rejected",
     PREPARING: "Preparing",
+    READY: "Ready",
     READY_FOR_PICKUP: "Ready For Pickup",
     ASSIGNED_TO_RIDER: "Rider Assigned",
     PICKED_UP: "Picked Up",
@@ -49,10 +78,21 @@ const statusLabel = (status?: string) => {
   return map[status || ""] || status || "-";
 };
 
+const statusColor = (status?: string) => {
+  if (status === "CANCELLED") return THEME.danger;
+  if (status === "DELIVERED") return THEME.green;
+  if (status === "PLACED") return THEME.yellow;
+  return THEME.green;
+};
+
 const formatDateTime = (value?: string | null) => {
   if (!value) return "-";
 
-  return new Date(value).toLocaleString("en-IN", {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) return "-";
+
+  return date.toLocaleString("en-IN", {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -60,32 +100,97 @@ const formatDateTime = (value?: string | null) => {
   });
 };
 
+const getAddressText = (address: any) => {
+  if (!address) return "-";
+
+  const parts = [
+    address?.address,
+    address?.fullAddress,
+    address?.line1,
+    address?.line2,
+    address?.landmark,
+    address?.city,
+    address?.pincode,
+  ].filter(Boolean);
+
+  return parts.length ? parts.join(", ") : address?.label || "-";
+};
+
 export default function VendorOrderDetailScreen({ route, navigation }: any) {
-  const [order, setOrder] = useState<VendorOrder>(route.params.order);
+  const initialOrder = normalizeOrder(route?.params?.order);
+
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [order, setOrder] = useState<VendorOrder>(initialOrder);
   const [prepTime, setPrepTime] = useState(
-    String(order.estimatedPreparationMinutes || 30)
+    String(initialOrder.estimatedPreparationMinutes || 30)
   );
+
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
+
   const [prepModal, setPrepModal] = useState(false);
+  const [riderModal, setRiderModal] = useState(false);
+  const [riders, setRiders] = useState<RiderItem[]>([]);
+  const [ridersLoading, setRidersLoading] = useState(false);
+  const [selectedRiderId, setSelectedRiderId] = useState<string | null>(null);
 
-  const orderNumber =
-    order.orderNumber || order.order_number || order.id?.slice(0, 8);
-
+  const orderNumber = getOrderNumber(order);
   const total = Number(order.totalAmount ?? order.total_amount ?? 0);
 
-  const itemTotal = useMemo(() => {
-    return (order.items || []).reduce((sum: number, item: any) => {
-      return (
-        sum +
-        Number(item.totalPrice || Number(item.price || 0) * item.quantity || 0)
-      );
-    }, 0);
-  }, [order.items]);
+  useEffect(() => {
+    return () => {
+      if (toastTimer.current) {
+        clearTimeout(toastTimer.current);
+      }
+    };
+  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(""), 2200);
+
+    if (toastTimer.current) {
+      clearTimeout(toastTimer.current);
+    }
+
+    toastTimer.current = setTimeout(() => {
+      setToast("");
+    }, 2200);
+  };
+
+  const itemTotal = useMemo(() => {
+    return (order.items || []).reduce((sum: number, item: any) => {
+      const quantity = Number(item?.quantity || 0);
+      const price = Number(item?.price ?? item?.menuItem?.price ?? 0);
+      const totalPrice = Number(item?.totalPrice ?? item?.total_price ?? 0);
+
+      return sum + (totalPrice || price * quantity);
+    }, 0);
+  }, [order.items]);
+
+  const canEditPrepTime = ACTIVE_VENDOR_STATUSES.includes(order.status);
+  const canAssignRider = RIDER_ASSIGN_STATUSES.includes(order.status);
+  const isClosedOrder = ["DELIVERED", "CANCELLED"].includes(order.status);
+
+  const refreshOrder = async () => {
+    setRefreshing(true);
+
+    const { data, error } = await vendorService.getOrders();
+
+    if (error) {
+      showToast(error?.message || "Failed to refresh order");
+      setRefreshing(false);
+      return;
+    }
+
+    const freshOrder = (data || []).find((item) => item.id === order.id);
+
+    if (freshOrder) {
+      setOrder(normalizeOrder(freshOrder));
+    }
+
+    setRefreshing(false);
   };
 
   const updateStatus = async (
@@ -93,7 +198,7 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
     minutes?: number,
     note?: string
   ) => {
-    if (loading) return;
+    if (loading || !order?.id) return;
 
     setLoading(true);
 
@@ -110,17 +215,25 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
       return;
     }
 
-    setOrder(data);
-    if (minutes) setPrepTime(String(minutes));
+    const updatedOrder = normalizeOrder(data);
+
+    setOrder(updatedOrder);
+
+    if (minutes) {
+      setPrepTime(String(minutes));
+    }
+
     setPrepModal(false);
     setLoading(false);
     showToast("Order updated successfully");
   };
 
   const updatePrepTime = async (minutes?: number) => {
+    if (loading || !order?.id) return;
+
     const finalMinutes = Number(minutes || prepTime);
 
-    if (!finalMinutes || finalMinutes < 5 || finalMinutes > 120) {
+    if (!Number.isFinite(finalMinutes) || finalMinutes < 5 || finalMinutes > 120) {
       showToast("Prep time must be between 5 and 120 minutes");
       return;
     }
@@ -138,17 +251,76 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
       return;
     }
 
-    setOrder((prev) => ({
-      ...prev,
-      ...(data || {}),
-      estimatedPreparationMinutes: finalMinutes,
-    }));
+    setOrder((prev) =>
+      normalizeOrder({
+        ...prev,
+        ...(data || {}),
+        estimatedPreparationMinutes: finalMinutes,
+      })
+    );
 
     setPrepTime(String(finalMinutes));
     setPrepModal(false);
     setLoading(false);
     showToast("Preparation time updated");
   };
+
+  const openRiderModal = async () => {
+    if (!canAssignRider) {
+      showToast("Rider can be assigned after order is ready");
+      return;
+    }
+
+    setRiderModal(true);
+    setRidersLoading(true);
+    setSelectedRiderId(order.rider?.id || null);
+
+    const { data, error } = await vendorService.getAvailableRiders();
+
+    if (error) {
+      showToast(error?.message || "Failed to load riders");
+      setRiders([]);
+    } else {
+      setRiders(data || []);
+    }
+
+    setRidersLoading(false);
+  };
+
+  const assignRider = async () => {
+    if (!selectedRiderId || !order?.id || loading) {
+      showToast("Please select a rider");
+      return;
+    }
+
+    setLoading(true);
+
+    const { data, error } = await vendorService.assignRider(order.id, selectedRiderId);
+
+    if (error || !data) {
+      showToast(error?.message || "Failed to assign rider");
+      setLoading(false);
+      return;
+    }
+
+    setOrder(normalizeOrder(data));
+    setRiderModal(false);
+    setLoading(false);
+    showToast(order.rider?.id ? "Rider reassigned" : "Rider assigned");
+  };
+
+  if (!order?.id) {
+    return (
+      <View style={styles.center}>
+        <Icon name="receipt-outline" size={44} color={THEME.yellow} />
+        <Text style={styles.emptyTitle}>Order not found</Text>
+        <Text style={styles.emptyText}>Please go back and open the order again.</Text>
+        <TouchableOpacity style={styles.backHomeBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.backHomeText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
@@ -163,6 +335,14 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
         style={styles.container}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.content}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            tintColor={THEME.green}
+            colors={[THEME.green]}
+            onRefresh={refreshOrder}
+          />
+        }
       >
         <View style={styles.header}>
           <TouchableOpacity
@@ -178,13 +358,20 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
             <Text style={styles.title}>#{orderNumber}</Text>
           </View>
 
-          <View style={styles.statusBadge}>
-            <Text style={styles.statusBadgeText}>{statusLabel(order.status)}</Text>
+          <View
+            style={[
+              styles.statusBadge,
+              { borderColor: statusColor(order.status), backgroundColor: `${statusColor(order.status)}22` },
+            ]}
+          >
+            <Text style={[styles.statusBadgeText, { color: statusColor(order.status) }]}>
+              {statusLabel(order.status)}
+            </Text>
           </View>
         </View>
 
         <View style={styles.heroCard}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.heroLabel}>Total Amount</Text>
             <Text style={styles.heroAmount}>{money(total)}</Text>
             <Text style={styles.heroSub}>
@@ -201,64 +388,44 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Customer</Text>
 
-          <InfoRow
-            icon="person-outline"
-            label="Name"
-            value={order.user?.fullName || "Customer"}
-          />
-          <InfoRow
-            icon="call-outline"
-            label="Phone"
-            value={order.user?.phone || "No phone"}
-          />
-          <InfoRow
-            icon="mail-outline"
-            label="Email"
-            value={order.user?.email || "-"}
-          />
-
-          {!!order.address && (
-            <InfoRow
-              icon="location-outline"
-              label="Address"
-              value={
-                order.address?.address ||
-                order.address?.fullAddress ||
-                order.address?.label ||
-                "-"
-              }
-            />
-          )}
+          <InfoRow icon="person-outline" label="Name" value={order.user?.fullName || "Customer"} />
+          <InfoRow icon="call-outline" label="Phone" value={order.user?.phone || "No phone"} />
+          <InfoRow icon="mail-outline" label="Email" value={order.user?.email || "-"} />
+          <InfoRow icon="location-outline" label="Address" value={getAddressText(order.address)} />
         </View>
 
         <View style={styles.card}>
           <View style={styles.cardHeader}>
             <Text style={styles.cardTitle}>Preparation Time</Text>
 
-            <TouchableOpacity
-              style={styles.editPill}
-              activeOpacity={0.85}
-              onPress={() => setPrepModal(true)}
-            >
-              <Icon name="timer-outline" size={15} color={THEME.bg} />
-              <Text style={styles.editPillText}>Quick Set</Text>
-            </TouchableOpacity>
+            {canEditPrepTime && (
+              <TouchableOpacity
+                style={styles.editPill}
+                activeOpacity={0.85}
+                disabled={loading}
+                onPress={() => setPrepModal(true)}
+              >
+                <Icon name="timer-outline" size={15} color={THEME.bg} />
+                <Text style={styles.editPillText}>Quick Set</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <View style={styles.prepBox}>
             <TextInput
               value={prepTime}
-              onChangeText={setPrepTime}
+              editable={canEditPrepTime && !loading}
+              onChangeText={(value) => setPrepTime(value.replace(/[^0-9]/g, ""))}
               keyboardType="number-pad"
               placeholder="Minutes"
               placeholderTextColor={THEME.muted}
-              style={styles.input}
+              style={[styles.input, !canEditPrepTime && styles.inputDisabled]}
             />
 
             <TouchableOpacity
-              style={styles.updateBtn}
+              style={[styles.updateBtn, !canEditPrepTime && styles.disabledBtn]}
               activeOpacity={0.85}
-              disabled={loading}
+              disabled={loading || !canEditPrepTime}
               onPress={() => updatePrepTime()}
             >
               {loading ? (
@@ -270,7 +437,9 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
           </View>
 
           <Text style={styles.helperText}>
-            Vendor can update prep time anytime before pickup.
+            {canEditPrepTime
+              ? "Vendor can update prep time before pickup."
+              : "Prep time is locked for this order status."}
           </Text>
         </View>
 
@@ -278,19 +447,20 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
           <Text style={styles.cardTitle}>Items</Text>
 
           {(order.items || []).map((item: any) => {
-            const name = item.menuItem?.name || item.itemName || "Item";
-            const lineTotal =
-              item.totalPrice || Number(item.price || 0) * item.quantity;
+            const name = item?.menuItem?.name || item?.itemName || "Item";
+            const price = Number(item?.price ?? item?.menuItem?.price ?? 0);
+            const quantity = Number(item?.quantity || 0);
+            const lineTotal = Number(item?.totalPrice ?? item?.total_price ?? 0) || price * quantity;
 
             return (
               <View key={item.id} style={styles.itemRow}>
                 <View style={styles.qtyBadge}>
-                  <Text style={styles.qtyText}>{item.quantity}x</Text>
+                  <Text style={styles.qtyText}>{quantity}x</Text>
                 </View>
 
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName}>{name}</Text>
-                  <Text style={styles.itemSub}>Price: {money(item.price)}</Text>
+                  <Text style={styles.itemSub}>Price: {money(price)}</Text>
                 </View>
 
                 <Text style={styles.itemAmount}>{money(lineTotal)}</Text>
@@ -319,12 +489,43 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
         )}
 
         <View style={styles.card}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTitle}>Rider Assignment</Text>
+
+            {canAssignRider && (
+              <TouchableOpacity
+                style={styles.editPill}
+                activeOpacity={0.85}
+                disabled={loading}
+                onPress={openRiderModal}
+              >
+                <Icon name="bicycle-outline" size={15} color={THEME.bg} />
+                <Text style={styles.editPillText}>{order.rider?.id ? "Reassign" : "Assign"}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <InfoRow
+            icon="bicycle-outline"
+            label="Rider"
+            value={order.rider?.fullName || order.rider?.name || "Not assigned"}
+          />
+          <InfoRow
+            icon="call-outline"
+            label="Rider Phone"
+            value={order.rider?.phone || "-"}
+          />
+        </View>
+
+        <View style={styles.card}>
           <Text style={styles.cardTitle}>Timeline</Text>
 
           <TimelineRow title="Placed" value={formatDateTime(order.createdAt || order.created_at)} active />
           <TimelineRow title="Accepted" value={formatDateTime(order.acceptedAt)} active={!!order.acceptedAt} />
           <TimelineRow title="Preparing" value={formatDateTime(order.preparingAt)} active={!!order.preparingAt} />
           <TimelineRow title="Ready" value={formatDateTime(order.readyAt)} active={!!order.readyAt} />
+          <TimelineRow title="Picked" value={formatDateTime(order.pickedAt)} active={!!order.pickedAt} />
+          <TimelineRow title="Delivered" value={formatDateTime(order.deliveredAt)} active={!!order.deliveredAt} />
           <TimelineRow title="Cancelled" value={formatDateTime(order.cancelledAt)} active={!!order.cancelledAt} danger />
         </View>
 
@@ -347,9 +548,7 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
                 style={styles.dangerBtn}
                 activeOpacity={0.85}
                 disabled={loading}
-                onPress={() =>
-                  updateStatus("CANCELLED", undefined, "Cancelled by vendor")
-                }
+                onPress={() => updateStatus("CANCELLED", undefined, "Cancelled by vendor")}
               >
                 <Icon name="close-circle" size={18} color={THEME.text} />
                 <Text style={styles.dangerText}>Reject</Text>
@@ -381,19 +580,24 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
             </TouchableOpacity>
           )}
 
-          {[
-            "READY_FOR_PICKUP",
-            "ASSIGNED_TO_RIDER",
-            "PICKED_UP",
-            "OUT_FOR_DELIVERY",
-            "DELIVERED",
-            "CANCELLED",
-          ].includes(order.status) && (
+          {canAssignRider && (
+            <TouchableOpacity
+              style={styles.secondaryBtnFull}
+              activeOpacity={0.85}
+              disabled={loading}
+              onPress={openRiderModal}
+            >
+              <Icon name="bicycle-outline" size={18} color={THEME.green} />
+              <Text style={styles.secondaryText}>
+                {order.rider?.id ? "Reassign Rider" : "Assign Rider"}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {isClosedOrder && (
             <View style={styles.lockedBox}>
               <Icon name="shield-checkmark-outline" size={20} color={THEME.green} />
-              <Text style={styles.lockedText}>
-                No vendor action available for this order.
-              </Text>
+              <Text style={styles.lockedText}>No vendor action available for this order.</Text>
             </View>
           )}
         </View>
@@ -405,9 +609,7 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
             <View style={styles.modalHandle} />
 
             <Text style={styles.modalTitle}>Choose preparation time</Text>
-            <Text style={styles.modalSub}>
-              This time will be visible to the customer.
-            </Text>
+            <Text style={styles.modalSub}>This time will be visible to the customer.</Text>
 
             <View style={styles.prepGrid}>
               {PREP_TIMES.map((min) => (
@@ -434,6 +636,83 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
               style={styles.modalCancel}
               activeOpacity={0.85}
               onPress={() => setPrepModal(false)}
+            >
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal visible={riderModal} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => setRiderModal(false)}>
+          <Pressable style={styles.modalCard}>
+            <View style={styles.modalHandle} />
+
+            <Text style={styles.modalTitle}>Assign rider</Text>
+            <Text style={styles.modalSub}>Select an available rider for this order.</Text>
+
+            {ridersLoading ? (
+              <View style={styles.riderLoader}>
+                <ActivityIndicator color={THEME.green} />
+                <Text style={styles.helperText}>Loading riders...</Text>
+              </View>
+            ) : riders.length === 0 ? (
+              <View style={styles.riderEmpty}>
+                <Icon name="bicycle-outline" size={34} color={THEME.yellow} />
+                <Text style={styles.emptyTitle}>No riders available</Text>
+                <Text style={styles.emptyText}>Try again after some time or assign from admin panel.</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={riders}
+                keyExtractor={(item) => item.id}
+                style={styles.riderList}
+                renderItem={({ item }) => {
+                  const selected = selectedRiderId === item.id;
+
+                  return (
+                    <TouchableOpacity
+                      style={[styles.riderRow, selected && styles.riderRowActive]}
+                      activeOpacity={0.85}
+                      onPress={() => setSelectedRiderId(item.id)}
+                    >
+                      <View style={styles.riderAvatar}>
+                        <Icon name="person-outline" size={19} color={selected ? THEME.bg : THEME.green} />
+                      </View>
+
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.riderName}>{item.fullName || item.email || "Rider"}</Text>
+                        <Text style={styles.riderMeta}>{item.phone || "No phone"}</Text>
+                      </View>
+
+                      <Icon
+                        name={selected ? "radio-button-on" : "radio-button-off"}
+                        size={21}
+                        color={selected ? THEME.yellow : THEME.muted}
+                      />
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+
+            <TouchableOpacity
+              style={[styles.saveRiderBtn, (!selectedRiderId || ridersLoading) && styles.disabledBtn]}
+              activeOpacity={0.85}
+              disabled={!selectedRiderId || ridersLoading || loading}
+              onPress={assignRider}
+            >
+              {loading ? (
+                <ActivityIndicator color={THEME.bg} />
+              ) : (
+                <Text style={styles.updateBtnText}>{order.rider?.id ? "Reassign Rider" : "Assign Rider"}</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.modalCancel}
+              activeOpacity={0.85}
+              onPress={() => setRiderModal(false)}
             >
               <Text style={styles.modalCancelText}>Cancel</Text>
             </TouchableOpacity>
@@ -499,6 +778,13 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 40,
   },
+  center: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
   toast: {
     position: "absolute",
     top: 14,
@@ -551,15 +837,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   statusBadge: {
-    backgroundColor: "rgba(246,195,67,0.14)",
     borderWidth: 1,
-    borderColor: "rgba(246,195,67,0.45)",
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 999,
   },
   statusBadgeText: {
-    color: THEME.yellow,
     fontWeight: "900",
     fontSize: 11,
   },
@@ -679,6 +962,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     fontWeight: "900",
   },
+  inputDisabled: {
+    opacity: 0.55,
+  },
   updateBtn: {
     height: 50,
     paddingHorizontal: 18,
@@ -690,6 +976,9 @@ const styles = StyleSheet.create({
   updateBtnText: {
     color: THEME.bg,
     fontWeight: "900",
+  },
+  disabledBtn: {
+    opacity: 0.55,
   },
   helperText: {
     color: THEME.muted,
@@ -729,9 +1018,28 @@ const styles = StyleSheet.create({
     color: THEME.yellow,
     fontWeight: "900",
   },
+  emptyTitle: {
+    color: THEME.text,
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 12,
+  },
   emptyText: {
     color: THEME.muted,
     fontWeight: "700",
+    textAlign: "center",
+    marginTop: 6,
+  },
+  backHomeBtn: {
+    marginTop: 18,
+    backgroundColor: THEME.green,
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  backHomeText: {
+    color: THEME.bg,
+    fontWeight: "900",
   },
   billBox: {
     marginTop: 14,
@@ -826,6 +1134,22 @@ const styles = StyleSheet.create({
     color: THEME.bg,
     fontWeight: "900",
   },
+  secondaryBtnFull: {
+    height: 52,
+    borderRadius: 17,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.green,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+    marginTop: 10,
+  },
+  secondaryText: {
+    color: THEME.green,
+    fontWeight: "900",
+  },
   dangerBtn: {
     flex: 1,
     height: 52,
@@ -859,6 +1183,7 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   modalCard: {
+    maxHeight: "86%",
     backgroundColor: THEME.card,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
@@ -910,7 +1235,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   modalCancel: {
-    marginTop: 18,
+    marginTop: 12,
     height: 50,
     borderRadius: 16,
     backgroundColor: THEME.card2,
@@ -920,5 +1245,62 @@ const styles = StyleSheet.create({
   modalCancelText: {
     color: THEME.text,
     fontWeight: "900",
+  },
+  riderLoader: {
+    paddingVertical: 22,
+    alignItems: "center",
+  },
+  riderEmpty: {
+    marginTop: 18,
+    padding: 22,
+    borderRadius: 20,
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+  },
+  riderList: {
+    marginTop: 16,
+    maxHeight: 330,
+  },
+  riderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "#0B100B",
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 12,
+    marginBottom: 10,
+  },
+  riderRowActive: {
+    borderColor: THEME.green,
+    backgroundColor: "rgba(34,197,94,0.1)",
+  },
+  riderAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 15,
+    backgroundColor: THEME.card2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  riderName: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  riderMeta: {
+    color: THEME.muted,
+    fontWeight: "700",
+    marginTop: 3,
+  },
+  saveRiderBtn: {
+    height: 52,
+    borderRadius: 17,
+    backgroundColor: THEME.green,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
   },
 });

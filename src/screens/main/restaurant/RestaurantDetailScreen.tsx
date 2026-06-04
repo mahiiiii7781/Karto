@@ -59,12 +59,45 @@ const boolVeg = (item: any) =>
 
 const price = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
 
+const normalizeRestaurantResponse = (res: any) =>
+  res?.data?.data?.restaurant ||
+  res?.data?.restaurant ||
+  res?.data?.data ||
+  res?.data ||
+  null;
+
+const normalizeMenuResponse = (res: any, restData?: any) => {
+  const list =
+    res?.data?.data?.items ||
+    res?.data?.data?.menuItems ||
+    res?.data?.data?.menu_items ||
+    res?.data?.items ||
+    res?.data?.menuItems ||
+    res?.data?.menu_items ||
+    res?.data ||
+    restData?.menu_items ||
+    restData?.menuItems ||
+    [];
+
+  return Array.isArray(list) ? list : [];
+};
+
+const normalizeFavoriteValue = (data: any) =>
+  Boolean(
+    data?.isFavorite ??
+      data?.is_favorite ??
+      data?.favorite ??
+      data?.data?.isFavorite ??
+      data?.data?.is_favorite ??
+      false
+  );
+
 export default function RestaurantDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const { user } = useAuth();
 
-  const restaurantId = route.params?.restaurantId;
+  const restaurantId = route.params?.restaurantId || route.params?.restaurant?.id;
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(route.params?.restaurant || null);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -171,9 +204,10 @@ export default function RestaurantDetailScreen() {
     try {
       const { data } = await cartService.getCartTotal();
 
+      const summary: any = data?.data || data || {};
       setCartSummary({
-        itemCount: Number(data?.itemCount || 0),
-        total: Number(data?.total || data?.totalAmount || 0),
+        itemCount: Number(summary?.itemCount || summary?.item_count || 0),
+        total: Number(summary?.total || summary?.totalAmount || summary?.total_amount || 0),
       });
     } catch {
       setCartSummary({ itemCount: 0, total: 0 });
@@ -185,7 +219,7 @@ export default function RestaurantDetailScreen() {
 
     try {
       const { data } = await favoriteService.isFavorite(restaurantId);
-      setIsFav(!!data?.isFavorite);
+      setIsFav(normalizeFavoriteValue(data));
     } catch {
       setIsFav(false);
     }
@@ -205,12 +239,18 @@ export default function RestaurantDetailScreen() {
         return;
       }
 
-      const restData: any = restaurantRes.data || null;
-      const menuData: any[] =
-        menuRes.data || restData?.menu_items || restData?.menuItems || [];
+      const restData: any = normalizeRestaurantResponse(restaurantRes);
+      const menuData: any[] = normalizeMenuResponse(menuRes, restData);
+
+      if (!restData) {
+        setRestaurant(null);
+        setMenuItems([]);
+        showToast("error", "Store unavailable", "Restaurant details are missing.");
+        return;
+      }
 
       setRestaurant(restData);
-      setMenuItems(Array.isArray(menuData) ? menuData : []);
+      setMenuItems(menuData);
 
       const previewReviews =
         restData?.ratings ||
@@ -241,7 +281,7 @@ export default function RestaurantDetailScreen() {
         return;
       }
 
-      const next = !!data?.isFavorite;
+      const next = normalizeFavoriteValue(data);
       setIsFav(next);
 
       showToast(

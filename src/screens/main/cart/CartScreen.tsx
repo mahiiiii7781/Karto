@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
   Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import Toast from "react-native-toast-message";
 
 import { cartService, CartItem } from "@/services/api/cartService";
@@ -36,9 +36,6 @@ const DELIVERY_FEE = 25;
 const PLATFORM_FEE = 5;
 const FREE_DELIVERY_ABOVE = 299;
 
-const FALLBACK_IMAGE =
-  "https://images.unsplash.com/photo-1546069901-ba9599a7e63c";
-
 export default function CartScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
@@ -49,6 +46,8 @@ export default function CartScreen() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [clearModalVisible, setClearModalVisible] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  const isGuest = !user?.id;
 
   const showToast = (
     type: "success" | "error" | "info",
@@ -65,22 +64,49 @@ export default function CartScreen() {
   };
 
   const requireAuth = (message = "Please sign in to continue.") => {
-    if (user?.id) return true;
+    if (!isGuest) return true;
 
     showToast("info", "Login required", message);
     navigation.navigate("Auth");
     return false;
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!requireAuth("Please sign in to view your cart.")) {
+  const loadCartItems = useCallback(
+    async (isRefresh = false) => {
+      if (isGuest) {
+        setItems([]);
         setLoading(false);
+        setRefreshing(false);
         return;
       }
 
-      loadCartItems();
-    }, [user?.id])
+      isRefresh ? setRefreshing(true) : setLoading(true);
+
+      try {
+        const { data, error } = await cartService.getCartItems();
+
+        if (error) {
+          setItems([]);
+          showToast("error", "Unable to load cart", "Please try again.");
+          return;
+        }
+
+        setItems(Array.isArray(data) ? data : []);
+      } catch {
+        setItems([]);
+        showToast("error", "Something went wrong", "Please try again.");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [isGuest]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      loadCartItems(false);
+    }, [loadCartItems])
   );
 
   const subtotal = useMemo(
@@ -102,41 +128,14 @@ export default function CartScreen() {
   const grandTotal = subtotal + deliveryFee + PLATFORM_FEE;
   const remainingForFreeDelivery = Math.max(FREE_DELIVERY_ABOVE - subtotal, 0);
 
-  const loadCartItems = async (isRefresh = false) => {
-    if (!user?.id) {
-      setItems([]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-
-    isRefresh ? setRefreshing(true) : setLoading(true);
-
-    try {
-      const { data, error } = await cartService.getCartItems();
-
-      if (error) {
-        setItems([]);
-        showToast("error", "Unable to load cart", "Please try again.");
-        return;
-      }
-
-      setItems(Array.isArray(data) ? data : []);
-    } catch {
-      setItems([]);
-      showToast("error", "Something went wrong", "Please try again.");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
   const confirmClearCart = () => {
     if (items.length === 0) return;
     setClearModalVisible(true);
   };
 
   const clearCart = async () => {
+    if (!requireAuth("Please sign in to manage your cart.")) return;
+
     try {
       setClearing(true);
 
@@ -149,7 +148,7 @@ export default function CartScreen() {
 
       setItems([]);
       setClearModalVisible(false);
-      showToast("success", "Cart cleared", "All items have been removed from your cart.");
+      showToast("success", "Cart cleared", "All items removed.");
     } catch {
       showToast("error", "Unable to clear cart", "Please try again.");
     } finally {
@@ -159,6 +158,7 @@ export default function CartScreen() {
 
   const removeItem = async (itemId: string) => {
     if (!itemId || updatingId) return;
+    if (!requireAuth("Please sign in to manage your cart.")) return;
 
     setUpdatingId(itemId);
 
@@ -171,7 +171,7 @@ export default function CartScreen() {
       }
 
       setItems(prev => prev.filter(i => i.id !== itemId));
-      showToast("success", "Item removed", "The item has been removed from your cart.");
+      showToast("success", "Item removed");
     } catch {
       showToast("error", "Unable to remove item", "Please try again.");
     } finally {
@@ -181,6 +181,7 @@ export default function CartScreen() {
 
   const updateQuantity = async (item: CartItem, nextQty: number) => {
     if (!item?.id || updatingId) return;
+    if (!requireAuth("Please sign in to manage your cart.")) return;
 
     if (nextQty < 1) {
       await removeItem(item.id);
@@ -223,13 +224,17 @@ export default function CartScreen() {
     item.menuItem?.imageUrl ||
     item.restaurant?.image_url ||
     item.restaurant?.imageUrl ||
-    FALLBACK_IMAGE;
+    "";
 
   const getItemName = (item: CartItem) =>
     item.menu_item?.name || item.menuItem?.name || "Cart Item";
 
   const getRestaurantName = (item: CartItem) =>
     item.restaurant?.restaurant_name || item.restaurant?.name || "Karto Store";
+
+  const goToHome = () => {
+    navigation.navigate("UserApp", { screen: "Home" });
+  };
 
   const goToCheckout = () => {
     if (!requireAuth("Please sign in to continue checkout.")) return;
@@ -250,13 +255,20 @@ export default function CartScreen() {
 
   const renderItem = ({ item }: { item: CartItem }) => {
     const disabled = updatingId === item.id;
+    const imageUri = getItemImage(item);
     const lineTotal =
       Number(item.total_price ?? item.totalPrice ?? 0) ||
       Number(item.price || 0) * Number(item.quantity || 0);
 
     return (
       <View style={styles.cartBox}>
-        <Image source={{ uri: getItemImage(item) }} style={styles.image} />
+        {imageUri ? (
+          <Image source={{ uri: imageUri }} style={styles.image} />
+        ) : (
+          <View style={styles.imageFallback}>
+            <Icon name="fast-food" size={28} color={THEME.yellow} />
+          </View>
+        )}
 
         <View style={styles.cardContent}>
           <View style={styles.titleRowInside}>
@@ -273,7 +285,7 @@ export default function CartScreen() {
               {disabled ? (
                 <ActivityIndicator size="small" color={THEME.green} />
               ) : (
-                <Icon name="trash-outline" size={19} color={THEME.danger} />
+                <Icon name="trash-outline" size={18} color={THEME.danger} />
               )}
             </TouchableOpacity>
           </View>
@@ -314,7 +326,7 @@ export default function CartScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={{ alignItems: "flex-end" }}>
+            <View style={styles.priceBox}>
               <Text style={styles.itemPrice}>₹{lineTotal.toFixed(2)}</Text>
               <Text style={styles.singlePrice}>
                 ₹{Number(item.price || 0).toFixed(0)} each
@@ -344,21 +356,31 @@ export default function CartScreen() {
       <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
 
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.iconBtn}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.iconBtn}
+          activeOpacity={0.85}
+        >
           <Icon name="chevron-back" size={24} color={THEME.text} />
         </TouchableOpacity>
 
-        <View style={{ flex: 1 }}>
+        <View style={styles.headerTextBox}>
           <Text style={styles.heading}>Your Cart</Text>
           <Text style={styles.subHeading}>
             {itemCount > 0
-              ? `${itemCount} item${itemCount > 1 ? "s" : ""} ready for checkout`
+              ? `${itemCount} item${itemCount > 1 ? "s" : ""} ready`
+              : isGuest
+              ? "Login to sync your cart"
               : "Your cart is empty"}
           </Text>
         </View>
 
         {items.length > 0 && (
-          <TouchableOpacity onPress={confirmClearCart} style={styles.clearBtn}>
+          <TouchableOpacity
+            onPress={confirmClearCart}
+            style={styles.clearBtn}
+            activeOpacity={0.85}
+          >
             <Icon name="trash" size={18} color={THEME.black} />
           </TouchableOpacity>
         )}
@@ -391,28 +413,47 @@ export default function CartScreen() {
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <View style={styles.emptyIcon}>
-              <Icon name="cart-outline" size={54} color={THEME.yellow} />
+              <Icon
+                name={isGuest ? "person-circle-outline" : "cart-outline"}
+                size={54}
+                color={THEME.yellow}
+              />
             </View>
 
-            <Text style={styles.emptyTitle}>Your cart is empty</Text>
+            <Text style={styles.emptyTitle}>
+              {isGuest ? "Guest cart is empty" : "Your cart is empty"}
+            </Text>
+
             <Text style={styles.emptyText}>
-              Add items from nearby stores and continue to checkout.
+              {isGuest
+                ? "Login to save items, checkout faster, and track orders."
+                : "Add fresh picks from nearby stores and checkout in seconds."}
             </Text>
 
             <TouchableOpacity
               style={styles.exploreBtn}
-              onPress={() => navigation.goBack()}
+              onPress={isGuest ? () => navigation.navigate("Auth") : goToHome}
               activeOpacity={0.9}
             >
-              <Text style={styles.exploreText}>Explore Stores</Text>
+              <Text style={styles.exploreText}>
+                {isGuest ? "Login / Signup" : "Explore Stores"}
+              </Text>
               <Icon name="arrow-forward" size={18} color={THEME.black} />
             </TouchableOpacity>
+
+            {isGuest && (
+              <TouchableOpacity
+                style={styles.secondaryBtn}
+                onPress={goToHome}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.secondaryText}>Continue as Guest</Text>
+              </TouchableOpacity>
+            )}
           </View>
         }
         contentContainerStyle={
-          items.length === 0
-            ? { flex: 1, justifyContent: "center" }
-            : { paddingBottom: 245 }
+          items.length === 0 ? styles.emptyListContent : styles.listContent
         }
       />
 
@@ -438,13 +479,17 @@ export default function CartScreen() {
 
             <View style={styles.divider} />
 
-            <View style={styles.billRow}>
+            <View style={styles.billRowLast}>
               <Text style={styles.totalLabel}>Grand Total</Text>
               <Text style={styles.totalValue}>₹{grandTotal.toFixed(2)}</Text>
             </View>
           </View>
 
-          <TouchableOpacity activeOpacity={0.9} style={styles.checkoutBtn} onPress={goToCheckout}>
+          <TouchableOpacity
+            activeOpacity={0.9}
+            style={styles.checkoutBtn}
+            onPress={goToCheckout}
+          >
             <View>
               <Text style={styles.checkoutSmall}>Payable</Text>
               <Text style={styles.checkoutAmount}>₹{grandTotal.toFixed(2)}</Text>
@@ -472,7 +517,7 @@ export default function CartScreen() {
 
             <Text style={styles.confirmTitle}>Clear cart?</Text>
             <Text style={styles.confirmText}>
-              This will remove all items from your cart. You can add them again anytime.
+              This will remove all items from your cart.
             </Text>
 
             <View style={styles.confirmActions}>
@@ -480,6 +525,7 @@ export default function CartScreen() {
                 style={styles.cancelBtn}
                 onPress={() => setClearModalVisible(false)}
                 disabled={clearing}
+                activeOpacity={0.85}
               >
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
@@ -488,6 +534,7 @@ export default function CartScreen() {
                 style={styles.confirmBtn}
                 onPress={clearCart}
                 disabled={clearing}
+                activeOpacity={0.85}
               >
                 {clearing ? (
                   <ActivityIndicator color={THEME.black} />
@@ -506,7 +553,7 @@ export default function CartScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 16,
+    paddingHorizontal: 16,
     paddingTop: Platform.OS === "ios" ? 54 : 18,
     backgroundColor: THEME.bg,
   },
@@ -542,6 +589,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
     marginBottom: 14,
+  },
+  headerTextBox: {
+    flex: 1,
   },
   iconBtn: {
     width: 44,
@@ -605,6 +655,17 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     marginRight: 14,
     backgroundColor: THEME.card2,
+  },
+  imageFallback: {
+    width: 92,
+    height: 104,
+    borderRadius: 18,
+    marginRight: 14,
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
   cardContent: {
     flex: 1,
@@ -688,6 +749,9 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginHorizontal: 13,
   },
+  priceBox: {
+    alignItems: "flex-end",
+  },
   itemPrice: {
     color: THEME.green,
     fontWeight: "900",
@@ -698,6 +762,13 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 2,
     fontWeight: "700",
+  },
+  emptyListContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
+  listContent: {
+    paddingBottom: 245,
   },
   emptyBox: {
     alignItems: "center",
@@ -741,6 +812,15 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     fontSize: 15,
   },
+  secondaryBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+  },
+  secondaryText: {
+    color: THEME.yellow,
+    fontWeight: "900",
+  },
   footer: {
     position: "absolute",
     left: 0,
@@ -750,7 +830,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: THEME.border,
     padding: 16,
-    paddingBottom: 26,
+    paddingBottom: Platform.OS === "ios" ? 28 : 22,
   },
   billCard: {
     backgroundColor: THEME.card,
@@ -764,6 +844,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 9,
+  },
+  billRowLast: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 0,
   },
   billLabel: {
     color: THEME.muted,

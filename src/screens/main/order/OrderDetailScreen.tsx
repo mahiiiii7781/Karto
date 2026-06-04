@@ -42,6 +42,22 @@ const STEPS = [
   "DELIVERED",
 ];
 
+const STATUS_ALIASES: Record<string, string> = {
+  ACCEPTED: "ACCEPTED_BY_VENDOR",
+  READY: "READY_FOR_PICKUP",
+  READY_FOR_DELIVERY: "READY_FOR_PICKUP",
+  RIDER_ASSIGNED: "ASSIGNED_TO_RIDER",
+  ASSIGNED: "ASSIGNED_TO_RIDER",
+  PICKED: "PICKED_UP",
+  ON_THE_WAY: "OUT_FOR_DELIVERY",
+  COMPLETED: "DELIVERED",
+};
+
+const normalizeStatus = (value: any) => {
+  const raw = String(value || "PLACED").toUpperCase();
+  return STATUS_ALIASES[raw] || raw;
+};
+
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
 const labelFromStatus = (status: string) => String(status || "").replaceAll("_", " ");
 
@@ -85,7 +101,7 @@ export default function OrderDetailScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (!requireAuth("Please sign in to view order details.")) {
+      if (!user?.id) {
         setLoading(false);
         return;
       }
@@ -112,7 +128,8 @@ export default function OrderDetailScreen() {
         return;
       }
 
-      setOrder(data);
+      const nextOrder = (data as any)?.data || (data as any)?.order || data;
+      setOrder(nextOrder || null);
     } catch {
       showToast("error", "Unable to load order", "Please try again.");
     } finally {
@@ -121,7 +138,7 @@ export default function OrderDetailScreen() {
     }
   };
 
-  const status = String(order?.status || "PLACED").toUpperCase();
+  const status = normalizeStatus(order?.status);
 
   const items = useMemo(() => {
     const list = order?.items || order?.orderItems || order?.order_items || [];
@@ -419,6 +436,40 @@ export default function OrderDetailScreen() {
       active: currentIndex === index,
     };
   };
+
+
+  if (!user?.id) {
+    return (
+      <View style={styles.center}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <View style={styles.loadingLogo}>
+          <Text style={styles.loadingLogoText}>K</Text>
+        </View>
+        <Text style={styles.emptyTitle}>Login required</Text>
+        <Text style={styles.emptySub}>Please sign in to view your order details.</Text>
+        <TouchableOpacity style={styles.loginBtn} onPress={() => navigation.navigate("Auth")}>
+          <Text style={styles.loginBtnText}>Login / Signup</Text>
+          <Icon name="arrow-forward" size={18} color={THEME.black} />
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!orderId && !order) {
+    return (
+      <View style={styles.center}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <View style={styles.loadingLogo}>
+          <Text style={styles.loadingLogoText}>K</Text>
+        </View>
+        <Text style={styles.emptyTitle}>Order unavailable</Text>
+        <Text style={styles.emptySub}>We could not find details for this order.</Text>
+        <TouchableOpacity style={styles.loginBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.loginBtnText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   if (loading || !order) {
     return (
@@ -961,6 +1012,36 @@ const styles = StyleSheet.create({
     marginTop: 12,
     color: THEME.muted,
     fontWeight: "800",
+  },
+  emptyTitle: {
+    color: THEME.text,
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 16,
+    textAlign: "center",
+  },
+  emptySub: {
+    color: THEME.muted,
+    marginTop: 8,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 20,
+    paddingHorizontal: 26,
+  },
+  loginBtn: {
+    marginTop: 22,
+    backgroundColor: THEME.green,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  loginBtnText: {
+    color: THEME.black,
+    fontWeight: "900",
+    fontSize: 15,
   },
   header: {
     paddingHorizontal: 20,

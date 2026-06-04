@@ -30,6 +30,9 @@ const THEME = {
   card2: "#151F19",
   green: "#22C55E",
   yellow: "#FACC15",
+  orange: "#FB923C",
+  purple: "#A78BFA",
+  blue: "#38BDF8",
   text: "#F8FAFC",
   muted: "#8A94A6",
   border: "#1E2A22",
@@ -37,7 +40,33 @@ const THEME = {
   black: "#050807",
 };
 
-const FALLBACK_IMAGE = "https://via.placeholder.com/600x360.png?text=Karto+Store";
+const showToast = (
+  type: "success" | "error" | "info",
+  text1: string,
+  text2?: string
+) => {
+  Toast.show({
+    type,
+    text1,
+    text2,
+    position: "bottom",
+    visibilityTime: 1900,
+  });
+};
+
+const normalizeFavorites = (payload: any): FavoriteItem[] => {
+  const raw =
+    payload?.data?.favorites ||
+    payload?.data?.restaurants ||
+    payload?.data?.data?.favorites ||
+    payload?.data?.data?.restaurants ||
+    payload?.data?.data ||
+    payload?.data ||
+    payload ||
+    [];
+
+  return Array.isArray(raw) ? raw : [];
+};
 
 export default function FavoritesScreen() {
   const navigation = useNavigation<any>();
@@ -50,90 +79,75 @@ export default function FavoritesScreen() {
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<FavoriteItem | null>(null);
 
-  const showToast = (
-    type: "success" | "error" | "info",
-    text1: string,
-    text2?: string
-  ) => {
-    Toast.show({
-      type,
-      text1,
-      text2,
-      position: "bottom",
-      visibilityTime: 1900,
-    });
-  };
+  const isGuest = !user?.id;
+
+  const loadFavorites = useCallback(
+    async (isRefresh = false) => {
+      if (isGuest) {
+        setFavorites([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      isRefresh ? setRefreshing(true) : setLoading(true);
+
+      try {
+        const res = await favoriteService.getFavoriteRestaurants();
+
+        if (res?.error) {
+          setFavorites([]);
+          showToast(
+            "error",
+            "Unable to load favorites",
+            res.error?.message || "Please try again."
+          );
+          return;
+        }
+
+        setFavorites(normalizeFavorites(res));
+
+        if (isRefresh) {
+          showToast("success", "Favorites updated", "Saved stores refreshed.");
+        }
+      } catch {
+        setFavorites([]);
+        showToast("error", "Unable to load favorites", "Please try again.");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [isGuest]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      loadFavorites(false);
+    }, [loadFavorites])
+  );
 
   const requireAuth = () => {
-    if (user?.id) return true;
-
-    showToast("info", "Login required", "Please sign in to view favorites.");
+    if (!isGuest) return true;
+    showToast("info", "Login required", "Please sign in to manage favorites.");
     navigation.navigate("Auth");
     return false;
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!requireAuth()) {
-        setLoading(false);
-        return;
-      }
-
-      loadFavorites(false);
-    }, [user?.id])
-  );
-
-  const loadFavorites = async (isRefresh = false) => {
-    if (!user?.id) {
-      setFavorites([]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-
-    isRefresh ? setRefreshing(true) : setLoading(true);
-
-    try {
-     const { data, error } = await favoriteService.getFavoriteRestaurants();
-
-      if (error) {
-        setFavorites([]);
-        showToast(
-          "error",
-          "Unable to load favorites",
-          error?.message || "Please try again."
-        );
-        return;
-      }
-
-      setFavorites(Array.isArray(data) ? data : []);
-
-      if (isRefresh) {
-        showToast("success", "Favorites updated", "Your saved stores are refreshed.");
-      }
-    } catch {
-      setFavorites([]);
-      showToast("error", "Unable to load favorites", "Please try again.");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
   const getRestaurant = (item: FavoriteItem): FavoriteRestaurant => {
-    return item.restaurant || ({} as FavoriteRestaurant);
+    return item.restaurant || (item as any) || ({} as FavoriteRestaurant);
   };
 
   const getRestaurantId = (item: FavoriteItem) => {
     const restaurant = getRestaurant(item);
-    return restaurant.id || item.restaurantId || item.restaurant_id || "";
+    return restaurant.id || item.restaurantId || item.restaurant_id || item.id || "";
   };
 
   const getName = (restaurant: FavoriteRestaurant) =>
-    restaurant.name || restaurant.restaurant_name || "Karto Store";
+    restaurant.name || restaurant.restaurant_name  || "Karto Store";
 
   const getImage = (restaurant: FavoriteRestaurant) =>
-    restaurant.imageUrl || restaurant.image_url || FALLBACK_IMAGE;
+    restaurant.imageUrl || restaurant.image_url || "FALLBACK_IMAGE";
 
   const isOpen = (restaurant: FavoriteRestaurant) =>
     Boolean(restaurant.isOpen ?? restaurant.is_open ?? true);
@@ -145,7 +159,7 @@ export default function FavoritesScreen() {
     restaurant.totalReviews || restaurant.total_reviews || 0;
 
   const getDeliveryTime = (restaurant: FavoriteRestaurant) =>
-    restaurant.deliveryTime || restaurant.delivery_time || "30-45 mins";
+    restaurant.deliveryTime || restaurant.delivery_time || "25-35 min";
 
   const getDeliveryFee = (restaurant: FavoriteRestaurant) => {
     const fee = Number(restaurant.deliveryFee ?? restaurant.delivery_fee ?? 0);
@@ -214,7 +228,7 @@ export default function FavoritesScreen() {
 
       setFavorites(prev => prev.filter(x => getRestaurantId(x) !== restaurantId));
       setRemoveTarget(null);
-      showToast("success", "Removed from favorites", "Store removed from your saved list.");
+      showToast("success", "Removed", "Store removed from favorites.");
     } catch {
       showToast("error", "Unable to remove favorite", "Please try again.");
     } finally {
@@ -223,8 +237,6 @@ export default function FavoritesScreen() {
   };
 
   const openRestaurant = (item: FavoriteItem) => {
-    if (!requireAuth()) return;
-
     const restaurant = getRestaurant(item);
     const restaurantId = getRestaurantId(item);
 
@@ -237,6 +249,24 @@ export default function FavoritesScreen() {
       restaurantId,
       restaurant,
     });
+  };
+
+  const goExplore = () => {
+    navigation.navigate("UserApp", { screen: "Home" });
+  };
+
+  const renderImage = (restaurant: FavoriteRestaurant) => {
+    const imageUri = getImage(restaurant);
+
+    if (imageUri) {
+      return <Image source={{ uri: imageUri }} style={styles.image} />;
+    }
+
+    return (
+      <View style={styles.imageFallback}>
+        <Icon name="storefront-outline" size={34} color={THEME.yellow} />
+      </View>
+    );
   };
 
   const renderFavorite = ({ item }: { item: FavoriteItem }) => {
@@ -254,13 +284,13 @@ export default function FavoritesScreen() {
         onPress={() => openRestaurant(item)}
       >
         <View style={styles.imageWrap}>
-          <Image source={{ uri: getImage(restaurant) }} style={styles.image} />
+          {renderImage(restaurant)}
 
           <View style={styles.imageOverlay} />
 
           <View style={[styles.openPill, !open && styles.closedPill]}>
             <Text style={[styles.openText, !open && styles.closedText]}>
-              {open ? "OPEN NOW" : "CLOSED"}
+              {open ? "OPEN" : "CLOSED"}
             </Text>
           </View>
 
@@ -275,6 +305,7 @@ export default function FavoritesScreen() {
             style={styles.heartBtn}
             onPress={() => confirmRemoveFavorite(item)}
             disabled={removing}
+            activeOpacity={0.85}
           >
             {removing ? (
               <ActivityIndicator size="small" color={THEME.danger} />
@@ -312,7 +343,7 @@ export default function FavoritesScreen() {
             </View>
 
             <View style={styles.metaPill}>
-              <Icon name="time-outline" size={14} color={THEME.green} />
+              <Icon name="time-outline" size={14} color={THEME.blue} />
               <Text style={styles.metaText}>{getDeliveryTime(restaurant)}</Text>
             </View>
 
@@ -323,8 +354,8 @@ export default function FavoritesScreen() {
           </View>
 
           <View style={styles.bottomRow}>
-            <Text style={styles.deliveryText}>
-              Delivery: {deliveryFee} • Tap to order again
+            <Text style={styles.deliveryText} numberOfLines={1}>
+              Delivery {deliveryFee} • Tap to reorder
             </Text>
 
             <View style={styles.viewBtn}>
@@ -350,11 +381,58 @@ export default function FavoritesScreen() {
     );
   }
 
+  if (isGuest) {
+    return (
+      <View style={styles.screen}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+            <Icon name="chevron-back" size={24} color={THEME.text} />
+          </TouchableOpacity>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>Favorites</Text>
+            <Text style={styles.subtitle}>Save stores for faster reordering</Text>
+          </View>
+        </View>
+
+        <View style={styles.guestBox}>
+          <View style={styles.emptyIcon}>
+            <Icon name="heart-outline" size={58} color={THEME.yellow} />
+          </View>
+
+          <Text style={styles.emptyTitle}>Login to view favorites</Text>
+          <Text style={styles.emptyText}>
+            Save nearby stores, restaurants and items to reorder faster.
+          </Text>
+
+          <TouchableOpacity
+            style={styles.exploreBtn}
+            onPress={() => navigation.navigate("Auth")}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.exploreText}>Login / Signup</Text>
+            <Icon name="arrow-forward" size={17} color={THEME.black} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.secondaryBtn} onPress={goExplore} activeOpacity={0.85}>
+            <Text style={styles.secondaryText}>Continue Browsing</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.screen}>
       <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
 
       <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <Icon name="chevron-back" size={24} color={THEME.text} />
+        </TouchableOpacity>
+
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Favorites</Text>
           <Text style={styles.subtitle}>Your saved stores and restaurants</Text>
@@ -364,6 +442,7 @@ export default function FavoritesScreen() {
           style={styles.refreshBtn}
           onPress={() => loadFavorites(true)}
           disabled={refreshing}
+          activeOpacity={0.85}
         >
           {refreshing ? (
             <ActivityIndicator size="small" color={THEME.black} />
@@ -377,10 +456,10 @@ export default function FavoritesScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.heroTag}>KARTO SAVED STORES</Text>
           <Text style={styles.heroTitle}>
-            {favorites.length} saved favorite{favorites.length === 1 ? "" : "s"}
+            {favorites.length} favorite{favorites.length === 1 ? "" : "s"}
           </Text>
           <Text style={styles.heroSub}>
-            Quick access to stores you love. Reorder faster with one tap.
+            Quick access to places you love. Reorder faster with one tap.
           </Text>
         </View>
 
@@ -399,7 +478,7 @@ export default function FavoritesScreen() {
           style={styles.searchInput}
         />
         {!!query.trim() && (
-          <TouchableOpacity onPress={() => setQuery("")}>
+          <TouchableOpacity onPress={() => setQuery("")}> 
             <Icon name="close-circle" size={20} color={THEME.muted} />
           </TouchableOpacity>
         )}
@@ -407,7 +486,7 @@ export default function FavoritesScreen() {
 
       <FlatList
         data={filteredFavorites}
-        keyExtractor={(item, index) => item?.id?.toString() || index.toString()}
+        keyExtractor={(item, index) => item?.id?.toString() || getRestaurantId(item) || index.toString()}
         renderItem={renderFavorite}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -418,9 +497,7 @@ export default function FavoritesScreen() {
             colors={[THEME.green]}
           />
         }
-        contentContainerStyle={
-          filteredFavorites.length === 0 ? styles.emptyList : styles.list
-        }
+        contentContainerStyle={filteredFavorites.length === 0 ? styles.emptyList : styles.list}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <View style={styles.emptyIcon}>
@@ -443,7 +520,8 @@ export default function FavoritesScreen() {
 
             <TouchableOpacity
               style={styles.exploreBtn}
-              onPress={() => (query.trim() ? setQuery("") : navigation.goBack())}
+              onPress={() => (query.trim() ? setQuery("") : goExplore())}
+              activeOpacity={0.9}
             >
               <Text style={styles.exploreText}>
                 {query.trim() ? "Clear Search" : "Explore Stores"}
@@ -537,6 +615,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 18,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   title: {
     color: THEME.text,
     fontSize: 29,
@@ -626,6 +714,12 @@ const styles = StyleSheet.create({
   emptyBox: {
     alignItems: "center",
   },
+  guestBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 30,
+  },
   emptyIcon: {
     width: 108,
     height: 108,
@@ -663,6 +757,15 @@ const styles = StyleSheet.create({
     color: THEME.black,
     fontWeight: "900",
   },
+  secondaryBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+  },
+  secondaryText: {
+    color: THEME.yellow,
+    fontWeight: "900",
+  },
   card: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -679,9 +782,16 @@ const styles = StyleSheet.create({
     height: 164,
     backgroundColor: THEME.card2,
   },
+  imageFallback: {
+    width: "100%",
+    height: 164,
+    backgroundColor: THEME.card2,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   imageOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.16)",
+    backgroundColor: "rgba(0,0,0,0.14)",
   },
   heartBtn: {
     position: "absolute",

@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Animated,
   StatusBar,
+  Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -17,10 +18,13 @@ type RootStackParamList = {
 };
 
 const THEME = {
+  bg: "#070A08",
+  card: "#101713",
   green: "#22C55E",
-  text: "#F3F4F6",
+  yellow: "#FACC15",
+  text: "#F8FAFC",
   muted: "#D1D5DB",
-  black: "#041008",
+  black: "#050807",
 };
 
 export default function WelcomeScreen() {
@@ -29,6 +33,7 @@ export default function WelcomeScreen() {
 
   const fade = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(40)).current;
+  const scale = useRef(new Animated.Value(0.94)).current;
 
   useEffect(() => {
     Animated.parallel([
@@ -42,23 +47,32 @@ export default function WelcomeScreen() {
         duration: 800,
         useNativeDriver: true,
       }),
+      Animated.spring(scale, {
+        toValue: 1,
+        friction: 6,
+        tension: 65,
+        useNativeDriver: true,
+      }),
     ]).start();
-  }, []);
+  }, [fade, scale, slide]);
 
   return (
     <ImageBackground
       source={require("@/assets/images/onboarding/welcomebg.jpg")}
       style={styles.bg}
+      resizeMode="cover"
     >
-      <StatusBar translucent backgroundColor="transparent" />
+      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
 
       <View style={styles.overlay}>
+        <View style={styles.topShade} />
+
         <Animated.View
           style={[
             styles.content,
             {
               opacity: fade,
-              transform: [{ translateY: slide }],
+              transform: [{ translateY: slide }, { scale }],
             },
           ]}
         >
@@ -73,31 +87,27 @@ export default function WelcomeScreen() {
           </Text>
 
           <Text style={styles.subtitle}>
-            Order food, groceries, daily essentials and much more from nearby
-            trusted stores in your city.
+            Order food, groceries and daily essentials from nearby trusted stores
+            with a smooth local delivery experience.
           </Text>
 
           <View style={styles.features}>
-            <Feature text="Fast Delivery" icon="flash" />
-            <Feature text="Trusted Stores" icon="shield-checkmark" />
-            <Feature text="Live Tracking" icon="location" />
+            <Feature text="Fast Delivery" icon="flash" color={THEME.green} />
+            <Feature text="Trusted Stores" icon="shield-checkmark" color={THEME.yellow} />
+            <Feature text="Live Tracking" icon="location" color={THEME.green} />
           </View>
 
           <TouchableOpacity
             style={styles.button}
-            activeOpacity={0.88}
+            activeOpacity={0.9}
             onPress={() => navigation.navigate("Walk1")}
           >
             <Text style={styles.buttonText}>Get Started</Text>
-            <Icon
-              name="arrow-forward-circle"
-              size={24}
-              color={THEME.black}
-            />
+            <Icon name="arrow-forward-circle" size={24} color={THEME.black} />
           </TouchableOpacity>
 
           <Text style={styles.bottomText}>
-            Your city's premium delivery experience
+            Your city&apos;s premium delivery experience
           </Text>
         </Animated.View>
       </View>
@@ -105,9 +115,11 @@ export default function WelcomeScreen() {
   );
 }
 
-const Feature = ({ icon, text }: any) => (
+const Feature = ({ icon, text, color }: any) => (
   <View style={styles.featurePill}>
-    <Icon name={icon} size={15} color="#22C55E" />
+    <View style={[styles.featureIcon, { backgroundColor: `${color}24` }]}>
+      <Icon name={icon} size={15} color={color} />
+    </View>
     <Text style={styles.featureText}>{text}</Text>
   </View>
 );
@@ -115,99 +127,103 @@ const Feature = ({ icon, text }: any) => (
 const styles = StyleSheet.create({
   bg: {
     flex: 1,
+    backgroundColor: THEME.bg,
   },
-
   overlay: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(0,0,0,0.58)",
+    backgroundColor: "rgba(0,0,0,0.56)",
   },
-
+  topShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(7,10,8,0.18)",
+  },
   content: {
     paddingHorizontal: 26,
-    paddingBottom: 55,
+    paddingBottom: Platform.OS === "ios" ? 58 : 48,
   },
-
   logoWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "#22C55E",
+    width: 76,
+    height: 76,
+    borderRadius: 28,
+    backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 18,
+    borderWidth: 4,
+    borderColor: "rgba(255,255,255,0.12)",
   },
-
   brand: {
-    color: "#22C55E",
+    color: THEME.yellow,
     fontSize: 20,
     fontWeight: "900",
-    letterSpacing: 1,
+    letterSpacing: 1.1,
     textTransform: "uppercase",
     marginBottom: 12,
   },
-
   title: {
-    color: "#F3F4F6",
-    fontSize: 40,
+    color: THEME.text,
+    fontSize: 42,
     fontWeight: "900",
-    lineHeight: 48,
+    lineHeight: 49,
+    letterSpacing: -0.7,
   },
-
   subtitle: {
-    color: "#D1D5DB",
+    color: THEME.muted,
     fontSize: 15,
     lineHeight: 23,
     marginTop: 16,
+    fontWeight: "700",
   },
-
   features: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
     marginTop: 22,
   },
-
   featurePill: {
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: "rgba(16,23,19,0.78)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.10)",
     borderRadius: 999,
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
     paddingVertical: 8,
     flexDirection: "row",
     alignItems: "center",
   },
-
-  featureText: {
-    color: "#F3F4F6",
-    fontSize: 12,
-    fontWeight: "700",
-    marginLeft: 5,
+  featureIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
   },
-
+  featureText: {
+    color: THEME.text,
+    fontSize: 12,
+    fontWeight: "800",
+    marginLeft: 6,
+  },
   button: {
-    backgroundColor: "#22C55E",
+    backgroundColor: THEME.green,
     marginTop: 30,
-    borderRadius: 20,
+    borderRadius: 22,
     paddingVertical: 17,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
   },
-
   buttonText: {
-    color: "#041008",
+    color: THEME.black,
     fontSize: 17,
     fontWeight: "900",
   },
-
   bottomText: {
-    color: "#D1D5DB",
+    color: THEME.muted,
     textAlign: "center",
     marginTop: 18,
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "700",
   },
 });

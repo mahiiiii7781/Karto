@@ -7,10 +7,14 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
-  Alert,
+  StatusBar,
+  Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import Toast from "react-native-toast-message";
+
+import { useAuth } from "@/context/AuthContext";
 import {
   walletService,
   WalletSummary,
@@ -18,46 +22,70 @@ import {
 } from "@/services/api/walletService";
 
 const THEME = {
-  bg: "#050807",
-  card: "#0D1511",
-  card2: "#101C15",
+  bg: "#070A08",
+  card: "#101713",
+  card2: "#151F19",
   green: "#22C55E",
+  greenDark: "#16A34A",
   yellow: "#FACC15",
-  text: "#F3F4F6",
-  muted: "#9CA3AF",
+  orange: "#FB923C",
+  blue: "#38BDF8",
+  text: "#F8FAFC",
+  muted: "#8A94A6",
   border: "#1E2A22",
-  black: "#041008",
+  black: "#050807",
   danger: "#EF4444",
+};
+
+const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
+
+const showToast = (
+  type: "success" | "error" | "info",
+  text1: string,
+  text2?: string
+) => {
+  Toast.show({
+    type,
+    text1,
+    text2,
+    position: "bottom",
+    visibilityTime: 1900,
+  });
+};
+
+const normalizeList = (value: any): WalletTransaction[] => {
+  const list =
+    value?.data?.transactions ||
+    value?.data?.data?.transactions ||
+    value?.data?.data ||
+    value?.data ||
+    [];
+
+  return Array.isArray(list) ? list : [];
+};
+
+const normalizeSummary = (value: any): WalletSummary | null => {
+  return (
+    value?.data?.summary ||
+    value?.data?.wallet ||
+    value?.data?.data?.summary ||
+    value?.data?.data?.wallet ||
+    value?.data?.data ||
+    value?.data ||
+    null
+  );
 };
 
 export default function WalletScreen() {
   const navigation = useNavigation<any>();
+  const { user } = useAuth();
 
   const [summary, setSummary] = useState<WalletSummary | null>(null);
   const [transactions, setTransactions] = useState<WalletTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadWallet(false);
-    }, [])
-  );
-
-  const loadWallet = async (isRefresh = false) => {
-    isRefresh ? setRefreshing(true) : setLoading(true);
-
-    const [summaryRes, txRes] = await Promise.all([
-      walletService.getWalletSummary(),
-      walletService.getTransactions(),
-    ]);
-
-    setSummary(summaryRes.data || null);
-    setTransactions(Array.isArray(txRes.data) ? txRes.data : []);
-
-    setLoading(false);
-    setRefreshing(false);
-  };
+  const isGuest = !user?.id;
 
   const balance = useMemo(() => {
     return Number(
@@ -68,9 +96,76 @@ export default function WalletScreen() {
     );
   }, [summary]);
 
-  const credits = Number(summary?.credits ?? 0);
-  const refunds = Number(summary?.refunds ?? 0);
-  const rewards = Number(summary?.rewards ?? 0);
+  const credits = Number(
+    summary?.credits ??
+      (summary as any)?.creditAmount ??
+      (summary as any)?.credit_amount ??
+      0
+  );
+
+  const refunds = Number(
+    summary?.refunds ??
+      (summary as any)?.refundAmount ??
+      (summary as any)?.refund_amount ??
+      0
+  );
+
+  const rewards = Number(
+    summary?.rewards ??
+      (summary as any)?.rewardPoints ??
+      (summary as any)?.reward_points ??
+      0
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      loadWallet(false);
+    }, [user?.id])
+  );
+
+  const loadWallet = async (isRefresh = false) => {
+    if (isGuest) {
+      setSummary(null);
+      setTransactions([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
+    if (refreshing && isRefresh) return;
+
+    isRefresh ? setRefreshing(true) : setLoading(true);
+
+    try {
+      const [summaryRes, txRes] = await Promise.allSettled([
+        walletService.getWalletSummary(),
+        walletService.getTransactions(),
+      ]);
+
+      if (summaryRes.status === "fulfilled" && !summaryRes.value?.error) {
+        setSummary(normalizeSummary(summaryRes.value));
+      } else {
+        setSummary(null);
+      }
+
+      if (txRes.status === "fulfilled" && !txRes.value?.error) {
+        setTransactions(normalizeList(txRes.value));
+      } else {
+        setTransactions([]);
+      }
+
+      if (isRefresh) {
+        showToast("success", "Wallet refreshed", "Latest wallet details updated.");
+      }
+    } catch {
+      setSummary(null);
+      setTransactions([]);
+      showToast("error", "Unable to load wallet", "Please try again.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
   const formatDate = (date?: string) => {
     if (!date) return "Recently";
@@ -86,191 +181,258 @@ export default function WalletScreen() {
   const getTxIcon = (type?: string) => {
     const t = String(type || "").toUpperCase();
 
-    if (t === "DEBIT") return "arrow-up-circle-outline";
-    if (t === "REFUND") return "return-down-back-outline";
-    if (t === "REWARD") return "gift-outline";
+    if (["DEBIT", "ORDER_PAYMENT", "PAYMENT"].includes(t)) {
+      return "arrow-up-circle-outline";
+    }
+
+    if (["REFUND", "ORDER_REFUND"].includes(t)) {
+      return "return-down-back-outline";
+    }
+
+    if (["REWARD", "CASHBACK", "BONUS"].includes(t)) {
+      return "gift-outline";
+    }
 
     return "arrow-down-circle-outline";
   };
 
   const isCredit = (type?: string) => {
     const t = String(type || "").toUpperCase();
-    return ["CREDIT", "REFUND", "REWARD"].includes(t);
+    return ["CREDIT", "REFUND", "REWARD", "CASHBACK", "BONUS", "ORDER_REFUND"].includes(t);
   };
 
-  const openAddMoney = () => {
-    Alert.alert("Coming Soon", "Add money will be enabled after wallet payment setup.");
+  const goToLogin = () => {
+    navigation.navigate("Auth");
   };
 
-  const openOnlinePayments = () => {
-    Alert.alert("Available in Checkout", "You can pay online while placing an order.");
+  const goToOrders = () => {
+    navigation.navigate("Orders");
+  };
+
+  const renderTransaction = (tx: WalletTransaction, index: number) => {
+    const credit = isCredit(tx.type);
+    const amount = Number(tx.amount || 0);
+    const txTitle = tx.title || tx.type || "Wallet Transaction";
+    const txSub =
+      tx.description || formatDate(tx.createdAt || (tx as any).created_at);
+
+    return (
+      <View key={tx.id || String(index)} style={styles.txRow}>
+        <View style={[styles.txIcon, credit ? styles.creditIcon : styles.debitIcon]}>
+          <Icon
+            name={getTxIcon(tx.type) as any}
+            size={22}
+            color={credit ? THEME.green : THEME.danger}
+          />
+        </View>
+
+        <View style={styles.txContent}>
+          <Text style={styles.txTitle} numberOfLines={1}>
+            {txTitle}
+          </Text>
+          <Text style={styles.txSub} numberOfLines={1}>
+            {txSub}
+          </Text>
+        </View>
+
+        <Text style={[styles.txAmount, !credit && styles.txDebit]}>
+          {credit ? "+" : "-"}
+          {money(amount)}
+        </Text>
+      </View>
+    );
   };
 
   if (loading) {
     return (
       <View style={styles.center}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <View style={styles.loadingLogo}>
+          <Text style={styles.loadingLogoText}>K</Text>
+        </View>
         <ActivityIndicator size="large" color={THEME.green} />
         <Text style={styles.loadingText}>Loading wallet...</Text>
       </View>
     );
   }
 
+  if (isGuest) {
+    return (
+      <View style={styles.screen}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+            <Icon name="chevron-back" size={24} color={THEME.text} />
+          </TouchableOpacity>
+
+          <View style={styles.headerText}>
+            <Text style={styles.title}>Wallet</Text>
+            <Text style={styles.subtitle}>Login to view credits and refunds</Text>
+          </View>
+        </View>
+
+        <View style={styles.guestBox}>
+          <View style={styles.guestIcon}>
+            <Icon name="wallet-outline" size={44} color={THEME.yellow} />
+          </View>
+
+          <Text style={styles.guestTitle}>Login required</Text>
+          <Text style={styles.guestText}>
+            Sign in to access wallet balance, refunds, credits and reward activity.
+          </Text>
+
+          <TouchableOpacity style={styles.loginBtn} onPress={goToLogin} activeOpacity={0.9}>
+            <Text style={styles.loginText}>Login / Sign up</Text>
+            <Icon name="arrow-forward" size={19} color={THEME.black} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.browseBtn} onPress={() => navigation.goBack()}>
+            <Text style={styles.browseText}>Continue Browsing</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.screen}>
+      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 34 }}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => loadWallet(true)}
             tintColor={THEME.green}
+            colors={[THEME.green]}
           />
         }
       >
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Icon name="chevron-back" size={24} color={THEME.green} />
+            <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
-          <View style={{ flex: 1 }}>
+          <View style={styles.headerText}>
             <Text style={styles.title}>Wallet</Text>
-            <Text style={styles.subtitle}>Manage refunds, credits and rewards</Text>
+            <Text style={styles.subtitle}>Refunds, credits and rewards</Text>
           </View>
 
-          <TouchableOpacity style={styles.refreshBtn} onPress={() => loadWallet(true)}>
-            <Icon name="refresh" size={20} color={THEME.green} />
+          <TouchableOpacity
+            style={[styles.refreshBtn, refreshing && styles.disabled]}
+            onPress={() => loadWallet(true)}
+            disabled={refreshing}
+            activeOpacity={0.85}
+          >
+            {refreshing ? (
+              <ActivityIndicator size="small" color={THEME.black} />
+            ) : (
+              <Icon name="refresh" size={20} color={THEME.black} />
+            )}
           </TouchableOpacity>
         </View>
 
         <View style={styles.balanceCard}>
+          <View style={styles.balanceGlow} />
+
           <View style={styles.balanceTop}>
-            <View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.walletTag}>KARTO WALLET</Text>
               <Text style={styles.balanceLabel}>Available Balance</Text>
-              <Text style={styles.balance}>₹{balance.toFixed(2)}</Text>
-              <Text style={styles.balanceSub}>Use wallet money on future orders</Text>
+              <Text style={styles.balance}>{money(balance)}</Text>
+              <Text style={styles.balanceSub}>
+                Wallet balance can be used for future Karto orders.
+              </Text>
             </View>
 
             <View style={styles.walletIcon}>
-              <Icon name="wallet-outline" size={34} color={THEME.green} />
+              <Icon name="wallet" size={35} color={THEME.black} />
             </View>
           </View>
 
           <View style={styles.balanceFooter}>
             <View style={styles.smallStat}>
+              <View style={[styles.statIcon, { backgroundColor: "#102116" }]}>
+                <Icon name="add-circle-outline" size={18} color={THEME.green} />
+              </View>
               <Text style={styles.smallLabel}>Credits</Text>
-              <Text style={styles.smallValue}>₹{credits.toFixed(0)}</Text>
+              <Text style={styles.smallValue}>{money(credits)}</Text>
             </View>
 
             <View style={styles.smallStat}>
+              <View style={[styles.statIcon, { backgroundColor: "#252109" }]}>
+                <Icon name="return-down-back-outline" size={18} color={THEME.yellow} />
+              </View>
               <Text style={styles.smallLabel}>Refunds</Text>
-              <Text style={styles.smallValue}>₹{refunds.toFixed(0)}</Text>
+              <Text style={styles.smallValue}>{money(refunds)}</Text>
             </View>
 
             <View style={styles.smallStat}>
+              <View style={[styles.statIcon, { backgroundColor: "#111827" }]}>
+                <Icon name="gift-outline" size={18} color={THEME.blue} />
+              </View>
               <Text style={styles.smallLabel}>Rewards</Text>
               <Text style={styles.smallValue}>{rewards.toFixed(0)}</Text>
             </View>
           </View>
         </View>
 
-        <View style={styles.actionRow}>
-          <TouchableOpacity style={styles.actionBtn} onPress={openAddMoney}>
-            <View style={styles.actionIcon}>
-              <Icon name="add-circle-outline" size={24} color={THEME.green} />
-            </View>
-            <Text style={styles.actionText}>Add Money</Text>
-            <Text style={styles.actionSub}>Coming soon</Text>
-          </TouchableOpacity>
+        <View style={styles.actionCard}>
+          <Text style={styles.sectionTitle}>Use Wallet</Text>
 
-          <TouchableOpacity style={styles.actionBtn} onPress={openOnlinePayments}>
-            <View style={styles.actionIcon}>
-              <Icon name="card-outline" size={24} color={THEME.green} />
-            </View>
-            <Text style={styles.actionText}>Online Pay</Text>
-            <Text style={styles.actionSub}>UPI/Card</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.infoCard}>
-          <Text style={styles.sectionTitle}>Payment Options</Text>
-
-          <View style={styles.row}>
+          <TouchableOpacity style={styles.row} onPress={goToOrders} activeOpacity={0.85}>
             <View style={styles.iconBox}>
-              <Icon name="cash-outline" size={21} color={THEME.green} />
+              <Icon name="receipt-outline" size={21} color={THEME.green} />
             </View>
 
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Cash on Delivery</Text>
-              <Text style={styles.rowSub}>Pay when your order arrives</Text>
-            </View>
-
-            <View style={styles.activePill}>
-              <Text style={styles.activeText}>Active</Text>
-            </View>
-          </View>
-
-          <TouchableOpacity style={styles.row} onPress={openOnlinePayments}>
-            <View style={styles.iconBox}>
-              <Icon name="card-outline" size={21} color={THEME.green} />
-            </View>
-
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Cards, UPI & Wallets</Text>
-              <Text style={styles.rowSub}>Pay securely through Razorpay checkout</Text>
+            <View style={styles.rowContent}>
+              <Text style={styles.rowTitle}>Order Refunds</Text>
+              <Text style={styles.rowSub}>Refunds from cancelled orders appear here</Text>
             </View>
 
             <Icon name="chevron-forward" size={20} color={THEME.muted} />
           </TouchableOpacity>
+
+          <View style={styles.row}>
+            <View style={styles.iconBoxYellow}>
+              <Icon name="card-outline" size={21} color={THEME.yellow} />
+            </View>
+
+            <View style={styles.rowContent}>
+              <Text style={styles.rowTitle}>Online Payment</Text>
+              <Text style={styles.rowSub}>Pay securely using UPI, cards or COD at checkout</Text>
+            </View>
+
+            <View style={styles.activePill}>
+              <Text style={styles.activeText}>Checkout</Text>
+            </View>
+          </View>
         </View>
 
         <View style={styles.infoCard}>
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Recent Activity</Text>
-            <Text style={styles.txCount}>{transactions.length} txns</Text>
+            <Text style={styles.txCount}>
+              {transactions.length} txn{transactions.length === 1 ? "" : "s"}
+            </Text>
           </View>
 
           {transactions.length === 0 ? (
             <View style={styles.emptyBox}>
               <View style={styles.emptyIcon}>
-                <Icon name="receipt-outline" size={44} color={THEME.green} />
+                <Icon name="receipt-outline" size={42} color={THEME.yellow} />
               </View>
 
               <Text style={styles.emptyTitle}>No transactions yet</Text>
               <Text style={styles.emptyText}>
-                Refunds, credits and wallet usage will appear here.
+                Refunds, wallet credits and reward activity will appear here.
               </Text>
             </View>
           ) : (
-            transactions.map((tx) => {
-              const credit = isCredit(tx.type);
-              const amount = Number(tx.amount || 0);
-
-              return (
-                <View key={tx.id} style={styles.txRow}>
-                  <View style={styles.txIcon}>
-                    <Icon
-                      name={getTxIcon(tx.type) as any}
-                      size={22}
-                      color={credit ? THEME.green : THEME.danger}
-                    />
-                  </View>
-
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.txTitle}>
-                      {tx.title || tx.type || "Wallet Transaction"}
-                    </Text>
-                    <Text style={styles.txSub}>
-                      {tx.description || formatDate(tx.createdAt || tx.created_at)}
-                    </Text>
-                  </View>
-
-                  <Text style={[styles.txAmount, !credit && styles.txDebit]}>
-                    {credit ? "+" : "-"}₹{amount.toFixed(2)}
-                  </Text>
-                </View>
-              );
-            })
+            transactions.map(renderTransaction)
           )}
         </View>
       </ScrollView>
@@ -279,170 +441,181 @@ export default function WalletScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: THEME.bg },
-
+  screen: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+  },
   center: {
     flex: 1,
     backgroundColor: THEME.bg,
     alignItems: "center",
     justifyContent: "center",
   },
-
+  loadingLogo: {
+    width: 74,
+    height: 74,
+    borderRadius: 25,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+  },
+  loadingLogoText: {
+    color: THEME.yellow,
+    fontSize: 38,
+    fontWeight: "900",
+  },
   loadingText: {
     color: THEME.muted,
     marginTop: 12,
-    fontWeight: "700",
+    fontWeight: "800",
   },
-
+  scrollContent: {
+    paddingBottom: 34,
+  },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 30,
+    paddingTop: Platform.OS === "ios" ? 54 : 34,
     paddingBottom: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
-
+  headerText: {
+    flex: 1,
+  },
   backBtn: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: 18,
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
   },
-
   refreshBtn: {
     width: 42,
     height: 42,
-    borderRadius: 21,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 17,
+    backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
   },
-
+  disabled: {
+    opacity: 0.65,
+  },
   title: {
     color: THEME.text,
     fontSize: 29,
     fontWeight: "900",
   },
-
   subtitle: {
     color: THEME.muted,
     marginTop: 4,
+    fontSize: 13,
+    fontWeight: "700",
   },
-
   balanceCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderRadius: 28,
+    borderRadius: 30,
     padding: 20,
     borderWidth: 1,
     borderColor: THEME.border,
+    overflow: "hidden",
   },
-
+  balanceGlow: {
+    position: "absolute",
+    right: -56,
+    top: -56,
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    backgroundColor: "rgba(250,204,21,0.18)",
+  },
   balanceTop: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
   },
-
-  balanceLabel: { color: THEME.muted, fontWeight: "700" },
-
+  walletTag: {
+    color: THEME.yellow,
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+    marginBottom: 9,
+  },
+  balanceLabel: {
+    color: THEME.muted,
+    fontWeight: "800",
+  },
   balance: {
     color: THEME.green,
-    fontSize: 39,
+    fontSize: 42,
     fontWeight: "900",
-    marginTop: 8,
+    marginTop: 7,
   },
-
   balanceSub: {
     color: THEME.muted,
-    marginTop: 5,
+    marginTop: 6,
     fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700",
   },
-
   walletIcon: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: "#07150D",
-    borderWidth: 1,
-    borderColor: "#173923",
+    width: 72,
+    height: 72,
+    borderRadius: 26,
+    backgroundColor: THEME.yellow,
     alignItems: "center",
     justifyContent: "center",
+    marginLeft: 14,
   },
-
   balanceFooter: {
     flexDirection: "row",
     marginTop: 22,
-    paddingTop: 18,
-    borderTopWidth: 1,
-    borderTopColor: THEME.border,
     gap: 10,
   },
-
   smallStat: {
     flex: 1,
     backgroundColor: THEME.card2,
     borderWidth: 1,
     borderColor: THEME.border,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 11,
   },
-
-  smallLabel: { color: THEME.muted, fontSize: 12 },
-
+  statIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  smallLabel: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontWeight: "800",
+  },
   smallValue: {
     color: THEME.text,
     fontWeight: "900",
     marginTop: 4,
+    fontSize: 13,
   },
-
-  actionRow: {
-    flexDirection: "row",
+  actionCard: {
     marginHorizontal: 20,
     marginTop: 16,
-    gap: 12,
-  },
-
-  actionBtn: {
-    flex: 1,
     backgroundColor: THEME.card,
-    borderRadius: 20,
-    paddingVertical: 15,
-    alignItems: "center",
+    borderRadius: 24,
+    padding: 15,
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
-  actionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
-    backgroundColor: "#07150D",
-    borderWidth: 1,
-    borderColor: "#173923",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  actionText: {
-    color: THEME.text,
-    fontWeight: "900",
-    marginTop: 8,
-  },
-
-  actionSub: {
-    color: THEME.muted,
-    fontSize: 12,
-    marginTop: 2,
-  },
-
   infoCard: {
     marginHorizontal: 20,
     marginTop: 16,
@@ -452,27 +625,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   sectionTitle: {
     color: THEME.text,
     fontSize: 17,
     fontWeight: "900",
     marginBottom: 10,
   },
-
   txCount: {
     color: THEME.muted,
     fontSize: 12,
     fontWeight: "800",
     marginBottom: 10,
   },
-
   row: {
     flexDirection: "row",
     alignItems: "center",
@@ -480,77 +649,84 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: THEME.border,
   },
-
   iconBox: {
     width: 44,
     height: 44,
     borderRadius: 15,
-    backgroundColor: "#07150D",
+    backgroundColor: "#102116",
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: "#20462C",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
   },
-
+  iconBoxYellow: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    backgroundColor: "#252109",
+    borderWidth: 1,
+    borderColor: "#57470A",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  rowContent: {
+    flex: 1,
+  },
   rowTitle: {
     color: THEME.text,
     fontSize: 15,
     fontWeight: "900",
   },
-
   rowSub: {
     color: THEME.muted,
     fontSize: 12,
     marginTop: 3,
+    lineHeight: 17,
+    fontWeight: "700",
   },
-
   activePill: {
-    backgroundColor: "#07150D",
+    backgroundColor: "#252109",
     borderWidth: 1,
-    borderColor: "#173923",
+    borderColor: "#57470A",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 99,
   },
-
   activeText: {
-    color: THEME.green,
+    color: THEME.yellow,
     fontSize: 11,
     fontWeight: "900",
   },
-
   emptyBox: {
     alignItems: "center",
-    paddingVertical: 28,
+    paddingVertical: 30,
     paddingHorizontal: 20,
   },
-
   emptyIcon: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: THEME.card2,
+    width: 88,
+    height: 88,
+    borderRadius: 32,
+    backgroundColor: "#252109",
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: "#57470A",
     alignItems: "center",
     justifyContent: "center",
   },
-
   emptyTitle: {
     color: THEME.text,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: "900",
-    marginTop: 12,
+    marginTop: 13,
   },
-
   emptyText: {
     color: THEME.muted,
     textAlign: "center",
     marginTop: 6,
     lineHeight: 19,
+    fontWeight: "700",
   },
-
   txRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -558,38 +734,97 @@ const styles = StyleSheet.create({
     borderTopColor: THEME.border,
     paddingVertical: 13,
   },
-
   txIcon: {
     width: 42,
     height: 42,
     borderRadius: 15,
-    backgroundColor: THEME.card2,
     borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
   },
-
+  creditIcon: {
+    backgroundColor: "#102116",
+    borderColor: "#20462C",
+  },
+  debitIcon: {
+    backgroundColor: "#1B0E0E",
+    borderColor: "#3F1717",
+  },
+  txContent: {
+    flex: 1,
+  },
   txTitle: {
     color: THEME.text,
     fontWeight: "900",
     fontSize: 14,
   },
-
   txSub: {
     color: THEME.muted,
     fontSize: 12,
     marginTop: 3,
+    fontWeight: "700",
   },
-
   txAmount: {
     color: THEME.green,
     fontWeight: "900",
     fontSize: 14,
+    marginLeft: 10,
   },
-
   txDebit: {
     color: THEME.danger,
+  },
+  guestBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+  },
+  guestIcon: {
+    width: 106,
+    height: 106,
+    borderRadius: 38,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  guestTitle: {
+    color: THEME.text,
+    fontSize: 23,
+    fontWeight: "900",
+    marginTop: 18,
+  },
+  guestText: {
+    color: THEME.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  loginBtn: {
+    marginTop: 24,
+    backgroundColor: THEME.green,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  loginText: {
+    color: THEME.black,
+    fontWeight: "900",
+    fontSize: 15,
+  },
+  browseBtn: {
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+  },
+  browseText: {
+    color: THEME.yellow,
+    fontWeight: "900",
   },
 });

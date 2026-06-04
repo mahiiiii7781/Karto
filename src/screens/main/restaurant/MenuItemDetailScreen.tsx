@@ -43,6 +43,20 @@ const NOTE_SUGGESTIONS = ["Less spicy", "No onion", "Extra fresh", "Pack separat
 const getImage = (item: any) => item?.image_url || item?.imageUrl || item?.image || null;
 const num = (value: any) => Number(value || 0);
 
+const normalizeMenuItemResponse = (data: any) =>
+  data?.data?.menuItem ||
+  data?.data?.menu_item ||
+  data?.data?.item ||
+  data?.data ||
+  data?.menuItem ||
+  data?.menu_item ||
+  data?.item ||
+  data ||
+  null;
+
+const normalizeFavoriteStatus = (data: any) =>
+  Boolean(data?.isFavorite ?? data?.is_favorite ?? data?.data?.isFavorite ?? data?.data?.is_favorite);
+
 const isAvailable = (item: any) =>
   item?.is_available !== false && item?.isAvailable !== false;
 
@@ -54,7 +68,7 @@ export default function MenuItemDetailScreen() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
 
-  const { itemId, restaurantId } = route.params || {};
+  const { itemId, restaurantId: routeRestaurantId } = route.params || {};
 
   const [item, setItem] = useState<(MenuItem & any) | null>(null);
   const [loading, setLoading] = useState(true);
@@ -146,6 +160,15 @@ export default function MenuItemDetailScreen() {
   const totalPrice = unitPrice * quantity;
   const frequentlyBought = addons.slice(0, 4);
 
+  const effectiveRestaurantId =
+    routeRestaurantId ||
+    item?.restaurantId ||
+    item?.restaurant_id ||
+    item?.restaurant?.id ||
+    item?.vendorId ||
+    item?.vendor_id ||
+    "";
+
   const loadMenuItem = async () => {
     if (!itemId) {
       setLoading(false);
@@ -158,14 +181,15 @@ export default function MenuItemDetailScreen() {
       setLoading(true);
 
       const { data, error } = await restaurantService.getMenuItemById(itemId);
+      const nextItem = normalizeMenuItemResponse(data);
 
-      if (error || !data) {
+      if (error || !nextItem) {
         showToast("error", "Item unavailable", "This item is currently unavailable.");
         navigation.goBack();
         return;
       }
 
-      setItem(data as any);
+      setItem(nextItem as any);
     } catch {
       showToast("error", "Unable to load item", "Please try again.");
     } finally {
@@ -178,7 +202,7 @@ export default function MenuItemDetailScreen() {
 
     try {
       const { data } = await favoriteService.isItemFavorite(itemId);
-      setIsFav(!!data?.isFavorite);
+      setIsFav(normalizeFavoriteStatus(data));
     } catch {
       setIsFav(false);
     }
@@ -198,7 +222,7 @@ export default function MenuItemDetailScreen() {
         return;
       }
 
-      const next = !!data?.isFavorite;
+      const next = normalizeFavoriteStatus(data);
       setIsFav(next);
 
       showToast(
@@ -218,7 +242,9 @@ export default function MenuItemDetailScreen() {
       if (itemId && user?.id) {
         await restaurantService.saveRecentlyViewed(itemId);
       }
-    } catch {}
+    } catch {
+      // Recently viewed is non-critical.
+    }
   };
 
   const toggleAddon = (id: string) => {
@@ -275,7 +301,7 @@ export default function MenuItemDetailScreen() {
       return;
     }
 
-    if (!restaurantId) {
+    if (!effectiveRestaurantId) {
       showToast("error", "Store unavailable", "Store details are missing.");
       return;
     }
@@ -302,7 +328,7 @@ export default function MenuItemDetailScreen() {
     try {
       const res = await cartService.addToCart({
         menuItemId: item.id,
-        restaurantId,
+        restaurantId: effectiveRestaurantId,
         quantity,
         note: note.trim(),
         customizationIds: selectedCustomizationIds,
@@ -469,6 +495,7 @@ export default function MenuItemDetailScreen() {
               </TouchableOpacity>
 
               <View style={styles.topRight}>
+                {/*
                 <TouchableOpacity
                   style={styles.circleBtn}
                   activeOpacity={0.85}
@@ -478,6 +505,7 @@ export default function MenuItemDetailScreen() {
                 >
                   <Icon name="share-social-outline" size={22} color={THEME.text} />
                 </TouchableOpacity>
+                */}
 
                 <TouchableOpacity
                   style={styles.circleBtn}

@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import Toast from "react-native-toast-message";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useNavigation } from "@react-navigation/native";
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 
 import { useAuth } from "@/context/AuthContext";
@@ -25,7 +25,12 @@ const THEME = {
   card: "#101713",
   card2: "#151F19",
   green: "#22C55E",
+  greenDark: "#15803D",
   yellow: "#FACC15",
+  amberSoft: "#252109",
+  blue: "#38BDF8",
+  purple: "#A78BFA",
+  orange: "#FB923C",
   text: "#F8FAFC",
   muted: "#8A94A6",
   border: "#1E2A22",
@@ -47,6 +52,8 @@ const showToast = (
   });
 };
 
+const normalizePhone = (value: string) => value.replace(/\D/g, "").slice(0, 10);
+
 export default function EditProfileScreen() {
   const navigation = useNavigation<any>();
   const { user, updateProfile } = useAuth();
@@ -54,28 +61,17 @@ export default function EditProfileScreen() {
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [avatarUri, setAvatarUri] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [pickingPhoto, setPickingPhoto] = useState(false);
 
   const [photoModalVisible, setPhotoModalVisible] = useState(false);
   const [discardModalVisible, setDiscardModalVisible] = useState(false);
 
-  const requireAuth = useCallback(() => {
-    if (user?.id) return true;
-
-    showToast("info", "Login required", "Please sign in to edit your profile.");
-    navigation.navigate("Auth");
-    return false;
-  }, [user?.id, navigation]);
-
-  useFocusEffect(
-    useCallback(() => {
-      requireAuth();
-    }, [requireAuth])
-  );
+  const isGuest = !user?.id;
 
   useEffect(() => {
     setFullName(user?.fullName || (user as any)?.name || "");
-    setPhone((user as any)?.phone || "");
+    setPhone(normalizePhone((user as any)?.phone || ""));
     setAvatarUri((user as any)?.avatarUrl || (user as any)?.avatar_url || "");
   }, [user]);
 
@@ -86,15 +82,23 @@ export default function EditProfileScreen() {
 
   const hasChanges = useMemo(() => {
     const oldName = user?.fullName || (user as any)?.name || "";
-    const oldPhone = (user as any)?.phone || "";
+    const oldPhone = normalizePhone((user as any)?.phone || "");
     const oldAvatar = (user as any)?.avatarUrl || (user as any)?.avatar_url || "";
 
     return (
-      fullName.trim() !== oldName ||
-      phone.trim() !== oldPhone ||
+      fullName.trim() !== oldName.trim() ||
+      phone.trim() !== oldPhone.trim() ||
       avatarUri !== oldAvatar
     );
   }, [fullName, phone, avatarUri, user]);
+
+  const openLogin = () => navigation.navigate("Auth");
+
+  const requireAuth = () => {
+    if (!isGuest) return true;
+    showToast("info", "Login required", "Please sign in to edit your profile.");
+    return false;
+  };
 
   const requestCameraPermission = async () => {
     if (Platform.OS !== "android") return true;
@@ -112,9 +116,10 @@ export default function EditProfileScreen() {
     return granted === PermissionsAndroid.RESULTS.GRANTED;
   };
 
-  const openCamera = async () => {
-    setPhotoModalVisible(false);
+  const pickFromCamera = async () => {
+    if (!requireAuth()) return;
 
+    setPhotoModalVisible(false);
     const hasPermission = await requestCameraPermission();
 
     if (!hasPermission) {
@@ -123,6 +128,8 @@ export default function EditProfileScreen() {
     }
 
     try {
+      setPickingPhoto(true);
+
       const result = await launchCamera({
         mediaType: "photo",
         quality: 0.8,
@@ -141,20 +148,26 @@ export default function EditProfileScreen() {
 
       if (uri) {
         setAvatarUri(uri);
-        showToast("success", "Photo selected", "Profile photo updated locally.");
+        showToast("success", "Photo selected", "Save changes to update your profile.");
       }
     } catch {
       showToast("error", "Camera failed", "Please try again.");
+    } finally {
+      setPickingPhoto(false);
     }
   };
 
-  const openGallery = async () => {
+  const pickFromGallery = async () => {
+    if (!requireAuth()) return;
+
     setPhotoModalVisible(false);
 
     try {
+      setPickingPhoto(true);
+
       const result = await launchImageLibrary({
         mediaType: "photo",
-        quality: 1,
+        quality: 0.9,
         selectionLimit: 1,
       });
 
@@ -169,17 +182,20 @@ export default function EditProfileScreen() {
 
       if (uri) {
         setAvatarUri(uri);
-        showToast("success", "Photo selected", "Profile photo updated locally.");
+        showToast("success", "Photo selected", "Save changes to update your profile.");
       }
     } catch {
       showToast("error", "Gallery failed", "Please try again.");
+    } finally {
+      setPickingPhoto(false);
     }
   };
 
   const removePhoto = () => {
+    if (!requireAuth()) return;
     setAvatarUri("");
     setPhotoModalVisible(false);
-    showToast("info", "Photo removed", "Profile photo will be removed after saving.");
+    showToast("info", "Photo removed", "Save changes to remove it from profile.");
   };
 
   const validate = () => {
@@ -218,9 +234,9 @@ export default function EditProfileScreen() {
       return;
     }
 
-    setLoading(true);
-
     try {
+      setSaving(true);
+
       const { error } = await updateProfile({
         fullName: fullName.trim(),
         phone: phone.trim() || null,
@@ -237,13 +253,13 @@ export default function EditProfileScreen() {
     } catch (error: any) {
       showToast("error", "Profile update failed", error?.message || "Please try again.");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   const resetChanges = () => {
     setFullName(user?.fullName || (user as any)?.name || "");
-    setPhone((user as any)?.phone || "");
+    setPhone(normalizePhone((user as any)?.phone || ""));
     setAvatarUri((user as any)?.avatarUrl || (user as any)?.avatar_url || "");
     showToast("info", "Changes reset", "Profile form restored.");
   };
@@ -262,26 +278,52 @@ export default function EditProfileScreen() {
     navigation.goBack();
   };
 
+  if (isGuest) {
+    return (
+      <View style={styles.guestScreen}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
+        <View style={styles.guestIcon}>
+          <Icon name="person-circle-outline" size={58} color={THEME.yellow} />
+        </View>
+
+        <Text style={styles.guestTitle}>Login to edit profile</Text>
+        <Text style={styles.guestSub}>
+          Save your name, phone number and profile photo for faster checkout and delivery updates.
+        </Text>
+
+        <TouchableOpacity style={styles.guestBtn} onPress={openLogin} activeOpacity={0.9}>
+          <Text style={styles.guestBtnText}>Login / Signup</Text>
+          <Icon name="arrow-forward" size={19} color={THEME.black} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.guestBackBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.guestBackText}>Go Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 118 }}
+        contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={confirmDiscard}>
+          <TouchableOpacity style={styles.backBtn} onPress={confirmDiscard} activeOpacity={0.85}>
             <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
-          <View style={{ flex: 1 }}>
+          <View style={styles.headerTextBox}>
             <Text style={styles.title}>Edit Profile</Text>
-            <Text style={styles.subtitle}>Keep your account details updated</Text>
+            <Text style={styles.subtitle}>Update your Karto identity</Text>
           </View>
 
           {hasChanges && (
-            <TouchableOpacity style={styles.resetBtn} onPress={resetChanges}>
+            <TouchableOpacity style={styles.resetBtn} onPress={resetChanges} activeOpacity={0.85}>
               <Icon name="refresh" size={19} color={THEME.black} />
             </TouchableOpacity>
           )}
@@ -290,19 +332,23 @@ export default function EditProfileScreen() {
         <View style={styles.heroBanner}>
           <View style={{ flex: 1 }}>
             <Text style={styles.heroTag}>KARTO PROFILE</Text>
-            <Text style={styles.heroTitle}>Personalize your account</Text>
+            <Text style={styles.heroTitle}>Make it yours</Text>
             <Text style={styles.heroSub}>
-              Add your name, phone number and profile photo for a smoother delivery experience.
+              Keep details clean for smoother checkout, rider calls and order updates.
             </Text>
           </View>
 
           <View style={styles.heroIcon}>
-            <Icon name="person-circle-outline" size={38} color={THEME.black} />
+            <Icon name="sparkles-outline" size={32} color={THEME.black} />
           </View>
         </View>
 
-        <View style={styles.heroCard}>
-          <TouchableOpacity activeOpacity={0.85} onPress={() => setPhotoModalVisible(true)}>
+        <View style={styles.photoCard}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => setPhotoModalVisible(true)}
+            disabled={pickingPhoto}
+          >
             {avatarUri ? (
               <Image source={{ uri: avatarUri }} style={styles.avatar} />
             ) : (
@@ -312,12 +358,16 @@ export default function EditProfileScreen() {
             )}
 
             <View style={styles.cameraIcon}>
-              <Icon name="camera" size={18} color={THEME.black} />
+              {pickingPhoto ? (
+                <ActivityIndicator size="small" color={THEME.black} />
+              ) : (
+                <Icon name="camera" size={18} color={THEME.black} />
+              )}
             </View>
           </TouchableOpacity>
 
           <Text style={styles.photoTitle}>Profile Photo</Text>
-          <Text style={styles.photoHint}>Use camera or gallery. No image URL required.</Text>
+          <Text style={styles.photoHint}>Camera or gallery only. No image URL input.</Text>
         </View>
 
         <View style={styles.formCard}>
@@ -358,7 +408,7 @@ export default function EditProfileScreen() {
             <TextInput
               style={styles.input}
               value={phone}
-              onChangeText={text => setPhone(text.replace(/\D/g, ""))}
+              onChangeText={text => setPhone(normalizePhone(text))}
               keyboardType="phone-pad"
               placeholder="Enter phone number"
               placeholderTextColor={THEME.muted}
@@ -374,16 +424,23 @@ export default function EditProfileScreen() {
           </View>
         </View>
 
-        <View style={styles.securityCard}>
-          <View style={styles.securityIcon}>
-            <Icon name="shield-checkmark-outline" size={24} color={THEME.green} />
+        <View style={styles.accentRow}>
+          <View style={[styles.accentCard, { borderColor: "#20462C" }]}>
+            <Icon name="shield-checkmark-outline" size={23} color={THEME.green} />
+            <Text style={styles.accentTitle}>Secure</Text>
+            <Text style={styles.accentText}>Session protected</Text>
           </View>
 
-          <View style={{ flex: 1 }}>
-            <Text style={styles.securityTitle}>Account Security</Text>
-            <Text style={styles.securitySub}>
-              Your profile updates are protected with your active login session.
-            </Text>
+          <View style={[styles.accentCard, { borderColor: "#3B2F7A" }]}>
+            <Icon name="flash-outline" size={23} color={THEME.purple} />
+            <Text style={styles.accentTitle}>Fast</Text>
+            <Text style={styles.accentText}>Quick checkout</Text>
+          </View>
+
+          <View style={[styles.accentCard, { borderColor: "#6A3D12" }]}>
+            <Icon name="call-outline" size={23} color={THEME.orange} />
+            <Text style={styles.accentTitle}>Reachable</Text>
+            <Text style={styles.accentText}>Rider support</Text>
           </View>
         </View>
 
@@ -417,17 +474,16 @@ export default function EditProfileScreen() {
 
       <View style={styles.footer}>
         <TouchableOpacity
-          style={[styles.saveBtn, (loading || !hasChanges) && { opacity: 0.65 }]}
+          style={[styles.saveBtn, (saving || !hasChanges) && styles.disabled]}
           onPress={handleSave}
-          disabled={loading || !hasChanges}
+          disabled={saving || !hasChanges}
+          activeOpacity={0.9}
         >
-          {loading ? (
+          {saving ? (
             <ActivityIndicator color={THEME.black} />
           ) : (
             <>
-              <Text style={styles.saveText}>
-                {hasChanges ? "Save Changes" : "No Changes"}
-              </Text>
+              <Text style={styles.saveText}>{hasChanges ? "Save Changes" : "No Changes"}</Text>
               <Icon name="checkmark-circle" size={20} color={THEME.black} />
             </>
           )}
@@ -449,32 +505,27 @@ export default function EditProfileScreen() {
             <Text style={styles.optionTitle}>Profile Photo</Text>
             <Text style={styles.optionSub}>Choose how you want to update your photo.</Text>
 
-            <TouchableOpacity style={styles.optionRow} onPress={openCamera}>
+            <TouchableOpacity style={styles.optionRow} onPress={pickFromCamera} activeOpacity={0.85}>
               <Icon name="camera-outline" size={21} color={THEME.green} />
               <Text style={styles.optionText}>Take Photo</Text>
               <Icon name="chevron-forward" size={19} color={THEME.muted} />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.optionRow} onPress={openGallery}>
+            <TouchableOpacity style={styles.optionRow} onPress={pickFromGallery} activeOpacity={0.85}>
               <Icon name="images-outline" size={21} color={THEME.green} />
               <Text style={styles.optionText}>Choose From Gallery</Text>
               <Icon name="chevron-forward" size={19} color={THEME.muted} />
             </TouchableOpacity>
 
             {!!avatarUri && (
-              <TouchableOpacity style={styles.optionRow} onPress={removePhoto}>
+              <TouchableOpacity style={styles.optionRow} onPress={removePhoto} activeOpacity={0.85}>
                 <Icon name="trash-outline" size={21} color={THEME.danger} />
-                <Text style={[styles.optionText, { color: THEME.danger }]}>
-                  Remove Photo
-                </Text>
+                <Text style={[styles.optionText, { color: THEME.danger }]}>Remove Photo</Text>
                 <Icon name="chevron-forward" size={19} color={THEME.muted} />
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity
-              style={styles.modalBtn}
-              onPress={() => setPhotoModalVisible(false)}
-            >
+            <TouchableOpacity style={styles.modalBtn} onPress={() => setPhotoModalVisible(false)}>
               <Text style={styles.modalBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
@@ -494,15 +545,10 @@ export default function EditProfileScreen() {
             </View>
 
             <Text style={styles.confirmTitle}>Discard changes?</Text>
-            <Text style={styles.confirmText}>
-              Your unsaved profile changes will be lost.
-            </Text>
+            <Text style={styles.confirmText}>Your unsaved profile changes will be lost.</Text>
 
             <View style={styles.confirmActions}>
-              <TouchableOpacity
-                style={styles.keepBtn}
-                onPress={() => setDiscardModalVisible(false)}
-              >
+              <TouchableOpacity style={styles.keepBtn} onPress={() => setDiscardModalVisible(false)}>
                 <Text style={styles.keepText}>Keep Editing</Text>
               </TouchableOpacity>
 
@@ -519,6 +565,51 @@ export default function EditProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: THEME.bg },
+  scrollContent: { paddingBottom: 118 },
+  guestScreen: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 26,
+  },
+  guestIcon: {
+    width: 108,
+    height: 108,
+    borderRadius: 38,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+  },
+  guestTitle: {
+    color: THEME.text,
+    fontSize: 23,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  guestSub: {
+    color: THEME.muted,
+    marginTop: 8,
+    lineHeight: 21,
+    textAlign: "center",
+    fontWeight: "700",
+  },
+  guestBtn: {
+    marginTop: 24,
+    backgroundColor: THEME.green,
+    borderRadius: 18,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  guestBtnText: { color: THEME.black, fontWeight: "900", fontSize: 15 },
+  guestBackBtn: { marginTop: 14, padding: 10 },
+  guestBackText: { color: THEME.yellow, fontWeight: "900" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -527,6 +618,7 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     gap: 12,
   },
+  headerTextBox: { flex: 1 },
   backBtn: {
     width: 44,
     height: 44,
@@ -545,16 +637,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  title: {
-    color: THEME.text,
-    fontSize: 27,
-    fontWeight: "900",
-  },
-  subtitle: {
-    color: THEME.muted,
-    marginTop: 2,
-    fontWeight: "700",
-  },
+  title: { color: THEME.text, fontSize: 27, fontWeight: "900" },
+  subtitle: { color: THEME.muted, marginTop: 2, fontWeight: "700" },
   heroBanner: {
     marginHorizontal: 20,
     marginBottom: 16,
@@ -572,12 +656,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     letterSpacing: 1,
   },
-  heroTitle: {
-    color: THEME.text,
-    fontSize: 22,
-    fontWeight: "900",
-    marginTop: 5,
-  },
+  heroTitle: { color: THEME.text, fontSize: 22, fontWeight: "900", marginTop: 5 },
   heroSub: {
     color: THEME.muted,
     fontSize: 13,
@@ -594,7 +673,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginLeft: 14,
   },
-  heroCard: {
+  photoCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -621,27 +700,21 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  avatarText: {
-    color: THEME.green,
-    fontSize: 40,
-    fontWeight: "900",
-  },
+  avatarText: { color: THEME.green, fontSize: 40, fontWeight: "900" },
   cameraIcon: {
     position: "absolute",
     bottom: 2,
     right: 2,
+    width: 38,
+    height: 38,
     backgroundColor: THEME.green,
     borderRadius: 18,
-    padding: 9,
     borderWidth: 2,
     borderColor: THEME.card,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  photoTitle: {
-    color: THEME.text,
-    fontWeight: "900",
-    fontSize: 17,
-    marginTop: 13,
-  },
+  photoTitle: { color: THEME.text, fontWeight: "900", fontSize: 17, marginTop: 13 },
   photoHint: {
     color: THEME.muted,
     marginTop: 5,
@@ -658,18 +731,8 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     marginBottom: 16,
   },
-  sectionTitle: {
-    color: THEME.text,
-    fontSize: 17,
-    fontWeight: "900",
-    marginBottom: 12,
-  },
-  label: {
-    color: THEME.text,
-    fontWeight: "800",
-    marginBottom: 8,
-    marginTop: 10,
-  },
+  sectionTitle: { color: THEME.text, fontSize: 17, fontWeight: "900", marginBottom: 12 },
+  label: { color: THEME.text, fontWeight: "800", marginBottom: 8, marginTop: 10 },
   inputBox: {
     minHeight: 56,
     backgroundColor: THEME.card2,
@@ -680,7 +743,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  disabledBox: { opacity: 0.8 },
+  disabledBox: { opacity: 0.82 },
   input: {
     flex: 1,
     color: THEME.text,
@@ -690,11 +753,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   disabledInput: { color: THEME.muted },
-  countryCode: {
-    color: THEME.green,
-    fontWeight: "900",
-    marginLeft: 10,
-  },
+  countryCode: { color: THEME.green, fontWeight: "900", marginLeft: 10 },
   hintText: {
     color: THEME.muted,
     fontSize: 11,
@@ -702,12 +761,7 @@ const styles = StyleSheet.create({
     textAlign: "right",
     fontWeight: "700",
   },
-  hintLeft: {
-    color: THEME.muted,
-    fontSize: 11,
-    marginTop: 6,
-    fontWeight: "700",
-  },
+  hintLeft: { color: THEME.muted, fontSize: 11, marginTop: 6, fontWeight: "700" },
   infoBox: {
     marginTop: 18,
     backgroundColor: "#102116",
@@ -726,38 +780,27 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "800",
   },
-  securityCard: {
-    marginHorizontal: 20,
-    backgroundColor: THEME.card,
-    borderRadius: 22,
-    padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
+  accentRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
+    marginHorizontal: 20,
+    gap: 10,
     marginBottom: 16,
   },
-  securityIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: THEME.card2,
+  accentCard: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: THEME.border,
+    padding: 12,
     alignItems: "center",
-    justifyContent: "center",
   },
-  securityTitle: {
-    color: THEME.text,
-    fontWeight: "900",
-    fontSize: 15,
-  },
-  securitySub: {
+  accentTitle: { color: THEME.text, marginTop: 7, fontSize: 12, fontWeight: "900" },
+  accentText: {
     color: THEME.muted,
     marginTop: 3,
-    lineHeight: 18,
-    fontSize: 12,
+    fontSize: 10,
+    textAlign: "center",
     fontWeight: "700",
   },
   previewCard: {
@@ -768,11 +811,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-  previewRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
+  previewRow: { flexDirection: "row", alignItems: "center", gap: 12 },
   previewAvatar: {
     width: 56,
     height: 56,
@@ -784,25 +823,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-  previewImage: {
-    width: "100%",
-    height: "100%",
-  },
-  previewAvatarText: {
-    color: THEME.green,
-    fontSize: 22,
-    fontWeight: "900",
-  },
-  previewName: {
-    color: THEME.text,
-    fontSize: 16,
-    fontWeight: "900",
-  },
-  previewSub: {
-    color: THEME.muted,
-    marginTop: 3,
-    fontWeight: "700",
-  },
+  previewImage: { width: "100%", height: "100%" },
+  previewAvatarText: { color: THEME.green, fontSize: 22, fontWeight: "900" },
+  previewName: { color: THEME.text, fontSize: 16, fontWeight: "900" },
+  previewSub: { color: THEME.muted, marginTop: 3, fontWeight: "700" },
   previewPill: {
     alignSelf: "flex-start",
     marginTop: 8,
@@ -816,11 +840,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  previewPillText: {
-    color: THEME.green,
-    fontSize: 11,
-    fontWeight: "900",
-  },
+  previewPillText: { color: THEME.green, fontSize: 11, fontWeight: "900" },
   footer: {
     position: "absolute",
     bottom: 0,
@@ -828,7 +848,7 @@ const styles = StyleSheet.create({
     right: 0,
     backgroundColor: THEME.card,
     padding: 16,
-    paddingBottom: 26,
+    paddingBottom: Platform.OS === "ios" ? 28 : 24,
     borderTopWidth: 1,
     borderTopColor: THEME.border,
   },
@@ -841,11 +861,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-  saveText: {
-    color: THEME.black,
-    fontWeight: "900",
-    fontSize: 16,
-  },
+  disabled: { opacity: 0.65 },
+  saveText: { color: THEME.black, fontWeight: "900", fontSize: 16 },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.72)",
@@ -864,18 +881,14 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 24,
-    backgroundColor: "#252109",
+    backgroundColor: THEME.amberSoft,
     borderWidth: 1,
     borderColor: "#57470A",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
-  optionTitle: {
-    color: THEME.text,
-    fontSize: 22,
-    fontWeight: "900",
-  },
+  optionTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
   optionSub: {
     color: THEME.muted,
     textAlign: "center",
@@ -896,11 +909,7 @@ const styles = StyleSheet.create({
     gap: 10,
     marginBottom: 10,
   },
-  optionText: {
-    flex: 1,
-    color: THEME.text,
-    fontWeight: "900",
-  },
+  optionText: { flex: 1, color: THEME.text, fontWeight: "900" },
   modalBtn: {
     marginTop: 8,
     backgroundColor: THEME.green,
@@ -908,10 +917,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     borderRadius: 16,
   },
-  modalBtnText: {
-    color: THEME.black,
-    fontWeight: "900",
-  },
+  modalBtnText: { color: THEME.black, fontWeight: "900" },
   confirmBox: {
     backgroundColor: THEME.card,
     borderRadius: 26,
@@ -931,11 +937,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 14,
   },
-  confirmTitle: {
-    color: THEME.text,
-    fontSize: 22,
-    fontWeight: "900",
-  },
+  confirmTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
   confirmText: {
     color: THEME.muted,
     textAlign: "center",
@@ -943,11 +945,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontWeight: "700",
   },
-  confirmActions: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 20,
-  },
+  confirmActions: { flexDirection: "row", gap: 10, marginTop: 20 },
   keepBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -957,10 +955,7 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  keepText: {
-    color: THEME.text,
-    fontWeight: "900",
-  },
+  keepText: { color: THEME.text, fontWeight: "900" },
   discardBtn: {
     flex: 1,
     backgroundColor: THEME.green,
@@ -968,8 +963,5 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     alignItems: "center",
   },
-  discardText: {
-    color: THEME.black,
-    fontWeight: "900",
-  },
+  discardText: { color: THEME.black, fontWeight: "900" },
 });

@@ -8,20 +8,37 @@ import {
   Animated,
   StatusBar,
   ActivityIndicator,
-  Alert,
+  Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Toast from "react-native-toast-message";
 
 const THEME = {
-  bg: "#050807",
-  card: "#0D1511",
-  card2: "#101C15",
+  bg: "#070A08",
+  card: "#101713",
+  card2: "#151F19",
   green: "#22C55E",
-  text: "#F3F4F6",
-  muted: "#9CA3AF",
+  yellow: "#FACC15",
+  orange: "#FB923C",
+  text: "#F8FAFC",
+  muted: "#8A94A6",
   border: "#1E2A22",
-  black: "#041008",
+  black: "#050807",
+};
+
+const showToast = (
+  type: "success" | "error" | "info",
+  text1: string,
+  text2?: string
+) => {
+  Toast.show({
+    type,
+    text1,
+    text2,
+    position: "bottom",
+    visibilityTime: 1900,
+  });
 };
 
 export default function Walk3() {
@@ -30,6 +47,7 @@ export default function Walk3() {
   const fade = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(24)).current;
   const scale = useRef(new Animated.Value(0.92)).current;
+  const imageFloat = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.parallel([
@@ -50,16 +68,37 @@ export default function Walk3() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, [fade, slide, scale]);
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(imageFloat, {
+          toValue: -10,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(imageFloat, {
+          toValue: 0,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [fade, imageFloat, scale, slide]);
 
   const handleFinishOnboarding = async () => {
+    if (finishing) return;
+
     try {
       setFinishing(true);
 
-      await AsyncStorage.setItem("hasLaunched", "true");
-      await AsyncStorage.setItem("permissionSetupPending", "true");
+      await AsyncStorage.multiSet([
+        ["hasLaunched", "true"],
+        ["permissionSetupPending", "true"],
+      ]);
+
+      showToast("success", "Welcome to Karto", "Let's set up your delivery experience.");
     } catch {
-      Alert.alert("Error", "Unable to finish onboarding. Please try again.");
+      showToast("error", "Unable to continue", "Please try again.");
     } finally {
       setFinishing(false);
     }
@@ -70,6 +109,7 @@ export default function Walk3() {
       <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
 
       <View style={styles.topGlow} />
+      <View style={styles.yellowGlow} />
       <View style={styles.bottomGlow} />
 
       <Animated.View
@@ -84,7 +124,15 @@ export default function Walk3() {
         <View style={styles.brandIcon}>
           <Icon name="bicycle" size={20} color={THEME.black} />
         </View>
-        <Text style={styles.brandText}>Karto</Text>
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.brandText}>Karto</Text>
+          <Text style={styles.brandSub}>Track every delivery smoothly</Text>
+        </View>
+
+        <View style={styles.stepPill}>
+          <Text style={styles.stepText}>3 / 3</Text>
+        </View>
       </Animated.View>
 
       <Animated.View
@@ -92,7 +140,7 @@ export default function Walk3() {
           styles.imageCard,
           {
             opacity: fade,
-            transform: [{ scale }],
+            transform: [{ scale }, { translateY: imageFloat }],
           },
         ]}
       >
@@ -100,6 +148,13 @@ export default function Walk3() {
           <Icon name="rocket" size={15} color={THEME.black} />
           <Text style={styles.badgeText}>Quick Delivery</Text>
         </View>
+
+        <View style={styles.badgeYellow}>
+          <Icon name="location" size={14} color={THEME.black} />
+          <Text style={styles.badgeYellowText}>Live Updates</Text>
+        </View>
+
+        <View style={styles.imageGlow} />
 
         <Image
           source={require("@/assets/images/onboarding/delivery.png")}
@@ -122,14 +177,14 @@ export default function Walk3() {
         <Text style={styles.title}>Fast Delivery</Text>
 
         <Text style={styles.description}>
-          Get your food and daily essentials delivered quickly from nearby
-          trusted stores with a smooth Karto experience.
+          Get food and daily essentials delivered quickly from nearby trusted
+          stores with a smooth Karto experience.
         </Text>
 
         <View style={styles.featureRow}>
-          <Feature icon="time-outline" text="Quick ETA" />
-          <Feature icon="location-outline" text="Nearby" />
-          <Feature icon="shield-checkmark-outline" text="Trusted" />
+          <Feature icon="time-outline" text="Quick ETA" color={THEME.green} />
+          <Feature icon="location-outline" text="Nearby" color={THEME.yellow} />
+          <Feature icon="shield-checkmark-outline" text="Trusted" color={THEME.orange} />
         </View>
 
         <View style={styles.dots}>
@@ -150,7 +205,7 @@ export default function Walk3() {
       >
         <TouchableOpacity
           style={[styles.button, finishing && styles.disabledBtn]}
-          activeOpacity={0.86}
+          activeOpacity={0.88}
           onPress={handleFinishOnboarding}
           disabled={finishing}
         >
@@ -170,9 +225,11 @@ export default function Walk3() {
   );
 }
 
-const Feature = ({ icon, text }: any) => (
+const Feature = ({ icon, text, color }: any) => (
   <View style={styles.featurePill}>
-    <Icon name={icon} size={15} color={THEME.green} />
+    <View style={[styles.featureIcon, { backgroundColor: `${color}22` }]}>
+      <Icon name={icon} size={15} color={color} />
+    </View>
     <Text style={styles.featureText}>{text}</Text>
   </View>
 );
@@ -184,8 +241,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 22,
-    paddingTop: 54,
-    paddingBottom: 34,
+    paddingTop: Platform.OS === "ios" ? 58 : 46,
+    paddingBottom: Platform.OS === "ios" ? 38 : 30,
     overflow: "hidden",
   },
   topGlow: {
@@ -195,8 +252,16 @@ const styles = StyleSheet.create({
     width: 250,
     height: 250,
     borderRadius: 125,
-    backgroundColor: "#12351F",
-    opacity: 0.55,
+    backgroundColor: "rgba(34,197,94,0.16)",
+  },
+  yellowGlow: {
+    position: "absolute",
+    top: 188,
+    left: -112,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(250,204,21,0.11)",
   },
   bottomGlow: {
     position: "absolute",
@@ -205,19 +270,18 @@ const styles = StyleSheet.create({
     width: 270,
     height: 270,
     borderRadius: 135,
-    backgroundColor: "#0B2A18",
-    opacity: 0.55,
+    backgroundColor: "rgba(251,146,60,0.10)",
   },
   brandRow: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
+    gap: 10,
   },
   brandIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 14,
+    width: 42,
+    height: 42,
+    borderRadius: 16,
     backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
@@ -227,6 +291,25 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "900",
     letterSpacing: 0.3,
+  },
+  brandSub: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 1,
+  },
+  stepPill: {
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 99,
+  },
+  stepText: {
+    color: THEME.yellow,
+    fontSize: 11,
+    fontWeight: "900",
   },
   imageCard: {
     width: "100%",
@@ -238,6 +321,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginTop: 22,
+    overflow: "hidden",
+  },
+  imageGlow: {
+    position: "absolute",
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(34,197,94,0.13)",
   },
   badge: {
     position: "absolute",
@@ -250,15 +341,34 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
+    zIndex: 2,
   },
   badgeText: {
     color: THEME.black,
     fontSize: 11,
     fontWeight: "900",
   },
+  badgeYellow: {
+    position: "absolute",
+    left: 18,
+    bottom: 18,
+    backgroundColor: THEME.yellow,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    borderRadius: 999,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    zIndex: 2,
+  },
+  badgeYellowText: {
+    color: THEME.black,
+    fontSize: 11,
+    fontWeight: "900",
+  },
   image: {
-    width: 270,
-    height: 270,
+    width: 274,
+    height: 274,
   },
   textContainer: {
     alignItems: "center",
@@ -266,11 +376,11 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   kicker: {
-    color: THEME.green,
-    fontSize: 13,
+    color: THEME.yellow,
+    fontSize: 12,
     fontWeight: "900",
     marginBottom: 8,
-    letterSpacing: 0.6,
+    letterSpacing: 0.9,
     textTransform: "uppercase",
   },
   title: {
@@ -285,6 +395,7 @@ const styles = StyleSheet.create({
     color: THEME.muted,
     textAlign: "center",
     lineHeight: 22,
+    fontWeight: "700",
   },
   featureRow: {
     flexDirection: "row",
@@ -300,12 +411,19 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 6,
+  },
+  featureIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
   },
   featureText: {
     color: THEME.text,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "900",
   },
   dots: {
     flexDirection: "row",

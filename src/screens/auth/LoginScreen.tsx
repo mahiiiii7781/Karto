@@ -1,5 +1,5 @@
 // src/screens/auth/LoginScreen.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
   ScrollView,
   StatusBar,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { CommonActions, useNavigation } from "@react-navigation/native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -28,13 +28,63 @@ const THEME = {
   card2: "#151F19",
   green: "#22C55E",
   yellow: "#FACC15",
+  blue: "#38BDF8",
+  orange: "#FB923C",
   text: "#F8FAFC",
   muted: "#8A94A6",
   border: "#1E2A22",
   black: "#050807",
+  danger: "#EF4444",
 };
 
 type LoginType = "email" | "phone";
+
+const showToast = (
+  type: "success" | "error" | "info",
+  text1: string,
+  text2?: string
+) => {
+  Toast.show({
+    type,
+    text1,
+    text2,
+    position: "bottom",
+    visibilityTime: 1900,
+  });
+};
+
+const normalizeAuthData = (raw: any) => {
+  const data = raw?.data || raw || {};
+
+  return {
+    success: data?.success !== false,
+    message: data?.message,
+    accessToken:
+      data?.accessToken ||
+      data?.access_token ||
+      data?.token ||
+      data?.data?.accessToken ||
+      data?.data?.access_token ||
+      "",
+    refreshToken:
+      data?.refreshToken ||
+      data?.refresh_token ||
+      data?.data?.refreshToken ||
+      data?.data?.refresh_token ||
+      "",
+    user: data?.user || data?.data?.user || null,
+  };
+};
+
+const getRoleRoute = (role?: string) => {
+  const normalizedRole = String(role || "CUSTOMER").toUpperCase();
+
+  if (normalizedRole === "ADMIN") return "RoleSelection";
+  if (normalizedRole === "VENDOR") return "VendorApp";
+  if (normalizedRole === "RIDER") return "RiderApp";
+
+  return "UserApp";
+};
 
 export default function LoginScreen() {
   const navigation = useNavigation<any>();
@@ -45,50 +95,74 @@ export default function LoginScreen() {
   const [phone, setPhone] = useState("");
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loadingAction, setLoadingAction] = useState<"send" | "verify" | null>(null);
 
   const fade = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(24)).current;
   const scale = useRef(new Animated.Value(0.97)).current;
 
+  const cleanPhone = useMemo(() => phone.replace(/\D/g, ""), [phone]);
+  const loading = loadingAction !== null;
+
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fade, { toValue: 1, duration: 450, useNativeDriver: true }),
-      Animated.timing(slide, { toValue: 0, duration: 450, useNativeDriver: true }),
-      Animated.spring(scale, { toValue: 1, friction: 7, useNativeDriver: true }),
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slide, {
+        toValue: 0,
+        duration: 450,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scale, {
+        toValue: 1,
+        friction: 7,
+        useNativeDriver: true,
+      }),
     ]).start();
-  }, []);
+  }, [fade, scale, slide]);
 
-  const showToast = (
-    type: "success" | "error" | "info",
-    text1: string,
-    text2?: string
-  ) => {
-    Toast.show({ type, text1, text2, position: "bottom", visibilityTime: 1900 });
-  };
-
-  const switchLoginType = (type: LoginType) => {
-    setLoginType(type);
+  const resetOtpState = () => {
     setOtp("");
     setOtpSent(false);
   };
 
-  const continueBrowsing = async () => {
-    await AsyncStorage.setItem("hasLaunched", "true");
+  const switchLoginType = (type: LoginType) => {
+    if (loading || loginType === type) return;
 
-    showToast("info", "Continue browsing", "You can login later for cart and orders.");
-
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-    } else {
-      navigation.reset({
-        index: 0,
-        routes: [{ name: "UserApp" as never }],
-      });
-    }
+    setLoginType(type);
+    resetOtpState();
   };
 
-  const cleanPhone = phone.replace(/\D/g, "");
+  const resetToRoute = (routeName: string) => {
+    navigation.dispatch(
+      CommonActions.reset({
+        index: 0,
+        routes: [{ name: routeName }],
+      })
+    );
+  };
+
+  const continueBrowsing = async () => {
+    try {
+      await AsyncStorage.multiSet([
+        ["hasLaunched", "true"],
+        ["guestMode", "true"],
+      ]);
+
+      showToast(
+        "info",
+        "Guest mode",
+        "You can login later for cart, checkout and orders."
+      );
+
+      resetToRoute("UserApp");
+    } catch {
+      showToast("error", "Unable to continue", "Please try again.");
+    }
+  };
 
   const validateBeforeOtp = () => {
     if (loginType === "email") {
@@ -112,7 +186,11 @@ export default function LoginScreen() {
       }
 
       if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
-        showToast("info", "Invalid phone", "Enter a valid 10 digit Indian phone number.");
+        showToast(
+          "info",
+          "Invalid phone",
+          "Enter a valid 10 digit Indian phone number."
+        );
         return false;
       }
     }
@@ -121,9 +199,10 @@ export default function LoginScreen() {
   };
 
   const handleSendOtp = async () => {
+    if (loading) return;
     if (!validateBeforeOtp()) return;
 
-    setLoading(true);
+    setLoadingAction("send");
 
     try {
       const payload =
@@ -132,9 +211,10 @@ export default function LoginScreen() {
           : { phone: `+91${cleanPhone}` };
 
       const res = await apiClient.post("/auth/send-otp", payload);
+      const data = res?.data || {};
 
-      if (res?.data?.success === false) {
-        showToast("error", "OTP failed", res?.data?.message || "Unable to send OTP.");
+      if (data?.success === false) {
+        showToast("error", "OTP failed", data?.message || "Unable to send OTP.");
         return;
       }
 
@@ -154,51 +234,67 @@ export default function LoginScreen() {
         error?.response?.data?.message || "Unable to send OTP. Please try again."
       );
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
   };
 
   const handleVerifyOtp = async () => {
-    if (!otp.trim()) {
-      showToast("info", "OTP required", "Please enter the OTP.");
+    if (loading) return;
+
+    const cleanOtp = otp.trim();
+
+    if (!/^\d{4,6}$/.test(cleanOtp)) {
+      showToast("info", "Invalid OTP", "Please enter the correct OTP.");
       return;
     }
 
-    setLoading(true);
+    setLoadingAction("verify");
 
     try {
       const payload =
         loginType === "email"
-          ? { email: email.trim().toLowerCase(), otp: otp.trim() }
-          : { phone: `+91${cleanPhone}`, otp: otp.trim() };
+          ? { email: email.trim().toLowerCase(), otp: cleanOtp }
+          : { phone: `+91${cleanPhone}`, otp: cleanOtp };
 
       const res = await apiClient.post("/auth/verify-otp", payload);
-      const data = res?.data;
+      const authData = normalizeAuthData(res?.data);
 
-      if (!data?.success) {
-        showToast("error", "Invalid OTP", data?.message || "OTP verification failed.");
+      if (!authData.success || !authData.accessToken || !authData.user) {
+        showToast(
+          "error",
+          "Invalid OTP",
+          authData.message || "OTP verification failed."
+        );
         return;
       }
 
       await AsyncStorage.multiSet([
-        ["accessToken", data.accessToken || ""],
-        ["refreshToken", data.refreshToken || ""],
-        ["user", JSON.stringify(data.user || {})],
+        ["accessToken", authData.accessToken],
+        ["refreshToken", authData.refreshToken || ""],
+        ["user", JSON.stringify(authData.user)],
         ["hasLaunched", "true"],
+        ["guestMode", "false"],
       ]);
 
       await signInFromStorage?.();
 
       showToast("success", "Welcome to Karto", "You are logged in successfully.");
+
+      resetToRoute(getRoleRoute(authData.user?.role));
     } catch (error: any) {
       showToast(
         "error",
         "Verification failed",
-        error?.response?.data?.message || "OTP verification failed. Please try again."
+        error?.response?.data?.message ||
+          "OTP verification failed. Please try again."
       );
     } finally {
-      setLoading(false);
+      setLoadingAction(null);
     }
+  };
+
+  const goToSignup = () => {
+    navigation.navigate("SignupScreen");
   };
 
   return (
@@ -214,6 +310,9 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.topGlow} />
+          <View style={styles.yellowGlow} />
+
           <Animated.View
             style={[
               styles.container,
@@ -229,13 +328,17 @@ export default function LoginScreen() {
 
             <Text style={styles.appName}>Karto</Text>
             <Text style={styles.premium}>FAST LOCAL DELIVERY</Text>
-            <Text style={styles.tagline}>Login only when you need cart, orders or checkout.</Text>
+            <Text style={styles.tagline}>
+              Login only when you need cart, orders or checkout.
+            </Text>
 
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.title}>Login with OTP</Text>
-                  <Text style={styles.subtitle}>No password needed. Simple and secure.</Text>
+                  <Text style={styles.subtitle}>
+                    No password needed. Simple and secure.
+                  </Text>
                 </View>
 
                 <View style={styles.secureIcon}>
@@ -248,13 +351,19 @@ export default function LoginScreen() {
                   style={[styles.switchBtn, loginType === "phone" && styles.switchActive]}
                   onPress={() => switchLoginType("phone")}
                   activeOpacity={0.85}
+                  disabled={loading}
                 >
                   <Icon
                     name="call-outline"
                     size={16}
                     color={loginType === "phone" ? THEME.black : THEME.muted}
                   />
-                  <Text style={[styles.switchText, loginType === "phone" && styles.switchTextActive]}>
+                  <Text
+                    style={[
+                      styles.switchText,
+                      loginType === "phone" && styles.switchTextActive,
+                    ]}
+                  >
                     Phone
                   </Text>
                 </TouchableOpacity>
@@ -263,13 +372,19 @@ export default function LoginScreen() {
                   style={[styles.switchBtn, loginType === "email" && styles.switchActive]}
                   onPress={() => switchLoginType("email")}
                   activeOpacity={0.85}
+                  disabled={loading}
                 >
                   <Icon
                     name="mail-outline"
                     size={16}
                     color={loginType === "email" ? THEME.black : THEME.muted}
                   />
-                  <Text style={[styles.switchText, loginType === "email" && styles.switchTextActive]}>
+                  <Text
+                    style={[
+                      styles.switchText,
+                      loginType === "email" && styles.switchTextActive,
+                    ]}
+                  >
                     Email
                   </Text>
                 </TouchableOpacity>
@@ -285,11 +400,11 @@ export default function LoginScreen() {
                     value={phone}
                     onChangeText={text => {
                       setPhone(text.replace(/\D/g, ""));
-                      setOtpSent(false);
-                      setOtp("");
+                      resetOtpState();
                     }}
                     keyboardType="number-pad"
                     maxLength={10}
+                    editable={!loading}
                   />
                 </View>
               ) : (
@@ -302,22 +417,23 @@ export default function LoginScreen() {
                     value={email}
                     onChangeText={text => {
                       setEmail(text);
-                      setOtpSent(false);
-                      setOtp("");
+                      resetOtpState();
                     }}
                     keyboardType="email-address"
                     autoCapitalize="none"
+                    autoCorrect={false}
+                    editable={!loading}
                   />
                 </View>
               )}
 
               <TouchableOpacity
-                style={[styles.primaryBtn, loading && styles.disabled]}
+                style={[styles.primaryBtn, loadingAction === "send" && styles.disabled]}
                 onPress={handleSendOtp}
                 disabled={loading}
                 activeOpacity={0.9}
               >
-                {loading && !otpSent ? (
+                {loadingAction === "send" ? (
                   <ActivityIndicator color={THEME.black} />
                 ) : (
                   <>
@@ -346,16 +462,17 @@ export default function LoginScreen() {
                       onChangeText={text => setOtp(text.replace(/\D/g, ""))}
                       keyboardType="number-pad"
                       maxLength={6}
+                      editable={!loading}
                     />
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.verifyBtn, loading && styles.disabled]}
+                    style={[styles.verifyBtn, loadingAction === "verify" && styles.disabled]}
                     onPress={handleVerifyOtp}
                     disabled={loading}
                     activeOpacity={0.9}
                   >
-                    {loading ? (
+                    {loadingAction === "verify" ? (
                       <ActivityIndicator color={THEME.black} />
                     ) : (
                       <>
@@ -377,22 +494,23 @@ export default function LoginScreen() {
                 style={styles.guestBtn}
                 activeOpacity={0.9}
                 onPress={continueBrowsing}
+                disabled={loading}
               >
                 <Icon name="storefront-outline" size={20} color={THEME.green} />
-                <Text style={styles.guestText}>Continue As A Guest</Text>
+                <Text style={styles.guestText}>Continue As Guest</Text>
                 <Icon name="chevron-forward" size={18} color={THEME.muted} />
               </TouchableOpacity>
 
               <View style={styles.footer}>
                 <Text style={styles.footerText}>New to Karto?</Text>
-                <TouchableOpacity onPress={() => navigation.navigate("SignupScreen")}>
+                <TouchableOpacity onPress={goToSignup} disabled={loading}>
                   <Text style={styles.link}> Create account</Text>
                 </TouchableOpacity>
               </View>
             </View>
 
             <Text style={styles.bottomHint}>
-              You can browse Home without login. Login is required for protected actions.
+              Guest can browse Home. Login is required for cart, checkout and orders.
             </Text>
           </Animated.View>
         </ScrollView>
@@ -408,6 +526,25 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     padding: 20,
+    overflow: "hidden",
+  },
+  topGlow: {
+    position: "absolute",
+    top: -90,
+    right: -90,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(34,197,94,0.15)",
+  },
+  yellowGlow: {
+    position: "absolute",
+    bottom: -90,
+    left: -90,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
+    backgroundColor: "rgba(250,204,21,0.11)",
   },
   container: { alignItems: "center" },
   logoWrap: {
@@ -424,7 +561,6 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.yellow,
     justifyContent: "center",
     alignItems: "center",
-    elevation: 12,
     zIndex: 2,
   },
   logoGlow: {
@@ -432,8 +568,7 @@ const styles = StyleSheet.create({
     width: 96,
     height: 96,
     borderRadius: 32,
-    backgroundColor: "#3B320A",
-    opacity: 0.65,
+    backgroundColor: "rgba(250,204,21,0.22)",
   },
   appName: {
     fontSize: 43,
@@ -462,23 +597,28 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: THEME.border,
-    elevation: 10,
   },
   cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
     marginBottom: 18,
+    gap: 12,
   },
   title: { color: THEME.text, fontSize: 27, fontWeight: "900" },
-  subtitle: { color: THEME.muted, marginTop: 5, fontWeight: "700" },
+  subtitle: {
+    color: THEME.muted,
+    marginTop: 5,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
   secureIcon: {
     width: 46,
     height: 46,
     borderRadius: 17,
-    backgroundColor: THEME.card2,
+    backgroundColor: "#102116",
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: "#20462C",
     alignItems: "center",
     justifyContent: "center",
   },

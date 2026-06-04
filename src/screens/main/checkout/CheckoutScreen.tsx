@@ -40,17 +40,35 @@ const DEFAULT_SGST_RATE = 2.5;
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
 
+type PaymentMethod = "COD" | "ONLINE";
+
+type BillSummary = {
+  subtotal: number;
+  deliveryFee: number;
+  platformFee: number;
+  discount: number;
+  cgst: number;
+  sgst: number;
+  cgstRate: number;
+  sgstRate: number;
+  taxTotal: number;
+  total: number;
+};
+
 export default function CheckoutScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const { user } = useAuth();
 
   const params = route.params || {};
+  const isGuest = !user?.id;
 
-  const [cartItems, setCartItems] = useState<CartItem[]>(params.items || []);
+  const [cartItems, setCartItems] = useState<CartItem[]>(
+    Array.isArray(params.items) ? params.items : []
+  );
   const [addresses, setAddresses] = useState<any[]>([]);
   const [selectedAddress, setSelectedAddress] = useState<any>(null);
-  const [paymentMethod, setPaymentMethod] = useState<"COD" | "ONLINE">("COD");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("COD");
 
   const [customerNote, setCustomerNote] = useState("");
   const [couponCode, setCouponCode] = useState("");
@@ -58,6 +76,7 @@ export default function CheckoutScreen() {
 
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
+  const [refreshingBill, setRefreshingBill] = useState(false);
   const [taxModalVisible, setTaxModalVisible] = useState(false);
   const [billModalVisible, setBillModalVisible] = useState(false);
 
@@ -79,7 +98,7 @@ export default function CheckoutScreen() {
   };
 
   const requireAuth = (message = "Please sign in to continue.") => {
-    if (user?.id) return true;
+    if (!isGuest) return true;
 
     showToast("info", "Login required", message);
     navigation.navigate("Auth");
@@ -94,7 +113,7 @@ export default function CheckoutScreen() {
     }, 0);
   }, [cartItems]);
 
-  const bill = useMemo(() => {
+  const bill: BillSummary = useMemo(() => {
     const subtotal = Number(
       pricing?.subtotal ??
         pricing?.cartValue ??
@@ -203,9 +222,31 @@ export default function CheckoutScreen() {
     );
   };
 
-  const loadCheckout = async () => {
-    if (!requireAuth("Please sign in to continue checkout.")) {
+  const startIntroAnimation = () => {
+    fadeAnim.setValue(0);
+    slideAnim.setValue(14);
+
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 260,
+        useNativeDriver: true,
+      }),
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 260,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const loadCheckout = useCallback(async () => {
+    if (isGuest) {
+      setCartItems([]);
+      setAddresses([]);
+      setSelectedAddress(null);
       setLoading(false);
+      startIntroAnimation();
       return;
     }
 
@@ -244,6 +285,7 @@ export default function CheckoutScreen() {
         });
       } else {
         setAddresses([]);
+        setSelectedAddress(null);
       }
 
       if (pricingRes.status === "fulfilled") {
@@ -251,32 +293,27 @@ export default function CheckoutScreen() {
         if (nextPricing) setPricing(nextPricing);
       }
 
-      Animated.parallel([
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 260,
-          useNativeDriver: true,
-        }),
-        Animated.timing(slideAnim, {
-          toValue: 0,
-          duration: 260,
-          useNativeDriver: true,
-        }),
-      ]).start();
+      startIntroAnimation();
     } catch {
       showToast("error", "Unable to load checkout", "Please try again.");
     } finally {
       setLoading(false);
     }
-  };
+  }, [isGuest]);
 
   useFocusEffect(
     useCallback(() => {
       loadCheckout();
-    }, [user?.id])
+    }, [loadCheckout])
   );
 
+  const goToHome = () => {
+    navigation.navigate("UserApp", { screen: "Home" });
+  };
+
   const goToAddress = (address?: any) => {
+    if (!requireAuth("Please sign in to add a delivery address.")) return;
+
     navigation.navigate("UserApp", {
       screen: "Profile",
       params: {
@@ -309,7 +346,7 @@ export default function CheckoutScreen() {
       return false;
     }
 
-    if (bill.subtotal <= 0) {
+    if (bill.subtotal <= 0 || bill.total <= 0) {
       showToast("error", "Invalid cart", "Your cart amount is invalid.");
       return false;
     }
@@ -317,7 +354,7 @@ export default function CheckoutScreen() {
     return true;
   };
 
-  const createOrderPayload = (method: "COD" | "ONLINE") => ({
+  const createOrderPayload = (method: PaymentMethod) => ({
     addressId: selectedAddress.id,
     paymentMethod: method,
     customerNote: customerNote.trim() || null,
@@ -331,6 +368,20 @@ export default function CheckoutScreen() {
     return data;
   };
 
+  const postWithFallback = async (paths: string[], payload: any) => {
+    let lastError: any = null;
+
+    for (const path of paths) {
+      try {
+        return await apiClient.post(path, payload);
+      } catch (error: any) {
+        lastError = error;
+      }
+    }
+
+    throw lastError || new Error("Request failed.");
+  };
+
   const placeOnlineOrder = async () => {
     const { data: createdOrder, error } = await orderService.createOrder(
       createOrderPayload("ONLINE")
@@ -340,13 +391,17 @@ export default function CheckoutScreen() {
       throw error || new Error("Unable to create order.");
     }
 
-    const razorOrderRes = await apiClient.post("/payments/create-order", {
-      orderId: createdOrder.id,
-    });
+    const razorOrderRes = await postWithFallback(
+      ["/payment/razorpay/create-order", "/payments/create-order"],
+      { orderId: createdOrder.id }
+    );
 
-    const razorData = razorOrderRes.data || {};
+    const razorData = razorOrderRes.data?.data || razorOrderRes.data || {};
 
-    if (!razorData.key || !razorData.amount || !razorData.razorpayOrderId) {
+    const razorpayOrderId =
+      razorData.razorpayOrderId || razorData.razorpay_order_id || razorData.id;
+
+    if (!razorData.key || !razorData.amount || !razorpayOrderId) {
       throw new Error("Payment setup failed.");
     }
 
@@ -356,7 +411,7 @@ export default function CheckoutScreen() {
       key: razorData.key,
       amount: razorData.amount,
       name: "Karto",
-      order_id: razorData.razorpayOrderId,
+      order_id: razorpayOrderId,
       prefill: {
         email: user?.email || "",
         contact: (user as any)?.phone || "",
@@ -375,14 +430,18 @@ export default function CheckoutScreen() {
       throw new Error("Payment verification details are missing.");
     }
 
-    const verifyRes = await apiClient.post("/payments/verify", {
-      kartoOrderId: createdOrder.id,
-      razorpay_order_id: paymentData.razorpay_order_id,
-      razorpay_payment_id: paymentData.razorpay_payment_id,
-      razorpay_signature: paymentData.razorpay_signature,
-    });
+    const verifyRes = await postWithFallback(
+      ["/payment/razorpay/verify", "/payments/verify"],
+      {
+        kartoOrderId: createdOrder.id,
+        orderId: createdOrder.id,
+        razorpay_order_id: paymentData.razorpay_order_id,
+        razorpay_payment_id: paymentData.razorpay_payment_id,
+        razorpay_signature: paymentData.razorpay_signature,
+      }
+    );
 
-    if (!verifyRes.data?.success) {
+    if (verifyRes.data?.success === false) {
       throw new Error(verifyRes.data?.message || "Payment verification failed.");
     }
 
@@ -390,7 +449,7 @@ export default function CheckoutScreen() {
   };
 
   const placeOrder = async () => {
-    if (!validateOrder()) return;
+    if (!validateOrder() || placing) return;
 
     try {
       setPlacing(true);
@@ -413,8 +472,8 @@ export default function CheckoutScreen() {
     } catch (error: any) {
       const msg =
         error?.description ||
-        error?.message ||
         error?.response?.data?.message ||
+        error?.message ||
         "Unable to place your order. Please try again.";
 
       showToast(
@@ -429,6 +488,7 @@ export default function CheckoutScreen() {
 
   const removeItem = async (itemId: string) => {
     if (!itemId || placing) return;
+    if (!requireAuth("Please sign in to manage your cart.")) return;
 
     try {
       const { error } = await cartService.removeFromCart(itemId);
@@ -439,24 +499,27 @@ export default function CheckoutScreen() {
       }
 
       setCartItems(prev => prev.filter(x => x.id !== itemId));
-      showToast("success", "Item removed", "The item has been removed from your order.");
-
-      setTimeout(() => {
-        loadCheckout();
-      }, 250);
+      showToast("success", "Item removed");
+      setTimeout(() => loadCheckout(), 250);
     } catch {
       showToast("error", "Unable to remove item", "Please try again.");
     }
   };
 
   const refreshPricing = async () => {
+    if (refreshingBill) return;
+    if (!requireAuth("Please sign in to refresh your bill.")) return;
+
     try {
+      setRefreshingBill(true);
       const res = await apiClient.get("/cart/pricing");
       const nextPricing = normalizePricing(res);
       if (nextPricing) setPricing(nextPricing);
-      showToast("success", "Bill refreshed", "Your latest bill has been updated.");
+      showToast("success", "Bill refreshed", "Latest bill updated.");
     } catch {
       showToast("error", "Unable to refresh bill", "Please try again.");
+    } finally {
+      setRefreshingBill(false);
     }
   };
 
@@ -480,6 +543,36 @@ export default function CheckoutScreen() {
     );
   }
 
+  if (isGuest) {
+    return (
+      <View style={styles.center}>
+        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
+        <View style={styles.emptyIcon}>
+          <Icon name="lock-closed-outline" size={56} color={THEME.yellow} />
+        </View>
+
+        <Text style={styles.emptyTitle}>Login to checkout</Text>
+        <Text style={styles.emptySub}>
+          Continue browsing as guest or sign in to place your order securely.
+        </Text>
+
+        <TouchableOpacity
+          style={styles.greenBtn}
+          onPress={() => navigation.navigate("Auth")}
+          activeOpacity={0.9}
+        >
+          <Text style={styles.greenBtnText}>Login / Signup</Text>
+          <Icon name="arrow-forward" size={18} color={THEME.black} />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.secondaryBtn} onPress={goToHome} activeOpacity={0.85}>
+          <Text style={styles.secondaryBtnText}>Continue as Guest</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (!cartItems.length) {
     return (
       <View style={styles.center}>
@@ -492,7 +585,7 @@ export default function CheckoutScreen() {
         <Text style={styles.emptyTitle}>Your cart is empty</Text>
         <Text style={styles.emptySub}>Add items from nearby stores before checkout.</Text>
 
-        <TouchableOpacity style={styles.greenBtn} onPress={() => navigation.goBack()}>
+        <TouchableOpacity style={styles.greenBtn} onPress={goToHome} activeOpacity={0.9}>
           <Text style={styles.greenBtnText}>Explore Stores</Text>
           <Icon name="arrow-forward" size={18} color={THEME.black} />
         </TouchableOpacity>
@@ -506,7 +599,7 @@ export default function CheckoutScreen() {
 
       <Animated.ScrollView
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 170 }}
+        contentContainerStyle={styles.scrollContent}
         style={{
           opacity: fadeAnim,
           transform: [{ translateY: slideAnim }],
@@ -517,25 +610,31 @@ export default function CheckoutScreen() {
             <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
-          <View style={{ flex: 1 }}>
+          <View style={styles.headerTextBox}>
             <Text style={styles.headerTitle}>Checkout</Text>
             <Text style={styles.headerSub}>
               {itemCount} item{itemCount > 1 ? "s" : ""} • Secure payment
             </Text>
           </View>
 
-          <TouchableOpacity style={styles.refreshBtn} onPress={refreshPricing}>
-            <Icon name="refresh" size={19} color={THEME.black} />
+          <TouchableOpacity
+            style={[styles.refreshBtn, refreshingBill && { opacity: 0.7 }]}
+            onPress={refreshPricing}
+            disabled={refreshingBill}
+          >
+            {refreshingBill ? (
+              <ActivityIndicator size="small" color={THEME.black} />
+            ) : (
+              <Icon name="refresh" size={19} color={THEME.black} />
+            )}
           </TouchableOpacity>
         </View>
 
         <View style={styles.heroBanner}>
-          <View style={{ flex: 1 }}>
+          <View style={styles.heroContent}>
             <Text style={styles.heroTag}>KARTO SECURE CHECKOUT</Text>
             <Text style={styles.heroTitle}>Review your order</Text>
-            <Text style={styles.heroSub}>
-              Confirm address, payment method and bill details before placing your order.
-            </Text>
+            <Text style={styles.heroSub}>Confirm address, payment and bill details.</Text>
           </View>
 
           <View style={styles.heroIcon}>
@@ -545,9 +644,7 @@ export default function CheckoutScreen() {
 
         <View style={styles.offerStrip}>
           <Icon name="checkmark-circle" size={18} color={THEME.green} />
-          <Text style={styles.offerText}>
-            Verified bill • Fresh packing • Fast delivery support
-          </Text>
+          <Text style={styles.offerText}>Verified bill • Fresh packing • Fast support</Text>
         </View>
 
         <View style={styles.sectionHeader}>
@@ -567,7 +664,7 @@ export default function CheckoutScreen() {
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 20 }}
+            contentContainerStyle={styles.addressList}
           >
             {addresses.map((addr, index) => {
               const active = selectedAddress?.id === addr.id;
@@ -623,17 +720,14 @@ export default function CheckoutScreen() {
               key={item.id || String(index)}
               style={[
                 styles.itemRow,
-                index === cartItems.length - 1 && {
-                  borderBottomWidth: 0,
-                  marginBottom: 0,
-                },
+                index === cartItems.length - 1 && styles.lastItemRow,
               ]}
             >
               <View style={styles.foodIcon}>
                 <Icon name="fast-food-outline" size={24} color={THEME.green} />
               </View>
 
-              <View style={{ flex: 1 }}>
+              <View style={styles.itemInfo}>
                 <Text style={styles.itemName} numberOfLines={1}>
                   {getItemName(item)}
                 </Text>
@@ -657,7 +751,7 @@ export default function CheckoutScreen() {
 
           <TextInput
             value={couponCode}
-            onChangeText={setCouponCode}
+            onChangeText={text => setCouponCode(text.toUpperCase())}
             placeholder="Enter coupon code"
             placeholderTextColor={THEME.muted}
             autoCapitalize="characters"
@@ -668,7 +762,11 @@ export default function CheckoutScreen() {
             style={styles.applyCouponBtn}
             onPress={() =>
               couponCode.trim()
-                ? showToast("info", "Coupon will be applied", "Coupon is validated while placing the order.")
+                ? showToast(
+                    "info",
+                    "Coupon ready",
+                    "Coupon will be validated while placing the order."
+                  )
                 : showToast("info", "Coupon code required", "Please enter a coupon code first.")
             }
           >
@@ -699,19 +797,17 @@ export default function CheckoutScreen() {
         </View>
 
         {paymentMethod === "ONLINE" ? (
-          <View style={styles.paymentInfoBox}>
-            <Icon name="lock-closed-outline" size={18} color={THEME.green} />
-            <Text style={styles.paymentInfoText}>
-              Payment is processed securely. Your order will be confirmed after successful verification.
-            </Text>
-          </View>
+          <InfoBox
+            icon="lock-closed-outline"
+            color="green"
+            text="Payment is processed securely and confirmed after verification."
+          />
         ) : (
-          <View style={styles.codInfoBox}>
-            <Icon name="cash-outline" size={18} color={THEME.yellow} />
-            <Text style={styles.codInfoText}>
-              Please keep the payable amount ready at the time of delivery.
-            </Text>
-          </View>
+          <InfoBox
+            icon="cash-outline"
+            color="yellow"
+            text="Please keep the payable amount ready at delivery."
+          />
         )}
 
         <Text style={styles.sectionTitleSolo}>Delivery Instructions</Text>
@@ -720,7 +816,7 @@ export default function CheckoutScreen() {
           style={styles.noteInput}
           value={customerNote}
           onChangeText={setCustomerNote}
-          placeholder="Any instruction for the store or rider?"
+          placeholder="Any instruction for store or rider?"
           placeholderTextColor={THEME.muted}
           multiline
           maxLength={200}
@@ -770,7 +866,7 @@ export default function CheckoutScreen() {
         </View>
 
         <TouchableOpacity
-          style={[styles.placeBtn, placing && { opacity: 0.65 }]}
+          style={[styles.placeBtn, placing && styles.disabledPlaceBtn]}
           onPress={placeOrder}
           disabled={placing}
           activeOpacity={0.9}
@@ -803,6 +899,21 @@ export default function CheckoutScreen() {
   );
 }
 
+const InfoBox = ({ icon, color, text }: any) => {
+  const isGreen = color === "green";
+
+  return (
+    <View style={isGreen ? styles.paymentInfoBox : styles.codInfoBox}>
+      <Icon
+        name={icon}
+        size={18}
+        color={isGreen ? THEME.green : THEME.yellow}
+      />
+      <Text style={isGreen ? styles.paymentInfoText : styles.codInfoText}>{text}</Text>
+    </View>
+  );
+};
+
 const PaymentOption = ({ active, icon, title, subtitle, badge, onPress }: any) => (
   <TouchableOpacity
     style={[styles.paymentCard, active && styles.paymentCardActive]}
@@ -814,7 +925,7 @@ const PaymentOption = ({ active, icon, title, subtitle, badge, onPress }: any) =
         <Icon name={icon} size={22} color={active ? THEME.black : THEME.green} />
       </View>
 
-      <View style={{ flex: 1 }}>
+      <View style={styles.paymentTextBox}>
         <View style={styles.paymentTitleRow}>
           <Text style={styles.paymentTitle}>{title}</Text>
           {!!badge && <Text style={styles.paymentBadge}>{badge}</Text>}
@@ -850,9 +961,7 @@ const TaxModal = ({ visible, onClose, bill }: any) => (
         </View>
 
         <Text style={styles.taxTitle}>Tax Details</Text>
-        <Text style={styles.taxSub}>
-          Tax includes CGST and SGST applied on your cart value.
-        </Text>
+        <Text style={styles.taxSub}>CGST and SGST are calculated on your cart value.</Text>
 
         <View style={styles.taxBreakBox}>
           <BillRow
@@ -884,7 +993,7 @@ const BillModal = ({ visible, onClose, bill }: any) => (
         </View>
 
         <Text style={styles.taxTitle}>Complete Bill</Text>
-        <Text style={styles.taxSub}>Final payable amount includes all applicable charges.</Text>
+        <Text style={styles.taxSub}>Final payable amount includes all charges.</Text>
 
         <View style={styles.taxBreakBox}>
           <BillRow label="Cart Value" value={money(bill.subtotal)} />
@@ -893,7 +1002,9 @@ const BillModal = ({ visible, onClose, bill }: any) => (
           <BillRow label="CGST" value={money(bill.cgst)} />
           <BillRow label="SGST" value={money(bill.sgst)} />
           <BillRow label="Total Tax" value={money(bill.taxTotal)} />
-          {bill.discount > 0 && <BillRow label="Discount" value={`- ${money(bill.discount)}`} green />}
+          {bill.discount > 0 && (
+            <BillRow label="Discount" value={`- ${money(bill.discount)}`} green />
+          )}
           <View style={styles.divider} />
           <BillRow label="Total Amount" value={money(bill.total)} bold />
         </View>
@@ -957,6 +1068,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: "700",
     textAlign: "center",
+    lineHeight: 20,
   },
   greenBtn: {
     backgroundColor: THEME.green,
@@ -972,6 +1084,18 @@ const styles = StyleSheet.create({
     color: THEME.black,
     fontWeight: "900",
   },
+  secondaryBtn: {
+    marginTop: 13,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  secondaryBtnText: {
+    color: THEME.yellow,
+    fontWeight: "900",
+  },
+  scrollContent: {
+    paddingBottom: 170,
+  },
   header: {
     paddingHorizontal: 20,
     paddingTop: Platform.OS === "ios" ? 54 : 34,
@@ -979,6 +1103,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  headerTextBox: {
+    flex: 1,
   },
   iconBtn: {
     width: 44,
@@ -1017,6 +1144,9 @@ const styles = StyleSheet.create({
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
+  },
+  heroContent: {
+    flex: 1,
   },
   heroTag: {
     color: THEME.yellow,
@@ -1115,6 +1245,9 @@ const styles = StyleSheet.create({
     marginTop: 5,
     fontWeight: "700",
   },
+  addressList: {
+    paddingHorizontal: 20,
+  },
   addressCard: {
     width: 260,
     minHeight: 155,
@@ -1173,6 +1306,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: THEME.border,
   },
+  lastItemRow: {
+    borderBottomWidth: 0,
+    marginBottom: 0,
+    paddingBottom: 0,
+  },
   foodIcon: {
     width: 58,
     height: 58,
@@ -1183,6 +1321,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
+  },
+  itemInfo: {
+    flex: 1,
   },
   itemName: {
     color: THEME.text,
@@ -1277,6 +1418,9 @@ const styles = StyleSheet.create({
   paymentIconActive: {
     backgroundColor: THEME.green,
     borderColor: THEME.green,
+  },
+  paymentTextBox: {
+    flex: 1,
   },
   paymentTitleRow: {
     flexDirection: "row",
@@ -1412,7 +1556,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: THEME.border,
     padding: 16,
-    paddingBottom: 28,
+    paddingBottom: Platform.OS === "ios" ? 28 : 22,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
@@ -1435,6 +1579,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    minWidth: 146,
+    justifyContent: "center",
+  },
+  disabledPlaceBtn: {
+    opacity: 0.65,
   },
   placeText: {
     color: THEME.black,
