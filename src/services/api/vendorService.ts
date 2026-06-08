@@ -12,6 +12,7 @@ export type VendorOrderStatus =
   | "PICKED_UP"
   | "OUT_FOR_DELIVERY"
   | "DELIVERED"
+  | "COMPLETED"
   | "CANCELLED";
 
 export type ApiError = {
@@ -91,6 +92,8 @@ export type VendorOrder = {
     full_name?: string | null;
     email?: string | null;
     phone?: string | null;
+    avatarUrl?: string | null;
+    avatar_url?: string | null;
   };
 
   address?: any;
@@ -157,7 +160,9 @@ export type VendorDashboard = {
   monthlyOrders: number;
   monthlyRevenue: number;
   lifetimeRevenue: number;
+  revenue?: number;
   activeOrders: number;
+  pendingOrders?: number;
   completedOrders: number;
   cancelledOrders: number;
   averageOrderValue: number;
@@ -179,6 +184,7 @@ export type VendorEarningGraphItem = {
   date: string;
   label: string;
   earnings: number;
+  revenue?: number;
 };
 
 export type VendorCategory = {
@@ -257,6 +263,8 @@ export type RiderItem = {
   is_available?: boolean;
   currentStatus?: string;
   current_status?: string;
+  distanceKm?: number | null;
+  distanceText?: string;
 };
 
 export type VendorSettingsPayload = Partial<{
@@ -273,6 +281,17 @@ export type VendorSettingsPayload = Partial<{
   isOpen: boolean;
   isAcceptingOrders: boolean;
 }>;
+
+export type VendorNotification = {
+  id: string;
+  type?: string;
+  title?: string;
+  message?: string;
+  orderId?: string;
+  order?: VendorOrder;
+  isRead?: boolean;
+  createdAt?: string;
+};
 
 const normalizeError = (error: any): ApiError => {
   const data = error?.response?.data;
@@ -295,6 +314,7 @@ const unwrapData = (res: any) => {
     res?.data?.order ??
     res?.data?.orders ??
     res?.data?.restaurant ??
+    res?.data?.profile ??
     res?.data?.restaurants ??
     res?.data?.items ??
     res?.data?.menuItems ??
@@ -302,6 +322,7 @@ const unwrapData = (res: any) => {
     res?.data?.categories ??
     res?.data?.vendorCategories ??
     res?.data?.riders ??
+    res?.data?.notifications ??
     res?.data
   );
 };
@@ -362,53 +383,21 @@ const normalizeMenuPayload = (payload: Partial<VendorMenuItem>) => {
 const normalizeSettingsPayload = (payload: VendorSettingsPayload) => {
   const body: any = {};
 
-  if (payload.name !== undefined) {
-    body.name = payload.name;
-  }
-
-  if (payload.phone !== undefined) {
-    body.phone = payload.phone;
-  }
-
-  if (payload.email !== undefined) {
-    body.email = payload.email;
-  }
-
-  if (payload.address !== undefined) {
-    body.address = payload.address;
-  }
-
-  if (payload.deliveryTime !== undefined) {
-    body.deliveryTime = payload.deliveryTime;
-  }
-
-  if (payload.minimumOrder !== undefined) {
+  if (payload.name !== undefined) body.name = payload.name;
+  if (payload.phone !== undefined) body.phone = payload.phone;
+  if (payload.email !== undefined) body.email = payload.email;
+  if (payload.address !== undefined) body.address = payload.address;
+  if (payload.deliveryTime !== undefined) body.deliveryTime = payload.deliveryTime;
+  if (payload.minimumOrder !== undefined)
     body.minimumOrder = Number(payload.minimumOrder);
-  }
-
-  if (payload.defaultPrepTime !== undefined) {
+  if (payload.defaultPrepTime !== undefined)
     body.defaultPrepTime = Number(payload.defaultPrepTime);
-  }
-
-  if (payload.openingTime !== undefined) {
-    body.openingTime = payload.openingTime;
-  }
-
-  if (payload.closingTime !== undefined) {
-    body.closingTime = payload.closingTime;
-  }
-
-  if (payload.weeklyOffDay !== undefined) {
-    body.weeklyOffDay = payload.weeklyOffDay;
-  }
-
-  if (payload.isOpen !== undefined) {
-    body.isOpen = Boolean(payload.isOpen);
-  }
-
-  if (payload.isAcceptingOrders !== undefined) {
+  if (payload.openingTime !== undefined) body.openingTime = payload.openingTime;
+  if (payload.closingTime !== undefined) body.closingTime = payload.closingTime;
+  if (payload.weeklyOffDay !== undefined) body.weeklyOffDay = payload.weeklyOffDay;
+  if (payload.isOpen !== undefined) body.isOpen = Boolean(payload.isOpen);
+  if (payload.isAcceptingOrders !== undefined)
     body.isAcceptingOrders = Boolean(payload.isAcceptingOrders);
-  }
 
   return body;
 };
@@ -416,17 +405,10 @@ const normalizeSettingsPayload = (payload: VendorSettingsPayload) => {
 export const vendorService = {
   getDashboard: async (): NullableApiResult<VendorDashboard> => {
     try {
-      const res = await apiClient.get("/vendors/dashboard/me");
-
-      return {
-        data: unwrapData(res) as VendorDashboard,
-        error: null,
-      };
+      const res = await apiClient.get("/vendor/dashboard/me");
+      return { data: unwrapData(res) as VendorDashboard, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -434,7 +416,7 @@ export const vendorService = {
     status?: VendorOrderStatus
   ): ApiResult<VendorOrder[]> => {
     try {
-      const res = await apiClient.get("/vendors/orders/me", {
+      const res = await apiClient.get("/vendor/orders/me", {
         params: status
           ? {
               status: normalizeStatusForBackend(status),
@@ -442,15 +424,9 @@ export const vendorService = {
           : undefined,
       });
 
-      return {
-        data: (unwrapData(res) || []) as VendorOrder[],
-        error: null,
-      };
+      return { data: (unwrapData(res) || []) as VendorOrder[], error: null };
     } catch (error: any) {
-      return {
-        data: [],
-        error: normalizeError(error),
-      };
+      return { data: [], error: normalizeError(error) };
     }
   },
 
@@ -461,21 +437,15 @@ export const vendorService = {
     note?: string
   ): NullableApiResult<VendorOrder> => {
     try {
-      const res = await apiClient.patch(`/vendors/orders/${orderId}/status`, {
+      const res = await apiClient.patch(`/vendor/orders/${orderId}/status`, {
         status: normalizeStatusForBackend(status),
         estimatedPreparationMinutes,
         note,
       });
 
-      return {
-        data: unwrapData(res) as VendorOrder,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorOrder, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -485,37 +455,22 @@ export const vendorService = {
   ): NullableApiResult<VendorOrder> => {
     try {
       const res = await apiClient.patch(
-        `/vendors/orders/${orderId}/preparation-time`,
-        {
-          estimatedPreparationMinutes,
-        }
+        `/vendor/orders/${orderId}/preparation-time`,
+        { estimatedPreparationMinutes }
       );
 
-      return {
-        data: unwrapData(res) as VendorOrder,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorOrder, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   getAvailableRiders: async (): ApiResult<RiderItem[]> => {
     try {
-      const res = await apiClient.get("/vendors/riders/available");
-
-      return {
-        data: (unwrapData(res) || []) as RiderItem[],
-        error: null,
-      };
+      const res = await apiClient.get("/vendor/riders/available");
+      return { data: (unwrapData(res) || []) as RiderItem[], error: null };
     } catch (error: any) {
-      return {
-        data: [],
-        error: normalizeError(error),
-      };
+      return { data: [], error: normalizeError(error) };
     }
   },
 
@@ -525,37 +480,42 @@ export const vendorService = {
   ): NullableApiResult<VendorOrder> => {
     try {
       const res = await apiClient.patch(
-        `/vendors/orders/${orderId}/assign-rider`,
-        {
-          riderId,
-        }
+        `/vendor/orders/${orderId}/assign-rider`,
+        { riderId }
       );
 
-      return {
-        data: unwrapData(res) as VendorOrder,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorOrder, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
-  getMenuItems: async (): ApiResult<VendorMenuItem[]> => {
+  reassignRider: async (
+    orderId: string,
+    riderId: string
+  ): NullableApiResult<VendorOrder> => {
     try {
-      const res = await apiClient.get("/vendors/menu");
+      const res = await apiClient.patch(
+        `/vendor/orders/${orderId}/reassign-rider`,
+        { riderId }
+      );
 
-      return {
-        data: (unwrapData(res) || []) as VendorMenuItem[],
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorOrder, error: null };
     } catch (error: any) {
-      return {
-        data: [],
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
+    }
+  },
+
+  getMenuItems: async (params?: {
+    search?: string;
+    categoryId?: string;
+    available?: boolean;
+  }): ApiResult<VendorMenuItem[]> => {
+    try {
+      const res = await apiClient.get("/vendor/menu", { params });
+      return { data: (unwrapData(res) || []) as VendorMenuItem[], error: null };
+    } catch (error: any) {
+      return { data: [], error: normalizeError(error) };
     }
   },
 
@@ -564,19 +524,13 @@ export const vendorService = {
   ): NullableApiResult<VendorMenuItem> => {
     try {
       const res = await apiClient.post(
-        "/vendors/menu",
+        "/vendor/menu",
         normalizeMenuPayload(payload)
       );
 
-      return {
-        data: unwrapData(res) as VendorMenuItem,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorMenuItem, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -586,35 +540,22 @@ export const vendorService = {
   ): NullableApiResult<VendorMenuItem> => {
     try {
       const res = await apiClient.patch(
-        `/vendors/menu/${itemId}`,
+        `/vendor/menu/${itemId}`,
         normalizeMenuPayload(payload)
       );
 
-      return {
-        data: unwrapData(res) as VendorMenuItem,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorMenuItem, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   deleteMenuItem: async (itemId: string) => {
     try {
-      const res = await apiClient.delete(`/vendors/menu/${itemId}`);
-
-      return {
-        data: unwrapData(res) || true,
-        error: null,
-      };
+      const res = await apiClient.delete(`/vendor/menu/${itemId}`);
+      return { data: unwrapData(res) || true, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -623,35 +564,22 @@ export const vendorService = {
     isAvailable: boolean
   ): NullableApiResult<VendorMenuItem> => {
     try {
-      const res = await apiClient.patch(`/vendors/menu/${itemId}`, {
+      const res = await apiClient.patch(`/vendor/menu/${itemId}/availability`, {
         isAvailable,
       });
 
-      return {
-        data: unwrapData(res) as VendorMenuItem,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorMenuItem, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   getCategories: async (): ApiResult<VendorCategory[]> => {
     try {
-      const res = await apiClient.get("/vendors/categories");
-
-      return {
-        data: (unwrapData(res) || []) as VendorCategory[],
-        error: null,
-      };
+      const res = await apiClient.get("/vendor/categories");
+      return { data: (unwrapData(res) || []) as VendorCategory[], error: null };
     } catch (error: any) {
-      return {
-        data: [],
-        error: normalizeError(error),
-      };
+      return { data: [], error: normalizeError(error) };
     }
   },
 
@@ -659,22 +587,16 @@ export const vendorService = {
     payload: Partial<VendorCategory>
   ): NullableApiResult<VendorCategory> => {
     try {
-      const res = await apiClient.post("/vendors/categories", {
+      const res = await apiClient.post("/vendor/categories", {
         name: payload.name?.trim?.() ?? payload.name,
         description: payload.description || null,
         imageUrl: payload.imageUrl ?? payload.image_url ?? null,
         isActive: payload.isActive ?? payload.is_active ?? true,
       });
 
-      return {
-        data: unwrapData(res) as VendorCategory,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorCategory, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -688,49 +610,30 @@ export const vendorService = {
       if (payload.name !== undefined) {
         body.name = payload.name?.trim?.() ?? payload.name;
       }
-
       if (payload.description !== undefined) {
         body.description = payload.description || null;
       }
-
       if (payload.imageUrl !== undefined || payload.image_url !== undefined) {
         body.imageUrl = payload.imageUrl ?? payload.image_url ?? null;
       }
-
       if (payload.isActive !== undefined || payload.is_active !== undefined) {
         body.isActive = payload.isActive ?? payload.is_active;
       }
 
-      const res = await apiClient.patch(
-        `/vendors/categories/${categoryId}`,
-        body
-      );
+      const res = await apiClient.patch(`/vendor/categories/${categoryId}`, body);
 
-      return {
-        data: unwrapData(res) as VendorCategory,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorCategory, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   deleteCategory: async (categoryId: string) => {
     try {
-      const res = await apiClient.delete(`/vendors/categories/${categoryId}`);
-
-      return {
-        data: unwrapData(res) || true,
-        error: null,
-      };
+      const res = await apiClient.delete(`/vendor/categories/${categoryId}`);
+      return { data: unwrapData(res) || true, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -739,19 +642,22 @@ export const vendorService = {
     isActive: boolean
   ): NullableApiResult<VendorCategory> => {
     try {
-      const res = await apiClient.patch(`/vendors/categories/${categoryId}`, {
+      const res = await apiClient.patch(`/vendor/categories/${categoryId}`, {
         isActive,
       });
 
-      return {
-        data: unwrapData(res) as VendorCategory,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorCategory, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
+    }
+  },
+
+  getProfile: async (): NullableApiResult<VendorRestaurant> => {
+    try {
+      const res = await apiClient.get("/vendor/profile/me");
+      return { data: unwrapData(res) as VendorRestaurant, error: null };
+    } catch (error: any) {
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -760,21 +666,12 @@ export const vendorService = {
       const dashboard = await vendorService.getDashboard();
 
       if (dashboard.error || !dashboard.data) {
-        return {
-          data: [],
-          error: dashboard.error,
-        };
+        return { data: [], error: dashboard.error };
       }
 
-      return {
-        data: dashboard.data.restaurants || [],
-        error: null,
-      };
+      return { data: dashboard.data.restaurants || [], error: null };
     } catch (error: any) {
-      return {
-        data: [],
-        error: normalizeError(error),
-      };
+      return { data: [], error: normalizeError(error) };
     }
   },
 
@@ -784,20 +681,14 @@ export const vendorService = {
   ): NullableApiResult<VendorRestaurant> => {
     try {
       const url = restaurantId
-        ? `/vendors/settings/${restaurantId}`
-        : "/vendors/settings/me";
+        ? `/vendor/settings/${restaurantId}`
+        : "/vendor/settings/me";
 
       const res = await apiClient.patch(url, normalizeSettingsPayload(payload));
 
-      return {
-        data: unwrapData(res) as VendorRestaurant,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorRestaurant, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -807,19 +698,28 @@ export const vendorService = {
   ): NullableApiResult<VendorRestaurant> => {
     try {
       const res = await apiClient.patch(
-        `/vendors/settings/${restaurantId}`,
+        `/vendor/settings/${restaurantId}`,
         normalizeSettingsPayload(payload as VendorSettingsPayload)
       );
 
-      return {
-        data: unwrapData(res) as VendorRestaurant,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorRestaurant, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
+    }
+  },
+
+  toggleOpenClose: async (
+    isOpen: boolean
+  ): NullableApiResult<VendorRestaurant> => {
+    try {
+      const res = await apiClient.patch("/vendor/settings/open-close", {
+        isOpen,
+        isAcceptingOrders: isOpen,
+      });
+
+      return { data: unwrapData(res) as VendorRestaurant, error: null };
+    } catch (error: any) {
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -828,70 +728,59 @@ export const vendorService = {
     isOpen: boolean
   ): NullableApiResult<VendorRestaurant> => {
     try {
-      const res = await apiClient.patch(`/vendors/settings/${restaurantId}`, {
+      const res = await apiClient.patch(`/vendor/settings/${restaurantId}`, {
         isOpen,
         isAcceptingOrders: isOpen,
       });
 
-      return {
-        data: unwrapData(res) as VendorRestaurant,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorRestaurant, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   setBusyMode: async (minutes: number) => {
     try {
-      const res = await apiClient.patch("/vendors/settings/busy-mode", {
+      const res = await apiClient.patch("/vendor/settings/busy-mode", {
         minutes,
       });
 
-      return {
-        data: unwrapData(res),
-        error: null,
-      };
+      return { data: unwrapData(res), error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   getPayments: async (): NullableApiResult<VendorPayments> => {
     try {
-      const res = await apiClient.get("/vendors/payments/me");
-
-      return {
-        data: unwrapData(res) as VendorPayments,
-        error: null,
-      };
+      const res = await apiClient.get("/vendor/payments/me");
+      return { data: unwrapData(res) as VendorPayments, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
   getEarningsGraph: async (): ApiResult<VendorEarningGraphItem[]> => {
     try {
-      const res = await apiClient.get("/vendors/earnings/graph");
-
+      const res = await apiClient.get("/vendor/earnings/graph");
       return {
         data: (unwrapData(res) || []) as VendorEarningGraphItem[],
         error: null,
       };
     } catch (error: any) {
+      return { data: [], error: normalizeError(error) };
+    }
+  },
+
+  getNotifications: async (): ApiResult<VendorNotification[]> => {
+    try {
+      const res = await apiClient.get("/vendor/notifications");
       return {
-        data: [],
-        error: normalizeError(error),
+        data: (unwrapData(res) || []) as VendorNotification[],
+        error: null,
       };
+    } catch (error: any) {
+      return { data: [], error: normalizeError(error) };
     }
   },
 
@@ -900,29 +789,27 @@ export const vendorService = {
     file: any
   ): NullableApiResult<VendorMenuItem> => {
     try {
-      const formData = new FormData();
+      const imageUrl =
+        file?.url || file?.uri || file?.path || file?.imageUrl || file?.image_url;
 
-      formData.append("image", file);
-
-      const res = await apiClient.post(
-        `/vendors/menu/${itemId}/image`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
+      if (!imageUrl) {
+        return {
+          data: null,
+          error: {
+            success: false,
+            message:
+              "Image upload API is not available in vendor backend. Upload image first using /upload, then pass imageUrl.",
           },
-        }
-      );
+        };
+      }
 
-      return {
-        data: unwrapData(res) as VendorMenuItem,
-        error: null,
-      };
+      const res = await apiClient.patch(`/vendor/menu/${itemId}`, {
+        imageUrl,
+      });
+
+      return { data: unwrapData(res) as VendorMenuItem, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 
@@ -932,30 +819,33 @@ export const vendorService = {
     type: "logo" | "banner" = "logo"
   ): NullableApiResult<VendorRestaurant> => {
     try {
-      const formData = new FormData();
+      const imageUrl =
+        file?.url || file?.uri || file?.path || file?.imageUrl || file?.image_url;
 
-      formData.append("image", file);
-      formData.append("type", type);
-
-      const res = await apiClient.post(
-        `/vendors/settings/${restaurantId}/image`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
+      if (!imageUrl) {
+        return {
+          data: null,
+          error: {
+            success: false,
+            message:
+              "Restaurant image upload API is not available in vendor backend. Upload image first using /upload, then pass imageUrl.",
           },
-        }
+        };
+      }
+
+      const payload =
+        type === "banner"
+          ? ({ bannerUrl: imageUrl } as any)
+          : ({ imageUrl } as any);
+
+      const res = await apiClient.patch(
+        `/vendor/settings/${restaurantId}`,
+        payload
       );
 
-      return {
-        data: unwrapData(res) as VendorRestaurant,
-        error: null,
-      };
+      return { data: unwrapData(res) as VendorRestaurant, error: null };
     } catch (error: any) {
-      return {
-        data: null,
-        error: normalizeError(error),
-      };
+      return { data: null, error: normalizeError(error) };
     }
   },
 };

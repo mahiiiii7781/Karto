@@ -31,7 +31,6 @@ const THEME = {
   card: "#101713",
   card2: "#151F19",
   green: "#22C55E",
-  greenDark: "#0E7A3A",
   yellow: "#FACC15",
   orange: "#FB923C",
   blue: "#38BDF8",
@@ -50,14 +49,13 @@ const showToast = (
   text1: string,
   text2?: string
 ) => {
-  Toast.show({
-    type,
-    text1,
-    text2,
-    position: "bottom",
-    visibilityTime: 1900,
-  });
+  Toast.show({ type, text1, text2, position: "bottom", visibilityTime: 1900 });
 };
+
+const compact = (value?: string | null) =>
+  String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
 
 const getAddressList = (data: any) => {
   const list =
@@ -81,6 +79,66 @@ const normalizePinData = (data: any) => {
     country: result?.country || result?.Country || "India",
     landmark: result?.landmark || result?.postOffice || result?.PostOffice || "",
     address: result?.address || result?.formattedAddress || "",
+  };
+};
+
+const formatAddressPreview = (item: any) => {
+  if (!item) return "Saved address";
+
+  const houseArea = compact(
+    item.address || item.addressLine || item.fullAddress || item.full_address
+  );
+  const landmark = compact(item.landmark);
+  const city = compact(item.city || item.district);
+  const state = compact(item.state || item.stateName || item.state_name);
+  const pincode = compact(item.pincode || item.pinCode || item.pin_code);
+
+  const first = [houseArea, landmark].filter(Boolean).join(", ");
+  const second = [city, state].filter(Boolean).join(", ");
+
+  if (first && second && pincode) return `${first}, ${second} - ${pincode}`;
+  if (first && second) return `${first}, ${second}`;
+  if (first && pincode) return `${first} - ${pincode}`;
+  if (first) return first;
+  if (second && pincode) return `${second} - ${pincode}`;
+  return "Saved address";
+};
+
+const parseReverseAddress = (data: any) => {
+  const a = data?.address || {};
+
+  const houseNo = compact(
+    a.house_number || a.building || a.residential || a.house || a.neighbourhood || ""
+  );
+  const road = compact(a.road || a.pedestrian || a.footway || "");
+  const area = compact(
+    a.suburb || a.neighbourhood || a.quarter || a.locality || a.village || a.hamlet || ""
+  );
+  const city = compact(a.city || a.town || a.village || a.county || "");
+  const state = compact(a.state || "");
+  const pincode = compact(a.postcode || "");
+  const country = compact(a.country || "India");
+
+  const addressParts = [houseNo, road, area].filter(Boolean);
+  const address = addressParts.length
+    ? addressParts.join(", ")
+    : compact(String(data?.display_name || "").split(",").slice(0, 3).join(","));
+
+  return {
+    label: "Current Location",
+    address: address || "Current location",
+    landmark: area || road || city,
+    city,
+    state,
+    pincode,
+    country,
+    formatted: formatAddressPreview({
+      address: address || "Current location",
+      landmark: area || road,
+      city,
+      state,
+      pincode,
+    }),
   };
 };
 
@@ -108,6 +166,10 @@ export default function AddressScreen() {
   const [longitude, setLongitude] = useState<number | null>(null);
   const [isDefault, setIsDefault] = useState(false);
 
+  const [searchText, setSearchText] = useState("");
+  const [currentLocationPreview, setCurrentLocationPreview] = useState("Use your current location");
+  const [currentLocationMeta, setCurrentLocationMeta] = useState("Tap to fetch house no, area, city, state and pincode");
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
@@ -117,6 +179,29 @@ export default function AddressScreen() {
   const [defaultLoadingId, setDefaultLoadingId] = useState<string | null>(null);
 
   const isGuest = !user?.id;
+
+  const filteredAddresses = useMemo(() => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return addresses;
+
+    return addresses.filter(item =>
+      [
+        item.label,
+        item.address,
+        item.landmark,
+        item.city,
+        item.state,
+        item.pincode,
+        formatAddressPreview(item),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(q)
+    );
+  }, [addresses, searchText]);
+
+  const savedCountText = useMemo(() => `${addresses.length}/${ADDRESS_LIMIT}`, [addresses.length]);
 
   const isRealUser = useCallback(async () => {
     const token = await AsyncStorage.getItem("accessToken");
@@ -216,13 +301,29 @@ export default function AddressScreen() {
       PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       {
         title: "Location Permission",
-        message: "Karto needs location permission to attach your delivery location.",
+        message: "Karto needs location permission to detect your delivery address.",
         buttonPositive: "Allow",
         buttonNegative: "Cancel",
       }
     );
 
     return granted === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
+  const reverseGeocode = async (lat: number, lng: number) => {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&addressdetails=1`;
+
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "KartoApp/1.0",
+        Accept: "application/json",
+      },
+    });
+
+    if (!res.ok) throw new Error("Reverse geocode failed");
+
+    const json = await res.json();
+    return parseReverseAddress(json);
   };
 
   const fetchPincodeDetails = async (pin = pincode) => {
@@ -275,26 +376,46 @@ export default function AddressScreen() {
     }
 
     setLocationLoading(true);
+    setCurrentLocationPreview("Fetching current address...");
+    setCurrentLocationMeta("Please wait");
 
     Geolocation.getCurrentPosition(
-      position => {
+      async position => {
         const lat = position.coords.latitude;
         const lng = position.coords.longitude;
 
         setLatitude(lat);
         setLongitude(lng);
 
-        if (!label.trim() || label === "Home") setLabel("Current Location");
+        try {
+          const parsed = await reverseGeocode(lat, lng);
 
-        showToast(
-          "success",
-          "Location attached",
-          "Coordinates saved. Complete address details manually."
-        );
-        setLocationLoading(false);
+          setLabel(parsed.label);
+          setAddress(parsed.address || "");
+          setLandmark(parsed.landmark || "");
+          setCity(parsed.city || "");
+          setStateName(parsed.state || "");
+          setPincode(parsed.pincode || "");
+          setCountry(parsed.country || "India");
+          setIsDefault(addresses.length === 0);
+
+          setCurrentLocationPreview(parsed.formatted || "Current location fetched");
+          setCurrentLocationMeta("House no, area, city, state and pincode attached");
+
+          showToast("success", "Current address fetched", parsed.formatted);
+        } catch {
+          if (!label.trim() || label === "Home") setLabel("Current Location");
+          setCurrentLocationPreview("Current location attached");
+          setCurrentLocationMeta(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+          showToast("success", "Location attached", "Complete address details manually.");
+        } finally {
+          setLocationLoading(false);
+        }
       },
       error => {
         setLocationLoading(false);
+        setCurrentLocationPreview("Use your current location");
+        setCurrentLocationMeta("Unable to fetch location. Tap again.");
         showToast("error", "Location unavailable", error?.message || "Unable to fetch your location.");
       },
       {
@@ -312,17 +433,17 @@ export default function AddressScreen() {
     }
 
     if (!address.trim() || address.trim().length < 8) {
-      showToast("info", "Complete address required", "Please enter your full address.");
-      return false;
-    }
-
-    if (!landmark.trim() || landmark.trim().length < 3) {
-      showToast("info", "Landmark required", "Please enter a nearby landmark.");
+      showToast("info", "Complete address required", "Please enter house no, street and area.");
       return false;
     }
 
     if (!city.trim()) {
       showToast("info", "City required", "Please enter city or district.");
+      return false;
+    }
+
+    if (!stateName.trim()) {
+      showToast("info", "State required", "Please enter state.");
       return false;
     }
 
@@ -337,7 +458,7 @@ export default function AddressScreen() {
   const buildPayload = (): CreateAddressPayload => ({
     label: label.trim(),
     address: address.trim(),
-    landmark: landmark.trim(),
+    landmark: landmark.trim() || null,
     city: city.trim(),
     state: stateName.trim() || null,
     pincode: pincode.trim(),
@@ -442,7 +563,9 @@ export default function AddressScreen() {
         }))
       );
 
-      showToast("success", "Default updated", "This is now your default address.");
+      if (fromCheckout) navigation.goBack();
+
+      showToast("success", "Default updated", "This is now your selected address.");
     } catch {
       showToast("error", "Update failed", "Please try again.");
     } finally {
@@ -450,18 +573,24 @@ export default function AddressScreen() {
     }
   };
 
-  const savedCountText = useMemo(() => `${addresses.length}/${ADDRESS_LIMIT}`, [addresses.length]);
-
   const renderAddress = ({ item }: { item: any }) => {
     const activeDefault = Boolean(item.isDefault || item.is_default);
     const deleting = deletingId === item.id;
     const defaulting = defaultLoadingId === item.id;
 
     return (
-      <View style={[styles.savedCard, activeDefault && styles.savedCardDefault]}>
+      <TouchableOpacity
+        style={[styles.savedCard, activeDefault && styles.savedCardDefault]}
+        activeOpacity={0.92}
+        onPress={() => setDefaultAddress(item)}
+      >
         <View style={styles.savedTop}>
           <View style={[styles.savedIcon, activeDefault && styles.savedIconDefault]}>
-            <Icon name={activeDefault ? "home" : "location"} size={20} color={activeDefault ? THEME.black : THEME.green} />
+            <Icon
+              name={activeDefault ? "home" : "location"}
+              size={20}
+              color={activeDefault ? THEME.black : THEME.green}
+            />
           </View>
 
           <View style={{ flex: 1 }}>
@@ -470,25 +599,25 @@ export default function AddressScreen() {
 
               {activeDefault && (
                 <View style={styles.defaultPill}>
-                  <Text style={styles.defaultPillText}>Default</Text>
+                  <Text style={styles.defaultPillText}>Selected</Text>
                 </View>
               )}
             </View>
 
             <Text style={styles.savedAddress} numberOfLines={3}>
-              {item.address || item.addressLine || item.fullAddress || item.full_address || "Saved address"}
-            </Text>
-
-            <Text style={styles.savedMeta} numberOfLines={1}>
-              {[item.landmark, item.city, item.state, item.pincode].filter(Boolean).join(" • ")}
+              {formatAddressPreview(item)}
             </Text>
 
             {(item.latitude || item.longitude) && (
-              <Text style={styles.savedLocation}>Location attached</Text>
+              <Text style={styles.savedLocation}>Pinned location attached</Text>
             )}
 
             <View style={styles.savedActions}>
-              <TouchableOpacity style={styles.smallBtn} onPress={() => fillForm(item)} activeOpacity={0.85}>
+              <TouchableOpacity
+                style={styles.smallBtn}
+                onPress={() => fillForm(item)}
+                activeOpacity={0.85}
+              >
                 <Icon name="create-outline" size={15} color={THEME.blue} />
                 <Text style={[styles.smallBtnText, { color: THEME.blue }]}>Edit</Text>
               </TouchableOpacity>
@@ -505,7 +634,7 @@ export default function AddressScreen() {
                   ) : (
                     <>
                       <Icon name="checkmark-circle-outline" size={15} color={THEME.green} />
-                      <Text style={styles.smallBtnText}>Set Default</Text>
+                      <Text style={styles.smallBtnText}>Select</Text>
                     </>
                   )}
                 </TouchableOpacity>
@@ -513,7 +642,12 @@ export default function AddressScreen() {
             </View>
           </View>
 
-          <TouchableOpacity disabled={deleting} onPress={() => setDeleteTarget(item)} style={styles.deleteBtn} activeOpacity={0.85}>
+          <TouchableOpacity
+            disabled={deleting}
+            onPress={() => setDeleteTarget(item)}
+            style={styles.deleteBtn}
+            activeOpacity={0.85}
+          >
             {deleting ? (
               <ActivityIndicator size="small" color={THEME.danger} />
             ) : (
@@ -521,7 +655,7 @@ export default function AddressScreen() {
             )}
           </TouchableOpacity>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
 
@@ -531,7 +665,9 @@ export default function AddressScreen() {
         <Icon name="lock-closed-outline" size={36} color={THEME.yellow} />
       </View>
       <Text style={styles.guestTitle}>Login to save addresses</Text>
-      <Text style={styles.guestText}>Add home, work and delivery locations for faster checkout.</Text>
+      <Text style={styles.guestText}>
+        Add home, work and delivery locations for faster checkout.
+      </Text>
       <TouchableOpacity style={styles.loginBtn} onPress={openLogin} activeOpacity={0.9}>
         <Text style={styles.loginBtnText}>Login / Sign up</Text>
         <Icon name="arrow-forward" size={19} color={THEME.black} />
@@ -556,9 +692,12 @@ export default function AddressScreen() {
     <View style={styles.screen}>
       <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
 
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+      >
         <FlatList
-          data={isGuest ? [] : addresses}
+          data={isGuest ? [] : filteredAddresses}
           keyExtractor={(item, index) => item?.id?.toString() || index.toString()}
           renderItem={renderAddress}
           showsVerticalScrollIndicator={false}
@@ -567,159 +706,243 @@ export default function AddressScreen() {
           ListHeaderComponent={
             <>
               <View style={styles.header}>
-                <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.85}>
+                <TouchableOpacity
+                  style={styles.backBtn}
+                  onPress={() => navigation.goBack()}
+                  activeOpacity={0.85}
+                >
                   <Icon name="chevron-back" size={24} color={THEME.text} />
                 </TouchableOpacity>
 
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.title}>Delivery Address</Text>
-                  <Text style={styles.subtitle}>Exact details, faster delivery</Text>
+                  <Text style={styles.title}>Select a location</Text>
+                  <Text style={styles.subtitle}>Choose where your order should arrive</Text>
                 </View>
               </View>
 
-              <View style={styles.heroBanner}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.heroTag}>KARTO DELIVERY</Text>
-                  <Text style={styles.heroTitle}>Save accurate address</Text>
-                  <Text style={styles.heroSub}>Pincode, landmark and pinned location help riders deliver faster.</Text>
-                </View>
-
-                <View style={styles.heroIcon}>
-                  <Icon name="navigate-outline" size={33} color={THEME.black} />
-                </View>
+              <View style={styles.searchCard}>
+                <Icon name="search" size={20} color={THEME.green} />
+                <TextInput
+                  value={searchText}
+                  onChangeText={setSearchText}
+                  placeholder="Search for area, street name..."
+                  placeholderTextColor={THEME.muted}
+                  style={styles.searchInput}
+                />
+                {!!searchText && (
+                  <TouchableOpacity onPress={() => setSearchText("")}>
+                    <Icon name="close-circle" size={20} color={THEME.muted} />
+                  </TouchableOpacity>
+                )}
               </View>
 
               {isGuest ? (
                 renderGuest()
               ) : (
-                <View style={styles.formCard}>
-                  <View style={styles.rowBetween}>
-                    <Text style={styles.sectionTitle}>{editingId ? "Update Address" : "Add New Address"}</Text>
-                    <Text style={styles.countText}>{savedCountText}</Text>
-                  </View>
-
-                  <TouchableOpacity
-                    style={[styles.currentLocationCard, locationLoading && styles.disabled]}
-                    onPress={useCurrentLocation}
-                    activeOpacity={0.85}
-                    disabled={locationLoading}
-                  >
-                    <View style={styles.currentLocationIcon}>
-                      {locationLoading ? (
-                        <ActivityIndicator color={THEME.black} />
-                      ) : (
-                        <Icon name="navigate" size={23} color={THEME.black} />
-                      )}
-                    </View>
-
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.currentLocationTitle}>Use Current Location</Text>
-                      <Text style={styles.currentLocationSub}>Attach GPS coordinates to this address</Text>
-                      {!!latitude && !!longitude && <Text style={styles.locationAttached}>Location attached</Text>}
-                    </View>
-
-                    <Icon name="chevron-forward" size={22} color={THEME.green} />
-                  </TouchableOpacity>
-
-                  <View style={styles.pickerBox}>
-                    <Icon name="bookmark-outline" size={20} color={THEME.green} />
-                    <Picker
-                      selectedValue={label}
-                      dropdownIconColor={THEME.green}
-                      style={styles.picker}
-                      onValueChange={value => setLabel(value)}
+                <>
+                  <View style={styles.actionPanel}>
+                    <TouchableOpacity
+                      style={styles.actionRow}
+                      activeOpacity={0.9}
+                      onPress={resetForm}
                     >
-                      <Picker.Item label="Home" value="Home" />
-                      <Picker.Item label="Work" value="Work" />
-                      <Picker.Item label="Current Location" value="Current Location" />
-                      <Picker.Item label="Other" value="Other" />
-                    </Picker>
+                      <View style={styles.actionIconSoft}>
+                        <Icon name="add" size={21} color={THEME.green} />
+                      </View>
+                      <Text style={styles.actionTitle}>Add address</Text>
+                      <Icon name="chevron-forward" size={19} color={THEME.muted} />
+                    </TouchableOpacity>
+
+                    <View style={styles.actionDivider} />
+
+                    <TouchableOpacity
+                      style={[styles.actionRow, locationLoading && styles.disabled]}
+                      activeOpacity={0.9}
+                      onPress={useCurrentLocation}
+                      disabled={locationLoading}
+                    >
+                      <View style={styles.actionIconStrong}>
+                        {locationLoading ? (
+                          <ActivityIndicator color={THEME.black} />
+                        ) : (
+                          <Icon name="locate" size={21} color={THEME.black} />
+                        )}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.actionTitle}>{currentLocationPreview}</Text>
+                        <Text style={styles.actionSub} numberOfLines={2}>
+                          {currentLocationMeta}
+                        </Text>
+                      </View>
+                      <Icon name="chevron-forward" size={19} color={THEME.muted} />
+                    </TouchableOpacity>
                   </View>
 
-                  <View style={styles.inputBox}>
-                    <Icon name="pin-outline" size={20} color={THEME.green} />
+                  <View style={styles.sectionDividerRow}>
+                    <View style={styles.line} />
+                    <Text style={styles.dividerText}>Saved addresses</Text>
+                    <View style={styles.line} />
+                  </View>
+
+                  <View style={styles.formCard}>
+                    <View style={styles.rowBetween}>
+                      <Text style={styles.sectionTitle}>
+                        {editingId ? "Update Address" : "Add New Address"}
+                      </Text>
+                      <Text style={styles.countText}>{savedCountText}</Text>
+                    </View>
+
+                    <View style={styles.pickerBox}>
+                      <Icon name="bookmark-outline" size={20} color={THEME.green} />
+                      <Picker
+                        selectedValue={label}
+                        dropdownIconColor={THEME.green}
+                        style={styles.picker}
+                        onValueChange={value => setLabel(value)}
+                      >
+                        <Picker.Item label="Home" value="Home" />
+                        <Picker.Item label="Work" value="Work" />
+                        <Picker.Item label="Current Location" value="Current Location" />
+                        <Picker.Item label="Other" value="Other" />
+                      </Picker>
+                    </View>
+
+                    <View style={styles.inputBox}>
+                      <Icon name="pin-outline" size={20} color={THEME.green} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Pincode"
+                        placeholderTextColor={THEME.muted}
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        value={pincode}
+                        onChangeText={text => {
+                          const pin = text.replace(/\D/g, "");
+                          setPincode(pin);
+                          if (pin.length === 6) fetchPincodeDetails(pin);
+                        }}
+                      />
+
+                      <TouchableOpacity
+                        onPress={() => fetchPincodeDetails()}
+                        disabled={pincodeLoading}
+                        activeOpacity={0.85}
+                      >
+                        {pincodeLoading ? (
+                          <ActivityIndicator color={THEME.green} />
+                        ) : (
+                          <Text style={styles.lookupText}>Lookup</Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+
                     <TextInput
-                      style={styles.input}
-                      placeholder="Pincode"
+                      style={styles.addressInput}
+                      placeholder="House no, floor, street, area"
                       placeholderTextColor={THEME.muted}
-                      keyboardType="number-pad"
-                      maxLength={6}
-                      value={pincode}
-                      onChangeText={text => {
-                        const pin = text.replace(/\D/g, "");
-                        setPincode(pin);
-                        if (pin.length === 6) fetchPincodeDetails(pin);
-                      }}
+                      value={address}
+                      onChangeText={setAddress}
+                      multiline
                     />
 
-                    <TouchableOpacity onPress={() => fetchPincodeDetails()} disabled={pincodeLoading} activeOpacity={0.85}>
-                      {pincodeLoading ? <ActivityIndicator color={THEME.green} /> : <Text style={styles.lookupText}>Lookup</Text>}
-                    </TouchableOpacity>
-                  </View>
-
-                  <TextInput
-                    style={styles.addressInput}
-                    placeholder="House no, floor, street, area"
-                    placeholderTextColor={THEME.muted}
-                    value={address}
-                    onChangeText={setAddress}
-                    multiline
-                  />
-
-                  <View style={styles.inputBox}>
-                    <Icon name="flag-outline" size={20} color={THEME.orange} />
-                    <TextInput style={styles.input} placeholder="Nearby landmark" placeholderTextColor={THEME.muted} value={landmark} onChangeText={setLandmark} />
-                  </View>
-
-                  <View style={styles.inputBox}>
-                    <Icon name="business-outline" size={20} color={THEME.blue} />
-                    <TextInput style={styles.input} placeholder="City / District" placeholderTextColor={THEME.muted} value={city} onChangeText={setCity} />
-                  </View>
-
-                  <View style={styles.inputBox}>
-                    <Icon name="map-outline" size={20} color={THEME.purple} />
-                    <TextInput style={styles.input} placeholder="State" placeholderTextColor={THEME.muted} value={stateName} onChangeText={setStateName} />
-                  </View>
-
-                  <View style={styles.inputBox}>
-                    <Icon name="earth-outline" size={20} color={THEME.green} />
-                    <TextInput style={styles.input} placeholder="Country" placeholderTextColor={THEME.muted} value={country} onChangeText={setCountry} />
-                  </View>
-
-                  <TouchableOpacity style={styles.defaultToggle} activeOpacity={0.85} onPress={() => setIsDefault(prev => !prev)}>
-                    <Icon name={isDefault ? "checkbox" : "square-outline"} size={22} color={THEME.green} />
-                    <Text style={styles.defaultToggleText}>Make this default address</Text>
-                  </TouchableOpacity>
-
-                  {!!latitude && !!longitude && (
-                    <View style={styles.geoPill}>
-                      <Icon name="checkmark-circle" size={17} color={THEME.green} />
-                      <Text style={styles.geoText}>Location saved: {latitude.toFixed(5)}, {longitude.toFixed(5)}</Text>
+                    <View style={styles.inputBox}>
+                      <Icon name="flag-outline" size={20} color={THEME.orange} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Nearby landmark"
+                        placeholderTextColor={THEME.muted}
+                        value={landmark}
+                        onChangeText={setLandmark}
+                      />
                     </View>
-                  )}
 
-                  <View style={styles.buttonRow}>
-                    {editingId && (
-                      <TouchableOpacity style={styles.cancelEditBtn} onPress={resetForm} activeOpacity={0.85}>
-                        <Text style={styles.cancelEditText}>Cancel</Text>
-                      </TouchableOpacity>
+                    <View style={styles.inputBox}>
+                      <Icon name="business-outline" size={20} color={THEME.blue} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="City / District"
+                        placeholderTextColor={THEME.muted}
+                        value={city}
+                        onChangeText={setCity}
+                      />
+                    </View>
+
+                    <View style={styles.inputBox}>
+                      <Icon name="map-outline" size={20} color={THEME.purple} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="State"
+                        placeholderTextColor={THEME.muted}
+                        value={stateName}
+                        onChangeText={setStateName}
+                      />
+                    </View>
+
+                    <View style={styles.inputBox}>
+                      <Icon name="earth-outline" size={20} color={THEME.green} />
+                      <TextInput
+                        style={styles.input}
+                        placeholder="Country"
+                        placeholderTextColor={THEME.muted}
+                        value={country}
+                        onChangeText={setCountry}
+                      />
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.defaultToggle}
+                      activeOpacity={0.85}
+                      onPress={() => setIsDefault(prev => !prev)}
+                    >
+                      <Icon
+                        name={isDefault ? "checkbox" : "square-outline"}
+                        size={22}
+                        color={THEME.green}
+                      />
+                      <Text style={styles.defaultToggleText}>Make this selected address</Text>
+                    </TouchableOpacity>
+
+                    {!!latitude && !!longitude && (
+                      <View style={styles.geoPill}>
+                        <Icon name="checkmark-circle" size={17} color={THEME.green} />
+                        <Text style={styles.geoText}>
+                          Location saved: {latitude.toFixed(5)}, {longitude.toFixed(5)}
+                        </Text>
+                      </View>
                     )}
 
-                    <TouchableOpacity style={[styles.saveBtn, saving && styles.disabled]} onPress={saveAddress} disabled={saving} activeOpacity={0.9}>
-                      {saving ? (
-                        <ActivityIndicator color={THEME.black} />
-                      ) : (
-                        <>
-                          <Text style={styles.saveBtnText}>{editingId ? "Update Address" : "Save Address"}</Text>
-                          <Icon name="checkmark-circle" size={20} color={THEME.black} />
-                        </>
+                    <View style={styles.buttonRow}>
+                      {editingId && (
+                        <TouchableOpacity
+                          style={styles.cancelEditBtn}
+                          onPress={resetForm}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.cancelEditText}>Cancel</Text>
+                        </TouchableOpacity>
                       )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
 
-              {!isGuest && <Text style={styles.sectionTitle}>Saved Addresses</Text>}
+                      <TouchableOpacity
+                        style={[styles.saveBtn, saving && styles.disabled]}
+                        onPress={saveAddress}
+                        disabled={saving}
+                        activeOpacity={0.9}
+                      >
+                        {saving ? (
+                          <ActivityIndicator color={THEME.black} />
+                        ) : (
+                          <>
+                            <Text style={styles.saveBtnText}>
+                              {editingId ? "Update Address" : "Save Address"}
+                            </Text>
+                            <Icon name="checkmark-circle" size={20} color={THEME.black} />
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </>
+              )}
             </>
           }
           ListEmptyComponent={
@@ -737,7 +960,12 @@ export default function AddressScreen() {
         />
       </KeyboardAvoidingView>
 
-      <Modal visible={!!deleteTarget} transparent animationType="fade" onRequestClose={() => setDeleteTarget(null)}>
+      <Modal
+        visible={!!deleteTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteTarget(null)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.confirmBox}>
             <View style={styles.confirmIcon}>
@@ -745,22 +973,41 @@ export default function AddressScreen() {
             </View>
 
             <Text style={styles.confirmTitle}>Delete address?</Text>
-            <Text style={styles.confirmText}>This address will be removed from your saved delivery addresses.</Text>
+            <Text style={styles.confirmText}>
+              This address will be removed from your saved delivery addresses.
+            </Text>
 
             <View style={styles.confirmActions}>
-              <TouchableOpacity style={styles.keepBtn} onPress={() => setDeleteTarget(null)} disabled={!!deletingId}>
+              <TouchableOpacity
+                style={styles.keepBtn}
+                onPress={() => setDeleteTarget(null)}
+                disabled={!!deletingId}
+              >
                 <Text style={styles.keepText}>Keep</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.deleteConfirmBtn} onPress={deleteAddress} disabled={!!deletingId}>
-                {deletingId ? <ActivityIndicator color={THEME.black} /> : <Text style={styles.deleteConfirmText}>Delete</Text>}
+              <TouchableOpacity
+                style={styles.deleteConfirmBtn}
+                onPress={deleteAddress}
+                disabled={!!deletingId}
+              >
+                {deletingId ? (
+                  <ActivityIndicator color={THEME.black} />
+                ) : (
+                  <Text style={styles.deleteConfirmText}>Delete</Text>
+                )}
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      <Modal visible={authModal} transparent animationType="fade" onRequestClose={() => setAuthModal(false)}>
+      <Modal
+        visible={authModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAuthModal(false)}
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.authBox}>
             <View style={styles.authIcon}>
@@ -768,14 +1015,20 @@ export default function AddressScreen() {
             </View>
 
             <Text style={styles.authTitle}>Login required</Text>
-            <Text style={styles.authMessage}>Login to save addresses, checkout and track your orders.</Text>
+            <Text style={styles.authMessage}>
+              Login to save addresses, checkout and track your orders.
+            </Text>
 
             <TouchableOpacity style={styles.loginBtn} onPress={openLogin} activeOpacity={0.9}>
               <Text style={styles.loginBtnText}>Login / Sign up</Text>
               <Icon name="arrow-forward" size={20} color={THEME.black} />
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.browseBtn} onPress={() => setAuthModal(false)} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.browseBtn}
+              onPress={() => setAuthModal(false)}
+              activeOpacity={0.85}
+            >
               <Text style={styles.browseText}>Continue Browsing</Text>
             </TouchableOpacity>
           </View>
@@ -809,7 +1062,7 @@ const styles = StyleSheet.create({
   listContent: { padding: 18, paddingBottom: 38 },
   header: {
     marginTop: Platform.OS === "ios" ? 34 : 10,
-    marginBottom: 18,
+    marginBottom: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
@@ -824,29 +1077,77 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  title: { color: THEME.text, fontSize: 29, fontWeight: "900" },
-  subtitle: { color: THEME.muted, marginTop: 5, fontWeight: "700" },
-  heroBanner: {
+  title: { color: THEME.text, fontSize: 28, fontWeight: "900" },
+  subtitle: { color: THEME.muted, marginTop: 4, fontWeight: "700" },
+  searchCard: {
+    height: 54,
+    borderRadius: 16,
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    padding: 18,
     borderWidth: 1,
     borderColor: THEME.border,
-    marginBottom: 16,
+    paddingHorizontal: 13,
     flexDirection: "row",
     alignItems: "center",
+    marginBottom: 14,
   },
-  heroTag: { color: THEME.yellow, fontSize: 11, fontWeight: "900", letterSpacing: 1 },
-  heroTitle: { color: THEME.text, fontSize: 22, fontWeight: "900", marginTop: 5 },
-  heroSub: { color: THEME.muted, fontSize: 13, lineHeight: 18, marginTop: 6, fontWeight: "700" },
-  heroIcon: {
-    width: 62,
-    height: 62,
+  searchInput: {
+    flex: 1,
+    color: THEME.text,
+    paddingHorizontal: 10,
+    fontWeight: "800",
+  },
+  actionPanel: {
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
     borderRadius: 22,
-    backgroundColor: THEME.yellow,
+    overflow: "hidden",
+    marginBottom: 20,
+  },
+  actionRow: {
+    minHeight: 72,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  actionDivider: {
+    height: 1,
+    backgroundColor: THEME.border,
+    marginLeft: 68,
+  },
+  actionIconSoft: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: "#102116",
+    borderWidth: 1,
+    borderColor: "#20462C",
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 14,
+  },
+  actionIconStrong: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: THEME.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  actionTitle: { color: THEME.text, fontSize: 15, fontWeight: "900", flex: 1 },
+  actionSub: { color: THEME.muted, fontSize: 12, fontWeight: "700", marginTop: 3 },
+  sectionDividerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 13,
+  },
+  line: { flex: 1, height: 1, backgroundColor: THEME.border },
+  dividerText: {
+    color: THEME.muted,
+    fontWeight: "900",
+    fontSize: 12,
+    marginHorizontal: 12,
   },
   formCard: {
     backgroundColor: THEME.card,
@@ -859,28 +1160,6 @@ const styles = StyleSheet.create({
   rowBetween: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   sectionTitle: { color: THEME.text, fontSize: 17, fontWeight: "900", marginBottom: 12 },
   countText: { color: THEME.yellow, fontWeight: "900" },
-  currentLocationCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#102116",
-    borderWidth: 1,
-    borderColor: "#20462C",
-    borderRadius: 20,
-    padding: 14,
-    marginBottom: 14,
-  },
-  currentLocationIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: THEME.green,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  currentLocationTitle: { color: THEME.text, fontSize: 16, fontWeight: "900" },
-  currentLocationSub: { color: THEME.muted, fontSize: 12, marginTop: 4, lineHeight: 17, fontWeight: "700" },
-  locationAttached: { color: THEME.green, fontSize: 12, fontWeight: "900", marginTop: 6 },
   pickerBox: {
     height: 56,
     borderRadius: 16,
@@ -982,7 +1261,6 @@ const styles = StyleSheet.create({
   defaultPill: { backgroundColor: THEME.yellow, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 99 },
   defaultPillText: { color: THEME.black, fontSize: 10, fontWeight: "900" },
   savedAddress: { color: THEME.muted, marginTop: 4, lineHeight: 19, fontWeight: "700" },
-  savedMeta: { color: THEME.green, marginTop: 6, fontSize: 12, fontWeight: "800" },
   savedLocation: { color: THEME.yellow, marginTop: 5, fontSize: 12, fontWeight: "900" },
   savedActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
   smallBtn: {

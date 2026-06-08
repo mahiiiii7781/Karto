@@ -7,35 +7,36 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Vibration,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { io, Socket } from "socket.io-client";
+import Sound from "react-native-sound";
 import { useNavigation } from "@react-navigation/native";
 
+import apiClient from "@/api/apiClient";
 import { riderService } from "@/services/api/riderApi";
 import { useAuth } from "@/context/AuthContext";
 
-const SOCKET_URL = "https://karto-backend-kor1.onrender.com";
+const SOCKET_URL = apiClient.defaults.baseURL?.replace("/api", "") || "";
+
+Sound.setCategory("Playback");
 
 type RiderOrder = {
   id: string;
   orderNumber?: string;
   totalAmount?: number | string;
   deliveryFee?: number | string;
+  distanceKm?: number | string;
   status?: string;
-  restaurant?: {
-    name?: string;
-    address?: string;
-  };
-  address?: {
-    addressLine?: string;
-    landmark?: string;
-    city?: string;
-  };
-  user?: {
-    fullName?: string;
-    phone?: string;
-  };
+  paymentMethod?: string;
+  restaurant?: any;
+  vendor?: any;
+  address?: any;
+  deliveryAddress?: any;
+  pickupAddress?: string;
+  user?: any;
+  customer?: any;
   items?: any[];
 };
 
@@ -43,8 +44,13 @@ export default function RiderOrderAssignmentPopup() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
 
+  const riderUser = user as any;
+  const riderCityId =
+    riderUser?.cityId || riderUser?.city?.id || riderUser?.rider?.cityId || null;
+
   const socketRef = useRef<Socket | null>(null);
-  const slideAnim = useRef(new Animated.Value(300)).current;
+  const soundRef = useRef<Sound | null>(null);
+  const slideAnim = useRef(new Animated.Value(400)).current;
 
   const [visible, setVisible] = useState(false);
   const [order, setOrder] = useState<RiderOrder | null>(null);
@@ -57,11 +63,49 @@ export default function RiderOrderAssignmentPopup() {
     setTimeout(() => setToast(""), 2500);
   };
 
+  const startAlert = () => {
+    Vibration.cancel();
+    Vibration.vibrate([500, 700], true);
+
+    soundRef.current?.stop();
+    soundRef.current?.release();
+    soundRef.current = null;
+
+    soundRef.current = new Sound("new_order.mp3", Sound.MAIN_BUNDLE, (error) => {
+      if (error) return;
+      soundRef.current?.setNumberOfLoops(-1);
+      soundRef.current?.play();
+    });
+  };
+
+  const stopAlert = () => {
+    Vibration.cancel();
+
+    soundRef.current?.stop();
+    soundRef.current?.release();
+    soundRef.current = null;
+  };
+
+  const normalizeSocketOrder = (payload: any): RiderOrder | null => {
+    if (!payload) return null;
+    if (payload?.order?.id) return payload.order;
+    if (payload?.data?.order?.id) return payload.data.order;
+    if (payload?.id) return payload;
+    return null;
+  };
+
   const openPopup = (nextOrder: RiderOrder) => {
     if (!nextOrder?.id) return;
 
     setOrder(nextOrder);
     setVisible(true);
+    setLoading(false);
+    startAlert();
+
+    socketRef.current?.emit("rider-order-popup-opened", {
+      orderId: nextOrder.id,
+      riderId: user?.id,
+    });
 
     Animated.spring(slideAnim, {
       toValue: 0,
@@ -71,9 +115,11 @@ export default function RiderOrderAssignmentPopup() {
     }).start();
   };
 
-  const closePopup = () => {
+  const closePopupAfterAcceptOnly = () => {
+    stopAlert();
+
     Animated.timing(slideAnim, {
-      toValue: 300,
+      toValue: 400,
       duration: 220,
       useNativeDriver: true,
     }).start(() => {
@@ -83,95 +129,109 @@ export default function RiderOrderAssignmentPopup() {
     });
   };
 
-  const normalizeSocketOrder = (payload: any): RiderOrder | null => {
-    if (!payload) return null;
+  const getCustomerName = (o: RiderOrder | null) =>
+    o?.customer?.name || o?.user?.fullName || "Customer";
 
-    if (payload?.order?.id) return payload.order;
-    if (payload?.id) return payload;
+  const getCustomerPhone = (o: RiderOrder | null) =>
+    o?.customer?.phone || o?.user?.phone || "Phone not available";
 
-    return null;
+  const getVendorName = (o: RiderOrder | null) =>
+    o?.vendor?.name || o?.restaurant?.name || "Restaurant";
+
+  const getVendorPhone = (o: RiderOrder | null) =>
+    o?.vendor?.phone ||
+    o?.restaurant?.phone ||
+    o?.restaurant?.ownerMobileNo ||
+    "Phone not available";
+
+  const getPickupAddress = (o: RiderOrder | null) =>
+    o?.pickupAddress ||
+    o?.vendor?.address ||
+    o?.restaurant?.address ||
+    "Pickup address not available";
+
+  const getDeliveryAddress = (o: RiderOrder | null) => {
+    const a = o?.deliveryAddress || o?.address;
+    return (
+      a?.address ||
+      a?.addressLine ||
+      a?.landmark ||
+      a?.city ||
+      "Delivery address not available"
+    );
   };
 
   const loadProfileStatus = useCallback(async () => {
     try {
       const res = await riderService.getProfile();
-      setRiderOnline(Boolean(res?.rider?.isOnline));
+      setRiderOnline(Boolean(res?.data?.isOnline));
     } catch {
       setRiderOnline(false);
     }
   }, []);
 
-  const checkNewOrdersFallback = useCallback(async () => {
+  const checkCurrentAssignmentFallback = useCallback(async () => {
     try {
-      if (!riderOnline) return;
+      if (!riderOnline || visible) return;
 
-      const res = await riderService.getNewOrders();
-      const firstOrder = res?.orders?.[0];
+      const res = await riderService.getCurrentAssignment();
+      if (res?.error) return;
 
-      if (firstOrder?.id && !visible) {
-        openPopup(firstOrder);
-      }
-    } catch {
-      // silent fallback
-    }
+      const nextOrder =
+        res?.data?.order || res?.data?.data?.order || res?.data?.activeOrder;
+
+      if (nextOrder?.id) openPopup(nextOrder);
+    } catch {}
   }, [riderOnline, visible]);
 
   const connectSocket = useCallback(async () => {
     try {
       const token = await AsyncStorage.getItem("accessToken");
 
-      if (!token || !user?.id) return;
+      if (!token || !user?.id || !SOCKET_URL) return;
 
       socketRef.current?.disconnect();
 
       const socket = io(SOCKET_URL, {
-        transports: ["websocket"],
-        auth: {
-          token,
-        },
-        query: {
-          token,
-          userId: user.id,
-          role: "RIDER",
-        },
+        transports: ["websocket", "polling"],
+        auth: { token },
         reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 1000,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1500,
       });
 
       socketRef.current = socket;
 
       socket.on("connect", () => {
-        socket.emit("join-rider-room", user.id);
         socket.emit("joinRiderRoom", user.id);
-        socket.emit("join-room", `rider-${user.id}`);
+
+        if (riderCityId) {
+          socket.emit("joinRiderCity", riderCityId);
+        }
+
+        socket.emit("rider-online", {
+          riderId: user.id,
+          cityId: riderCityId,
+        });
       });
 
-      socket.on("new-order", (payload: any) => {
+      const orderHandler = (payload: any) => {
         const nextOrder = normalizeSocketOrder(payload);
-        if (nextOrder && riderOnline) openPopup(nextOrder);
-      });
 
-      socket.on("rider-new-order", (payload: any) => {
-        const nextOrder = normalizeSocketOrder(payload);
-        if (nextOrder && riderOnline) openPopup(nextOrder);
-      });
+        if (nextOrder?.id && riderOnline && !visible) {
+          openPopup(nextOrder);
+        }
+      };
 
-      socket.on("order-assigned", (payload: any) => {
-        const nextOrder = normalizeSocketOrder(payload);
-        if (nextOrder && riderOnline) openPopup(nextOrder);
-      });
-
-      socket.on("rider-order-assigned", (payload: any) => {
-        const nextOrder = normalizeSocketOrder(payload);
-        if (nextOrder && riderOnline) openPopup(nextOrder);
-      });
-
-      socket.on("disconnect", () => {});
-    } catch {
-      // socket fallback handled by polling
-    }
-  }, [riderOnline, user?.id]);
+      socket.on("new-rider-order", orderHandler);
+      socket.on("new-order-assignment", orderHandler);
+      socket.on("NEW_RIDER_ORDER", orderHandler);
+      socket.on("new-order", orderHandler);
+      socket.on("rider-new-order", orderHandler);
+      socket.on("order-assigned", orderHandler);
+      socket.on("rider-order-assigned", orderHandler);
+    } catch {}
+  }, [riderOnline, user?.id, riderCityId, visible]);
 
   const handleAccept = async () => {
     if (!order?.id || loading) return;
@@ -180,10 +240,22 @@ export default function RiderOrderAssignmentPopup() {
       setLoading(true);
 
       const res = await riderService.acceptOrder(order.id);
-      const acceptedOrder = res?.order || order;
+
+      if (res?.error) {
+        setLoading(false);
+        showToast(res?.error?.message || "Unable to accept order");
+        return;
+      }
+
+      const acceptedOrder = res?.data || order;
+
+      socketRef.current?.emit("rider-accepted-order", {
+        orderId: acceptedOrder.id,
+        riderId: user?.id,
+      });
 
       showToast("Order accepted successfully");
-      closePopup();
+      closePopupAfterAcceptOnly();
 
       setTimeout(() => {
         navigation.navigate("RiderOrderDetail", {
@@ -200,15 +272,12 @@ export default function RiderOrderAssignmentPopup() {
   const handleReject = async () => {
     if (!order?.id || loading) return;
 
-    try {
-      setLoading(true);
-      await riderService.rejectOrder(order.id);
-      showToast("Order rejected");
-      closePopup();
-    } catch (error: any) {
-      setLoading(false);
-      showToast(error?.message || "Unable to reject order");
-    }
+    socketRef.current?.emit("rider-rejected-order", {
+      orderId: order.id,
+      riderId: user?.id,
+    });
+
+    showToast("Accept this order to continue");
   };
 
   useEffect(() => {
@@ -219,146 +288,154 @@ export default function RiderOrderAssignmentPopup() {
     connectSocket();
 
     return () => {
+      stopAlert();
+
+      socketRef.current?.off("new-rider-order");
+      socketRef.current?.off("new-order-assignment");
+      socketRef.current?.off("NEW_RIDER_ORDER");
+      socketRef.current?.off("new-order");
+      socketRef.current?.off("rider-new-order");
+      socketRef.current?.off("order-assigned");
+      socketRef.current?.off("rider-order-assigned");
+
+      if (user?.id) {
+        socketRef.current?.emit("rider-offline", {
+          riderId: user.id,
+          cityId: riderCityId,
+        });
+      }
+
       socketRef.current?.disconnect();
       socketRef.current = null;
     };
-  }, [connectSocket]);
+  }, [connectSocket, user?.id, riderCityId]);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      checkNewOrdersFallback();
-    }, 12000);
-
+    const timer = setInterval(checkCurrentAssignmentFallback, 7000);
     return () => clearInterval(timer);
-  }, [checkNewOrdersFallback]);
+  }, [checkCurrentAssignmentFallback]);
 
-  if (!order) {
-    return null;
-  }
+  if (!order) return null;
 
   const itemCount = order?.items?.length || 0;
 
   return (
-    <>
-      <Modal transparent visible={visible} animationType="fade">
-        <View style={styles.backdrop}>
-          <Animated.View
-            style={[
-              styles.card,
-              {
-                transform: [{ translateY: slideAnim }],
-              },
-            ]}
-          >
-            <View style={styles.topRow}>
-              <View>
-                <Text style={styles.label}>NEW DELIVERY</Text>
-                <Text style={styles.orderNo}>
-                  #{order.orderNumber || order.id.slice(0, 8)}
-                </Text>
-              </View>
-
-              <View style={styles.feeBadge}>
-                <Text style={styles.feeText}>
-                  ₹{Number(order.deliveryFee || 0).toFixed(0)}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoBlock}>
-              <Text style={styles.sectionTitle}>Pickup</Text>
-              <Text style={styles.mainText}>
-                {order.restaurant?.name || "Restaurant"}
-              </Text>
-              <Text style={styles.subText}>
-                {order.restaurant?.address || "Pickup address not available"}
+    <Modal transparent visible={visible} animationType="fade">
+      <View style={styles.backdrop}>
+        <Animated.View style={[styles.card, { transform: [{ translateY: slideAnim }] }]}>
+          <View style={styles.topRow}>
+            <View>
+              <Text style={styles.label}>NEW DELIVERY REQUEST</Text>
+              <Text style={styles.orderNo}>
+                #{order.orderNumber || order.id.slice(0, 8).toUpperCase()}
               </Text>
             </View>
 
-            <View style={styles.infoBlock}>
-              <Text style={styles.sectionTitle}>Drop</Text>
-              <Text style={styles.mainText}>
-                {order.user?.fullName || "Customer"}
-              </Text>
-              <Text style={styles.subText}>
-                {order.address?.addressLine ||
-                  order.address?.landmark ||
-                  "Delivery address not available"}
+            <View style={styles.feeBadge}>
+              <Text style={styles.feeText}>
+                ₹{Number(order.deliveryFee || 0).toFixed(0)}
               </Text>
             </View>
+          </View>
 
-            <View style={styles.summaryRow}>
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryValue}>{itemCount}</Text>
-                <Text style={styles.summaryLabel}>Items</Text>
-              </View>
+          <View style={styles.alertStrip}>
+            <Text style={styles.alertText}>
+              Sound & vibration active until order is accepted
+            </Text>
+          </View>
 
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryValue}>
-                  ₹{Number(order.totalAmount || 0).toFixed(0)}
-                </Text>
-                <Text style={styles.summaryLabel}>Order</Text>
-              </View>
+          <View style={styles.divider} />
 
-              <View style={styles.summaryBox}>
-                <Text style={styles.summaryValue}>
-                  {order.status || "READY"}
-                </Text>
-                <Text style={styles.summaryLabel}>Status</Text>
-              </View>
+          <View style={styles.infoBlock}>
+            <Text style={styles.sectionTitle}>Pickup</Text>
+            <Text style={styles.mainText}>{getVendorName(order)}</Text>
+            <Text style={styles.subText}>{getPickupAddress(order)}</Text>
+            <Text style={styles.phoneText}>Vendor: {getVendorPhone(order)}</Text>
+          </View>
+
+          <View style={styles.infoBlock}>
+            <Text style={styles.sectionTitle}>Drop</Text>
+            <Text style={styles.mainText}>{getCustomerName(order)}</Text>
+            <Text style={styles.subText}>{getDeliveryAddress(order)}</Text>
+            <Text style={styles.phoneText}>Customer: {getCustomerPhone(order)}</Text>
+          </View>
+
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryBox}>
+              <Text style={styles.summaryValue}>{itemCount}</Text>
+              <Text style={styles.summaryLabel}>Items</Text>
             </View>
 
-            {toast ? (
-              <View style={styles.toast}>
-                <Text style={styles.toastText}>{toast}</Text>
-              </View>
-            ) : null}
-
-            <View style={styles.actions}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[styles.btn, styles.rejectBtn]}
-                onPress={handleReject}
-                disabled={loading}
-              >
-                <Text style={styles.rejectText}>Reject</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[styles.btn, styles.acceptBtn]}
-                onPress={handleAccept}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#101010" />
-                ) : (
-                  <Text style={styles.acceptText}>Accept Order</Text>
-                )}
-              </TouchableOpacity>
+            <View style={styles.summaryBox}>
+              <Text style={styles.summaryValue}>
+                ₹{Number(order.totalAmount || 0).toFixed(0)}
+              </Text>
+              <Text style={styles.summaryLabel}>Order</Text>
             </View>
-          </Animated.View>
-        </View>
-      </Modal>
-    </>
+
+            <View style={styles.summaryBox}>
+              <Text style={styles.summaryValue}>
+                {order.distanceKm ? `${Number(order.distanceKm).toFixed(1)} km` : "-"}
+              </Text>
+              <Text style={styles.summaryLabel}>Distance</Text>
+            </View>
+          </View>
+
+          <View style={styles.paymentBox}>
+            <Text style={styles.paymentText}>
+              Payment: {order.paymentMethod || "COD"} • Status:{" "}
+              {order.status || "READY_FOR_PICKUP"}
+            </Text>
+          </View>
+
+          {!!toast && (
+            <View style={styles.toast}>
+              <Text style={styles.toastText}>{toast}</Text>
+            </View>
+          )}
+
+          <View style={styles.actions}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[styles.btn, styles.rejectBtn]}
+              onPress={handleReject}
+              disabled={loading}
+            >
+              <Text style={styles.rejectText}>Reject</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              activeOpacity={0.85}
+              style={[styles.btn, styles.acceptBtn]}
+              onPress={handleAccept}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#050806" />
+              ) : (
+                <Text style={styles.acceptText}>Accept Order</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.72)",
+    backgroundColor: "rgba(0,0,0,0.82)",
     justifyContent: "flex-end",
   },
   card: {
-    backgroundColor: "#101010",
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
+    backgroundColor: "#070A08",
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
     padding: 20,
     borderWidth: 1,
-    borderColor: "rgba(193,157,35,0.45)",
+    borderColor: "rgba(250,204,21,0.38)",
   },
   topRow: {
     flexDirection: "row",
@@ -366,27 +443,41 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   label: {
-    color: "#8BE05F",
+    color: "#22C55E",
     fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 1.5,
+    fontWeight: "900",
+    letterSpacing: 1.3,
   },
   orderNo: {
-    color: "#FFFFFF",
-    fontSize: 24,
+    color: "#F8FAFC",
+    fontSize: 25,
     fontWeight: "900",
     marginTop: 4,
   },
   feeBadge: {
-    backgroundColor: "#C1FF3D",
+    backgroundColor: "#FACC15",
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 18,
   },
   feeText: {
-    color: "#101010",
+    color: "#050806",
     fontWeight: "900",
     fontSize: 18,
+  },
+  alertStrip: {
+    backgroundColor: "#102015",
+    borderColor: "#22C55E",
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 10,
+    marginTop: 14,
+  },
+  alertText: {
+    color: "#D9F99D",
+    fontWeight: "800",
+    fontSize: 12,
+    textAlign: "center",
   },
   divider: {
     height: 1,
@@ -397,21 +488,27 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sectionTitle: {
-    color: "#C19D23",
+    color: "#FACC15",
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "900",
     marginBottom: 5,
   },
   mainText: {
     color: "#FFFFFF",
     fontSize: 17,
-    fontWeight: "800",
+    fontWeight: "900",
   },
   subText: {
-    color: "#BDBDBD",
+    color: "#CBD5E1",
     fontSize: 13,
     lineHeight: 19,
     marginTop: 4,
+  },
+  phoneText: {
+    color: "#22C55E",
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 5,
   },
   summaryRow: {
     flexDirection: "row",
@@ -420,11 +517,11 @@ const styles = StyleSheet.create({
   },
   summaryBox: {
     flex: 1,
-    backgroundColor: "#181818",
+    backgroundColor: "#101713",
     borderRadius: 18,
     padding: 12,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.06)",
+    borderColor: "#1E2A22",
   },
   summaryValue: {
     color: "#FFFFFF",
@@ -432,14 +529,27 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   summaryLabel: {
-    color: "#8A8A8A",
+    color: "#94A3B8",
     fontSize: 11,
     marginTop: 4,
     fontWeight: "700",
   },
+  paymentBox: {
+    backgroundColor: "#101713",
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#1E2A22",
+    marginTop: 14,
+  },
+  paymentText: {
+    color: "#E5E7EB",
+    fontSize: 13,
+    fontWeight: "800",
+  },
   toast: {
     backgroundColor: "#1E2B16",
-    borderColor: "#8BE05F",
+    borderColor: "#22C55E",
     borderWidth: 1,
     borderRadius: 14,
     padding: 10,
@@ -448,7 +558,7 @@ const styles = StyleSheet.create({
   toastText: {
     color: "#FFFFFF",
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "800",
     textAlign: "center",
   },
   actions: {
@@ -458,18 +568,18 @@ const styles = StyleSheet.create({
   },
   btn: {
     flex: 1,
-    height: 54,
+    height: 56,
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
   },
   rejectBtn: {
-    backgroundColor: "#1B1B1B",
+    backgroundColor: "#111827",
     borderWidth: 1,
-    borderColor: "#333333",
+    borderColor: "#374151",
   },
   acceptBtn: {
-    backgroundColor: "#C1FF3D",
+    backgroundColor: "#FACC15",
   },
   rejectText: {
     color: "#FFFFFF",
@@ -477,7 +587,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   acceptText: {
-    color: "#101010",
+    color: "#050806",
     fontSize: 15,
     fontWeight: "900",
   },

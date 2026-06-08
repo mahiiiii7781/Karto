@@ -1,234 +1,270 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import apiClient from "@/api/apiClient";
 
-const API_BASE_URL =
-  "https://karto-backend-kor1.onrender.com/api";
-
-const authHeaders = async (isFormData: boolean = false) => {
-  const token = await AsyncStorage.getItem("accessToken");
-
-  if (!token) {
-    throw new Error("Session expired. Please login again.");
-  }
-
-  return {
-    ...(isFormData ? {} : { "Content-Type": "application/json" }),
-    Authorization: `Bearer ${token}`,
-  };
-};
-
-const safeJsonParse = (text: string) => {
-  try {
-    return text ? JSON.parse(text) : null;
-  } catch {
-    return null;
-  }
-};
-
-const request = async (
-  url: string,
-  options: RequestInit & { isFormData?: boolean } = {}
-) => {
-  try {
-    const isFormData = options.isFormData === true;
-
-    const { isFormData: _removed, ...fetchOptions } = options;
-
-    const res = await fetch(url, {
-      ...fetchOptions,
-      headers: {
-        ...(await authHeaders(isFormData)),
-        ...(options.headers || {}),
-      },
-    });
-
-    const text = await res.text();
-    const data = safeJsonParse(text);
-
-    if (!res.ok) {
-      throw new Error(
-        data?.message ||
-          data?.error?.message ||
-          data?.error ||
-          `Request failed with status ${res.status}`
-      );
-    }
-
-    return data;
-  } catch (error: any) {
-    if (
-      error?.message ===
-      "Session expired. Please login again."
-    ) {
-      throw error;
-    }
-
-    if (error?.message) {
-      throw error;
-    }
-
-    throw new Error(
-      "Network error. Please check your internet connection."
-    );
-  }
-};
+const fail = (error: any, emptyData: any = null) => ({
+  data: emptyData,
+  error: error?.response?.data || error,
+});
 
 export const riderService = {
-  /* ==========================
-     PROFILE
-  ========================== */
+  dashboard: async () => {
+    try {
+      const res = await apiClient.get("/riders/dashboard");
+      return { data: res.data.dashboard || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  getProfile: async () =>
-    request(`${API_BASE_URL}/riders/profile`),
+  getProfile: async () => {
+    try {
+      const res = await apiClient.get("/riders/profile");
+      return { data: res.data.rider || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  updateProfile: async (payload: any) =>
-    request(`${API_BASE_URL}/riders/profile`, {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
+  updateProfile: async (payload: any) => {
+    try {
+      const res = await apiClient.patch("/riders/profile", payload);
+      return { data: res.data.rider || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  updateKyc: async (payload: any) =>
-    request(`${API_BASE_URL}/riders/kyc`, {
-      method: "PATCH",
-      body: JSON.stringify(payload),
-    }),
+  updateKyc: async (payload: any) => {
+    try {
+      const res = await apiClient.patch("/riders/kyc", payload);
+      return { data: res.data.rider || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  updateOnlineStatus: async (isOnline: boolean) =>
-    request(`${API_BASE_URL}/riders/online-status`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        isOnline,
-      }),
-    }),
+  updateOnlineStatus: async (isOnline: boolean) => {
+    try {
+      const res = await apiClient.patch("/riders/online-status", { isOnline });
+      return { data: res.data.rider || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  /* ==========================
-     ORDERS
-  ========================== */
+  getCurrentAssignment: async () => {
+    try {
+      const res = await apiClient.get("/riders/orders/assignment/current");
+      return { data: res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  getNewOrders: async () =>
-    request(`${API_BASE_URL}/riders/orders/new`),
+  getNewOrders: async () => {
+    try {
+      const res = await apiClient.get("/riders/orders/new");
+      return { data: res.data.orders || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  getActiveOrders: async () =>
-    request(`${API_BASE_URL}/riders/orders/active`),
+  getActiveOrders: async () => {
+    try {
+      const res = await apiClient.get("/riders/orders/active");
+      return { data: res.data.orders || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  getOrderDetail: async (orderId: string) =>
-    request(
-      `${API_BASE_URL}/riders/orders/${orderId}`
-    ),
+  getOrderDetail: async (orderId: string) => {
+    try {
+      const res = await apiClient.get(`/riders/orders/${orderId}`);
+      return { data: res.data.order || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  getOrderHistory: async () =>
-    request(`${API_BASE_URL}/riders/orders/history`),
+  getOrderHistory: async () => {
+    try {
+      const res = await apiClient.get("/riders/orders/history");
+      return { data: res.data.orders || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  acceptOrder: async (orderId: string) =>
-    request(
-      `${API_BASE_URL}/riders/orders/${orderId}/accept`,
-      {
-        method: "PATCH",
-      }
-    ),
+  acceptOrder: async (orderId: string) => {
+    try {
+      const res = await apiClient.patch(`/riders/orders/${orderId}/accept`);
+      return { data: res.data.order || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  rejectOrder: async (orderId: string) =>
-    request(
-      `${API_BASE_URL}/riders/orders/${orderId}/reject`,
-      {
-        method: "PATCH",
-      }
-    ),
+  rejectOrder: async (orderId: string) => {
+    try {
+      const res = await apiClient.patch(`/riders/orders/${orderId}/reject`);
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  markPicked: async (orderId: string) =>
-    request(
-      `${API_BASE_URL}/riders/orders/${orderId}/picked`,
-      {
-        method: "PATCH",
-      }
-    ),
+  markPicked: async (orderId: string) => {
+    try {
+      const res = await apiClient.patch(`/riders/orders/${orderId}/picked`);
+      return { data: res.data.order || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  startDelivery: async (orderId: string) =>
-    request(
-      `${API_BASE_URL}/riders/orders/${orderId}/start-delivery`,
-      {
-        method: "PATCH",
-      }
-    ),
+  startDelivery: async (orderId: string) => {
+    try {
+      const res = await apiClient.patch(`/riders/orders/${orderId}/start-delivery`);
+      return { data: res.data.order || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  completeOrder: async (orderId: string) =>
-    request(
-      `${API_BASE_URL}/riders/orders/${orderId}/complete`,
-      {
-        method: "PATCH",
-      }
-    ),
+  completeOrder: async (orderId: string) => {
+    try {
+      const res = await apiClient.patch(`/riders/orders/${orderId}/complete`);
+      return { data: res.data.order || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  updateLocation: async (
-    orderId: string,
-    latitude: number,
-    longitude: number
-  ) =>
-    request(`${API_BASE_URL}/riders/location`, {
-      method: "POST",
-      body: JSON.stringify({
+  verifyDeliveryOtp: async (orderId: string, otp: string) => {
+    try {
+      const res = await apiClient.post(
+        `/riders/orders/${orderId}/verify-delivery-otp`,
+        { otp }
+      );
+      return { data: res.data.order || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateLocation: async (orderId: string, latitude: number, longitude: number) => {
+    try {
+      const res = await apiClient.post("/riders/location", {
         orderId,
         latitude,
         longitude,
-      }),
-    }),
+      });
+      return { data: res.data.location || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  /* ==========================
-     ANALYTICS
-  ========================== */
+  getAnalytics: async () => {
+    try {
+      const res = await apiClient.get("/riders/analytics");
+      return { data: res.data.analytics || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  getAnalytics: async () =>
-    request(`${API_BASE_URL}/riders/analytics`),
+  getTodayEarnings: async (type: "daily" | "weekly" | "monthly" = "daily") => {
+    try {
+      const res = await apiClient.get(`/riders/earnings/today?type=${type}`);
+      return { data: res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  getTodayEarnings: async () =>
-    request(
-      `${API_BASE_URL}/riders/earnings/today`
-    ),
+  getWallet: async () => {
+    try {
+      const res = await apiClient.get("/riders/wallet");
+      return {
+        data: {
+          wallet: res.data.wallet,
+          settlements: res.data.settlements || [],
+        },
+        error: null,
+      };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  getWallet: async () =>
-    request(`${API_BASE_URL}/riders/wallet`),
+  getCoupons: async () => {
+    try {
+      const res = await apiClient.get("/riders/coupons");
+      return { data: res.data.coupons || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  getCoupons: async () =>
-    request(`${API_BASE_URL}/riders/coupons`),
+  getLeaderboard: async () => {
+    try {
+      const res = await apiClient.get("/riders/leaderboard");
+      return { data: res.data.leaderboard || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  getLeaderboard: async () =>
-    request(
-      `${API_BASE_URL}/riders/leaderboard`
-    ),
+  getIncentives: async () => {
+    try {
+      const res = await apiClient.get("/riders/incentives");
+      return { data: res.data.incentives || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  getIncentives: async () =>
-    request(
-      `${API_BASE_URL}/riders/incentives`
-    ),
+  getNotifications: async () => {
+    try {
+      const res = await apiClient.get("/riders/notifications");
+      return { data: res.data.notifications || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  /* ==========================
-     SUPPORT
-  ========================== */
+  getSupportTickets: async () => {
+    try {
+      const res = await apiClient.get("/riders/support/tickets");
+      return { data: res.data.tickets || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
 
-  getSupportTickets: async () =>
-    request(
-      `${API_BASE_URL}/riders/support/tickets`
-    ),
+  createSupportTicket: async (payload: any) => {
+    try {
+      const res = await apiClient.post("/riders/support/tickets", payload);
+      return { data: res.data.ticket || res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-  createSupportTicket: async (
-    payload: any
-  ) =>
-    request(
-      `${API_BASE_URL}/riders/support/tickets`,
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }
-    ),
-
-  addSupportMessage: async (
-    ticketId: string,
-    payload: any
-  ) =>
-    request(
-      `${API_BASE_URL}/riders/support/tickets/${ticketId}/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      }
-    ),
+  addSupportMessage: async (ticketId: string, payload: any) => {
+    try {
+      const res = await apiClient.post(
+        `/riders/support/tickets/${ticketId}/messages`,
+        payload
+      );
+      return {
+        data: res.data.supportMessage || res.data.data || res.data,
+        error: null,
+      };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 };

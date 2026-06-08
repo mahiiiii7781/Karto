@@ -1,4 +1,5 @@
 import React from "react";
+import { Platform } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import Icon from "react-native-vector-icons/Ionicons";
@@ -19,6 +20,9 @@ import WalletScreen from "../screens/main/wallet/WalletScreen";
 import HelpSupportScreen from "../screens/support/HelpSupportScreen";
 import NotificationsScreen from "../screens/main/notifications/NotificationsScreen";
 import CouponsScreen from "../screens/main/coupons/CouponsScreen";
+
+import CartScreen from "../screens/main/cart/CartScreen";
+import CheckoutScreen from "../screens/main/checkout/CheckoutScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -41,8 +45,15 @@ const HomeStackNavigator = () => (
   <Stack.Navigator screenOptions={screenOptions}>
     <Stack.Screen name="HomeScreen" component={HomeScreen} />
     <Stack.Screen name="RestaurantDetail" component={RestaurantDetailScreen} />
-    <Stack.Screen name="CategoryRestaurants" component={CategoryRestaurantsScreen} />
+    <Stack.Screen
+      name="CategoryRestaurants"
+      component={CategoryRestaurantsScreen}
+    />
     <Stack.Screen name="MenuItemDetail" component={MenuItemDetailScreen} />
+    <Stack.Screen name="Cart" component={CartScreen} />
+    <Stack.Screen name="Checkout" component={CheckoutScreen} />
+    <Stack.Screen name="Coupons" component={CouponsScreen} />
+    <Stack.Screen name="Notifications" component={NotificationsScreen} />
     <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
   </Stack.Navigator>
 );
@@ -51,6 +62,7 @@ const OrdersStackNavigator = () => (
   <Stack.Navigator screenOptions={screenOptions}>
     <Stack.Screen name="OrdersHome" component={OrdersScreen} />
     <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
+    <Stack.Screen name="HelpSupport" component={HelpSupportScreen} />
   </Stack.Navigator>
 );
 
@@ -64,7 +76,11 @@ const ProfileStackNavigator = () => (
     <Stack.Screen name="HelpSupport" component={HelpSupportScreen} />
     <Stack.Screen name="Notifications" component={NotificationsScreen} />
     <Stack.Screen name="Coupons" component={CouponsScreen} />
+    <Stack.Screen name="Cart" component={CartScreen} />
+    <Stack.Screen name="Checkout" component={CheckoutScreen} />
     <Stack.Screen name="OrderDetail" component={OrderDetailScreen} />
+    <Stack.Screen name="RestaurantDetail" component={RestaurantDetailScreen} />
+    <Stack.Screen name="MenuItemDetail" component={MenuItemDetailScreen} />
   </Stack.Navigator>
 );
 
@@ -82,8 +98,8 @@ export default function TabNavigator() {
           borderTopWidth: 1,
           borderTopColor: COLORS.border,
           paddingTop: 8,
-          paddingBottom: 8,
-          height: 66,
+          paddingBottom: Platform.OS === "ios" ? 20 : 8,
+          height: Platform.OS === "ios" ? 82 : 66,
         },
         tabBarItemStyle: {
           borderRadius: 18,
@@ -95,7 +111,7 @@ export default function TabNavigator() {
           marginTop: 2,
         },
         tabBarIcon: ({ focused, color, size }) => {
-          let iconName: string = "home-outline";
+          let iconName = "home-outline";
 
           switch (route.name) {
             case "Home":

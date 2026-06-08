@@ -23,16 +23,20 @@ import { orderService } from "@/services/api/orderService";
 import { useAuth } from "@/context/AuthContext";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
   green: "#22C55E",
-  yellow: "#FACC15",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
   black: "#050807",
+  white: "#FFFFFF",
 };
 
 const DEFAULT_CGST_RATE = 2.5;
@@ -40,7 +44,7 @@ const DEFAULT_SGST_RATE = 2.5;
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
 
-type PaymentMethod = "COD" | "ONLINE";
+type PaymentMethod = "COD" | "ONLINE" | "WALLET";
 
 type BillSummary = {
   subtotal: number;
@@ -53,6 +57,40 @@ type BillSummary = {
   sgstRate: number;
   taxTotal: number;
   total: number;
+};
+
+const getOrderFromResponse = (value: any) => {
+  return (
+    value?.order ||
+    value?.data?.order ||
+    value?.data?.data?.order ||
+    value?.data ||
+    value
+  );
+};
+
+const normalizeAddressText = (addr: any) => {
+  if (!addr) return "Saved delivery address";
+
+  const address = String(
+    addr.address || addr.addressLine || addr.fullAddress || addr.full_address || ""
+  ).trim();
+
+  const landmark = String(addr.landmark || "").trim();
+  const city = String(addr.city || addr.district || "").trim();
+  const state = String(addr.state || addr.stateName || addr.state_name || "").trim();
+  const pincode = String(addr.pincode || addr.pinCode || addr.pin_code || "").trim();
+
+  const main = [address, landmark].filter(Boolean).join(", ");
+  const tail = [city, state].filter(Boolean).join(", ");
+
+  if (main && tail && pincode) return `${main}, ${tail} - ${pincode}`;
+  if (main && tail) return `${main}, ${tail}`;
+  if (main && pincode) return `${main} - ${pincode}`;
+  if (main) return main;
+  if (tail && pincode) return `${tail} - ${pincode}`;
+
+  return "Saved delivery address";
 };
 
 export default function CheckoutScreen() {
@@ -72,6 +110,8 @@ export default function CheckoutScreen() {
 
   const [customerNote, setCustomerNote] = useState("");
   const [couponCode, setCouponCode] = useState("");
+  const [appliedCouponCode, setAppliedCouponCode] = useState("");
+  const [couponApplying, setCouponApplying] = useState(false);
   const [pricing, setPricing] = useState<any>(params.pricing || null);
 
   const [loading, setLoading] = useState(true);
@@ -93,7 +133,7 @@ export default function CheckoutScreen() {
       text1,
       text2,
       position: "bottom",
-      visibilityTime: 2100,
+      visibilityTime: 2300,
     });
   };
 
@@ -358,94 +398,136 @@ export default function CheckoutScreen() {
     addressId: selectedAddress.id,
     paymentMethod: method,
     customerNote: customerNote.trim() || null,
-    couponCode: couponCode.trim() || null,
+    couponCode: (appliedCouponCode || couponCode).trim() || null,
   });
+
+  const clearCartSilently = async () => {
+    try {
+      await cartService.clearCart();
+    } catch {}
+  };
 
   const placeCodOrder = async () => {
     const { data, error } = await orderService.createOrder(createOrderPayload("COD"));
 
     if (error) throw error;
-    return data;
-  };
 
-  const postWithFallback = async (paths: string[], payload: any) => {
-    let lastError: any = null;
+    const order = getOrderFromResponse(data);
 
-    for (const path of paths) {
-      try {
-        return await apiClient.post(path, payload);
-      } catch (error: any) {
-        lastError = error;
-      }
+    if (!order?.id) {
+      throw new Error("Order created but response format is invalid.");
     }
 
-    throw lastError || new Error("Request failed.");
+    return order;
+  };
+
+  const cancelCreatedOnlineOrder = async (orderId?: string, reason?: string) => {
+    if (!orderId) return;
+
+    try {
+      await orderService.cancelOrder(
+        orderId,
+        reason || "Online payment was not completed"
+      );
+    } catch {
+      // non-critical cleanup
+    }
   };
 
   const placeOnlineOrder = async () => {
-    const { data: createdOrder, error } = await orderService.createOrder(
-      createOrderPayload("ONLINE")
-    );
+    let createdOrder: any = null;
 
-    if (error || !createdOrder?.id) {
-      throw error || new Error("Unable to create order.");
-    }
+    try {
+      const { data, error } = await orderService.createOrder(
+        createOrderPayload("ONLINE")
+      );
 
-    const razorOrderRes = await postWithFallback(
-      ["/payment/razorpay/create-order", "/payments/create-order"],
-      { orderId: createdOrder.id }
-    );
+      if (error) throw error;
 
-    const razorData = razorOrderRes.data?.data || razorOrderRes.data || {};
+      createdOrder = getOrderFromResponse(data);
 
-    const razorpayOrderId =
-      razorData.razorpayOrderId || razorData.razorpay_order_id || razorData.id;
+      if (!createdOrder?.id) {
+        throw new Error("Order created but response format is invalid.");
+      }
 
-    if (!razorData.key || !razorData.amount || !razorpayOrderId) {
-      throw new Error("Payment setup failed.");
-    }
+      const payRes = await orderService.createPaymentOrder(createdOrder.id);
 
-    const options = {
-      description: "Karto Order Payment",
-      currency: "INR",
-      key: razorData.key,
-      amount: razorData.amount,
-      name: "Karto",
-      order_id: razorpayOrderId,
-      prefill: {
-        email: user?.email || "",
-        contact: (user as any)?.phone || "",
-        name: (user as any)?.fullName || (user as any)?.name || "Karto User",
-      },
-      theme: { color: THEME.green },
-    };
+      if (payRes.error || !payRes.data) {
+        await cancelCreatedOnlineOrder(
+          createdOrder.id,
+          "Online payment setup failed"
+        );
 
-    const paymentData = await RazorpayCheckout.open(options);
+        throw payRes.error || new Error("Payment setup failed.");
+      }
 
-    if (
-      !paymentData?.razorpay_order_id ||
-      !paymentData?.razorpay_payment_id ||
-      !paymentData?.razorpay_signature
-    ) {
-      throw new Error("Payment verification details are missing.");
-    }
+      const razorData = payRes.data;
 
-    const verifyRes = await postWithFallback(
-      ["/payment/razorpay/verify", "/payments/verify"],
-      {
+      const options = {
+        description: "Karto Order Payment",
+        currency: razorData.currency || "INR",
+        key: razorData.key,
+        amount: razorData.amount,
+        name: "Karto",
+        order_id: razorData.razorpayOrderId,
+        prefill: {
+          email: user?.email || "",
+          contact: (user as any)?.phone || "",
+          name: (user as any)?.fullName || (user as any)?.name || "Karto User",
+        },
+        theme: { color: THEME.orange },
+      };
+
+      const paymentData = await RazorpayCheckout.open(options);
+
+      if (
+        !paymentData?.razorpay_order_id ||
+        !paymentData?.razorpay_payment_id ||
+        !paymentData?.razorpay_signature
+      ) {
+        await cancelCreatedOnlineOrder(
+          createdOrder.id,
+          "Online payment verification details missing"
+        );
+
+        throw new Error("Payment verification details are missing.");
+      }
+
+      const verifyRes = await orderService.verifyPayment({
         kartoOrderId: createdOrder.id,
-        orderId: createdOrder.id,
         razorpay_order_id: paymentData.razorpay_order_id,
         razorpay_payment_id: paymentData.razorpay_payment_id,
         razorpay_signature: paymentData.razorpay_signature,
+      });
+
+      if (verifyRes.error) {
+        await cancelCreatedOnlineOrder(
+          createdOrder.id,
+          "Online payment verification failed"
+        );
+
+        throw verifyRes.error;
       }
-    );
 
-    if (verifyRes.data?.success === false) {
-      throw new Error(verifyRes.data?.message || "Payment verification failed.");
+      return verifyRes.data || createdOrder;
+    } catch (error: any) {
+      const isCancelled =
+        error?.code === 0 ||
+        String(error?.description || error?.message || "")
+          .toLowerCase()
+          .includes("cancel");
+
+      if (createdOrder?.id) {
+        await cancelCreatedOnlineOrder(
+          createdOrder.id,
+          isCancelled
+            ? "Online payment cancelled by customer"
+            : "Online payment failed"
+        );
+      }
+
+      throw error;
     }
-
-    return createdOrder;
   };
 
   const placeOrder = async () => {
@@ -457,6 +539,8 @@ export default function CheckoutScreen() {
       const order =
         paymentMethod === "COD" ? await placeCodOrder() : await placeOnlineOrder();
 
+      await clearCartSilently();
+
       showToast(
         "success",
         "Order placed successfully",
@@ -465,11 +549,28 @@ export default function CheckoutScreen() {
           : "Your order has been confirmed."
       );
 
-      navigation.navigate("UserApp", {
-        screen: "Orders",
-        params: { orderId: order?.id },
+      navigation.reset({
+        index: 0,
+        routes: [
+          {
+            name: "UserApp",
+            params: {
+              screen: "Orders",
+              params: {
+                screen: "OrderDetail",
+                params: { orderId: order?.id },
+              },
+            },
+          },
+        ],
       });
     } catch (error: any) {
+      const isCancelled =
+        error?.code === 0 ||
+        String(error?.description || error?.message || "")
+          .toLowerCase()
+          .includes("cancel");
+
       const msg =
         error?.description ||
         error?.response?.data?.message ||
@@ -477,8 +578,12 @@ export default function CheckoutScreen() {
         "Unable to place your order. Please try again.";
 
       showToast(
-        "error",
-        paymentMethod === "ONLINE" ? "Payment or order failed" : "Order failed",
+        isCancelled ? "info" : "error",
+        isCancelled
+          ? "Payment cancelled"
+          : paymentMethod === "ONLINE"
+          ? "Payment or order failed"
+          : "Order failed",
         msg
       );
     } finally {
@@ -494,7 +599,7 @@ export default function CheckoutScreen() {
       const { error } = await cartService.removeFromCart(itemId);
 
       if (error) {
-        showToast("error", "Unable to remove item", "Please try again.");
+        showToast("error", "Unable to remove item", error?.message || "Please try again.");
         return;
       }
 
@@ -512,7 +617,12 @@ export default function CheckoutScreen() {
 
     try {
       setRefreshingBill(true);
-      const res = await apiClient.get("/cart/pricing");
+      const activeCoupon = (appliedCouponCode || couponCode).trim();
+
+      const res = await apiClient.get("/cart/pricing", {
+        params: activeCoupon ? { couponCode: activeCoupon } : undefined,
+      });
+
       const nextPricing = normalizePricing(res);
       if (nextPricing) setPricing(nextPricing);
       showToast("success", "Bill refreshed", "Latest bill updated.");
@@ -520,6 +630,83 @@ export default function CheckoutScreen() {
       showToast("error", "Unable to refresh bill", "Please try again.");
     } finally {
       setRefreshingBill(false);
+    }
+  };
+
+  const applyCoupon = async () => {
+    const code = couponCode.trim().toUpperCase();
+
+    if (!code) {
+      showToast("info", "Coupon code required", "Please enter a coupon code first.");
+      return;
+    }
+
+    if (couponApplying || placing) return;
+
+    try {
+      setCouponApplying(true);
+
+      const res = await apiClient.get("/cart/pricing", {
+        params: { couponCode: code },
+      });
+
+      const nextPricing = normalizePricing(res);
+
+      if (!nextPricing) {
+        showToast("error", "Coupon failed", "Unable to validate coupon.");
+        return;
+      }
+
+      const nextDiscount = Number(
+        nextPricing?.discount ??
+          nextPricing?.discountAmount ??
+          nextPricing?.discount_amount ??
+          0
+      );
+
+      setPricing(nextPricing);
+      setAppliedCouponCode(code);
+      setCouponCode(code);
+
+      showToast(
+        nextDiscount > 0 ? "success" : "info",
+        nextDiscount > 0 ? "Coupon applied" : "Coupon checked",
+        nextDiscount > 0
+          ? `${code} saved ${money(nextDiscount)}`
+          : "Coupon will be checked again while placing order."
+      );
+    } catch (error: any) {
+      setAppliedCouponCode("");
+
+      showToast(
+        "error",
+        "Invalid coupon",
+        error?.response?.data?.message ||
+          error?.message ||
+          "This coupon cannot be applied."
+      );
+    } finally {
+      setCouponApplying(false);
+    }
+  };
+
+  const removeCoupon = async () => {
+    if (couponApplying || placing) return;
+
+    try {
+      setCouponApplying(true);
+      setAppliedCouponCode("");
+      setCouponCode("");
+
+      const res = await apiClient.get("/cart/pricing");
+      const nextPricing = normalizePricing(res);
+      if (nextPricing) setPricing(nextPricing);
+
+      showToast("success", "Coupon removed", "Bill updated successfully.");
+    } catch {
+      showToast("error", "Unable to remove coupon", "Please try again.");
+    } finally {
+      setCouponApplying(false);
     }
   };
 
@@ -533,11 +720,11 @@ export default function CheckoutScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.loadingText}>Preparing secure checkout...</Text>
       </View>
     );
@@ -546,10 +733,10 @@ export default function CheckoutScreen() {
   if (isGuest) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
         <View style={styles.emptyIcon}>
-          <Icon name="lock-closed-outline" size={56} color={THEME.yellow} />
+          <Icon name="lock-closed-outline" size={56} color={THEME.orange} />
         </View>
 
         <Text style={styles.emptyTitle}>Login to checkout</Text>
@@ -558,12 +745,12 @@ export default function CheckoutScreen() {
         </Text>
 
         <TouchableOpacity
-          style={styles.greenBtn}
+          style={styles.orangeBtn}
           onPress={() => navigation.navigate("Auth")}
           activeOpacity={0.9}
         >
-          <Text style={styles.greenBtnText}>Login / Signup</Text>
-          <Icon name="arrow-forward" size={18} color={THEME.black} />
+          <Text style={styles.orangeBtnText}>Login / Signup</Text>
+          <Icon name="arrow-forward" size={18} color={THEME.white} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.secondaryBtn} onPress={goToHome} activeOpacity={0.85}>
@@ -576,18 +763,18 @@ export default function CheckoutScreen() {
   if (!cartItems.length) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
         <View style={styles.emptyIcon}>
-          <Icon name="cart-outline" size={60} color={THEME.yellow} />
+          <Icon name="cart-outline" size={60} color={THEME.orange} />
         </View>
 
         <Text style={styles.emptyTitle}>Your cart is empty</Text>
         <Text style={styles.emptySub}>Add items from nearby stores before checkout.</Text>
 
-        <TouchableOpacity style={styles.greenBtn} onPress={goToHome} activeOpacity={0.9}>
-          <Text style={styles.greenBtnText}>Explore Stores</Text>
-          <Icon name="arrow-forward" size={18} color={THEME.black} />
+        <TouchableOpacity style={styles.orangeBtn} onPress={goToHome} activeOpacity={0.9}>
+          <Text style={styles.orangeBtnText}>Explore Stores</Text>
+          <Icon name="arrow-forward" size={18} color={THEME.white} />
         </TouchableOpacity>
       </View>
     );
@@ -595,7 +782,7 @@ export default function CheckoutScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <Animated.ScrollView
         showsVerticalScrollIndicator={false}
@@ -607,13 +794,13 @@ export default function CheckoutScreen() {
       >
         <View style={styles.header}>
           <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
-            <Icon name="chevron-back" size={24} color={THEME.text} />
+            <Icon name="chevron-back" size={24} color={THEME.blue} />
           </TouchableOpacity>
 
           <View style={styles.headerTextBox}>
             <Text style={styles.headerTitle}>Checkout</Text>
             <Text style={styles.headerSub}>
-              {itemCount} item{itemCount > 1 ? "s" : ""} • Secure payment
+              {itemCount} item{itemCount > 1 ? "s" : ""} • Secure checkout
             </Text>
           </View>
 
@@ -623,27 +810,27 @@ export default function CheckoutScreen() {
             disabled={refreshingBill}
           >
             {refreshingBill ? (
-              <ActivityIndicator size="small" color={THEME.black} />
+              <ActivityIndicator size="small" color={THEME.white} />
             ) : (
-              <Icon name="refresh" size={19} color={THEME.black} />
+              <Icon name="refresh" size={19} color={THEME.white} />
             )}
           </TouchableOpacity>
         </View>
 
         <View style={styles.heroBanner}>
           <View style={styles.heroContent}>
-            <Text style={styles.heroTag}>KARTO SECURE CHECKOUT</Text>
-            <Text style={styles.heroTitle}>Review your order</Text>
+            <Text style={styles.heroTag}>KARTO CHECKOUT</Text>
+            <Text style={styles.heroTitle}>Almost there!</Text>
             <Text style={styles.heroSub}>Confirm address, payment and bill details.</Text>
           </View>
 
           <View style={styles.heroIcon}>
-            <Icon name="shield-checkmark-outline" size={34} color={THEME.black} />
+            <Icon name="shield-checkmark-outline" size={34} color={THEME.white} />
           </View>
         </View>
 
         <View style={styles.offerStrip}>
-          <Icon name="checkmark-circle" size={18} color={THEME.green} />
+          <Icon name="checkmark-circle" size={18} color={THEME.orange} />
           <Text style={styles.offerText}>Verified bill • Fresh packing • Fast support</Text>
         </View>
 
@@ -656,7 +843,7 @@ export default function CheckoutScreen() {
 
         {addresses.length === 0 ? (
           <TouchableOpacity style={styles.emptyAddressCard} onPress={() => goToAddress()}>
-            <Icon name="location-outline" size={38} color={THEME.green} />
+            <Icon name="location-outline" size={38} color={THEME.orange} />
             <Text style={styles.emptyAddressTitle}>No address added</Text>
             <Text style={styles.emptyAddressSub}>Tap here to add your delivery address.</Text>
           </TouchableOpacity>
@@ -680,11 +867,11 @@ export default function CheckoutScreen() {
                     <Icon
                       name={active ? "radio-button-on" : "radio-button-off"}
                       size={22}
-                      color={active ? THEME.green : THEME.muted}
+                      color={active ? THEME.orange : THEME.muted}
                     />
 
                     <TouchableOpacity onPress={() => goToAddress(addr)}>
-                      <Icon name="create-outline" size={21} color={THEME.green} />
+                      <Icon name="create-outline" size={21} color={THEME.orange} />
                     </TouchableOpacity>
                   </View>
 
@@ -693,19 +880,8 @@ export default function CheckoutScreen() {
                   </Text>
 
                   <Text style={styles.addressText} numberOfLines={3}>
-                    {addr.address ||
-                      addr.fullAddress ||
-                      `${addr.houseNo || ""} ${addr.street || ""}`.trim() ||
-                      "Saved delivery address"}
+                    {normalizeAddressText(addr)}
                   </Text>
-
-                  {!!addr.landmark && (
-                    <Text style={styles.landmark} numberOfLines={1}>
-                      Landmark: {addr.landmark}
-                    </Text>
-                  )}
-
-                  {!!addr.city && <Text style={styles.cityText}>{addr.city}</Text>}
                 </TouchableOpacity>
               );
             })}
@@ -724,7 +900,7 @@ export default function CheckoutScreen() {
               ]}
             >
               <View style={styles.foodIcon}>
-                <Icon name="fast-food-outline" size={24} color={THEME.green} />
+                <Icon name="fast-food-outline" size={24} color={THEME.orange} />
               </View>
 
               <View style={styles.itemInfo}>
@@ -746,7 +922,7 @@ export default function CheckoutScreen() {
 
         <View style={styles.couponCard}>
           <View style={styles.couponIcon}>
-            <Icon name="pricetag-outline" size={21} color={THEME.black} />
+            <Icon name="pricetag-outline" size={21} color={THEME.white} />
           </View>
 
           <TextInput
@@ -758,20 +934,31 @@ export default function CheckoutScreen() {
             style={styles.couponInput}
           />
 
-          <TouchableOpacity
-            style={styles.applyCouponBtn}
-            onPress={() =>
-              couponCode.trim()
-                ? showToast(
-                    "info",
-                    "Coupon ready",
-                    "Coupon will be validated while placing the order."
-                  )
-                : showToast("info", "Coupon code required", "Please enter a coupon code first.")
-            }
-          >
-            <Text style={styles.applyCouponText}>Apply</Text>
-          </TouchableOpacity>
+          {appliedCouponCode ? (
+            <TouchableOpacity
+              style={styles.removeCouponBtn}
+              onPress={removeCoupon}
+              disabled={couponApplying || placing}
+            >
+              {couponApplying ? (
+                <ActivityIndicator size="small" color={THEME.white} />
+              ) : (
+                <Text style={styles.applyCouponText}>Remove</Text>
+              )}
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.applyCouponBtn}
+              onPress={applyCoupon}
+              disabled={couponApplying || placing}
+            >
+              {couponApplying ? (
+                <ActivityIndicator size="small" color={THEME.white} />
+              ) : (
+                <Text style={styles.applyCouponText}>Apply</Text>
+              )}
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={styles.sectionTitleSolo}>Payment Method</Text>
@@ -791,7 +978,7 @@ export default function CheckoutScreen() {
             icon="card-outline"
             title="Online Payment"
             subtitle="UPI, cards, wallets and net banking"
-            badge="Razorpay"
+            badge="Razorpay Test"
             onPress={() => setPaymentMethod("ONLINE")}
           />
         </View>
@@ -799,13 +986,13 @@ export default function CheckoutScreen() {
         {paymentMethod === "ONLINE" ? (
           <InfoBox
             icon="lock-closed-outline"
-            color="green"
-            text="Payment is processed securely and confirmed after verification."
+            color="orange"
+            text="Payment is processed securely with Razorpay test mode and confirmed after verification."
           />
         ) : (
           <InfoBox
             icon="cash-outline"
-            color="yellow"
+            color="blue"
             text="Please keep the payable amount ready at delivery."
           />
         )}
@@ -844,7 +1031,7 @@ export default function CheckoutScreen() {
             <View style={styles.taxLeft}>
               <Text style={styles.billLabel}>Tax</Text>
               <TouchableOpacity onPress={() => setTaxModalVisible(true)}>
-                <Icon name="information-circle-outline" size={17} color={THEME.yellow} />
+                <Icon name="information-circle-outline" size={17} color={THEME.orange} />
               </TouchableOpacity>
             </View>
 
@@ -860,7 +1047,11 @@ export default function CheckoutScreen() {
       <View style={styles.footer}>
         <View>
           <Text style={styles.footerLabel}>
-            {paymentMethod === "ONLINE" ? "Pay Online" : "Pay on Delivery"}
+            {paymentMethod === "ONLINE"
+              ? "Pay Online"
+              : paymentMethod === "WALLET"
+              ? "Pay using Wallet"
+              : "Pay on Delivery"}
           </Text>
           <Text style={styles.footerTotal}>{money(bill.total)}</Text>
         </View>
@@ -872,13 +1063,13 @@ export default function CheckoutScreen() {
           activeOpacity={0.9}
         >
           {placing ? (
-            <ActivityIndicator color={THEME.black} />
+            <ActivityIndicator color={THEME.white} />
           ) : (
             <>
               <Text style={styles.placeText}>
                 {paymentMethod === "COD" ? "Place Order" : "Pay Securely"}
               </Text>
-              <Icon name="arrow-forward-circle" size={22} color={THEME.black} />
+              <Icon name="arrow-forward-circle" size={22} color={THEME.white} />
             </>
           )}
         </TouchableOpacity>
@@ -900,16 +1091,16 @@ export default function CheckoutScreen() {
 }
 
 const InfoBox = ({ icon, color, text }: any) => {
-  const isGreen = color === "green";
+  const isOrange = color === "orange";
 
   return (
-    <View style={isGreen ? styles.paymentInfoBox : styles.codInfoBox}>
+    <View style={isOrange ? styles.paymentInfoBox : styles.codInfoBox}>
       <Icon
         name={icon}
         size={18}
-        color={isGreen ? THEME.green : THEME.yellow}
+        color={isOrange ? THEME.orange : THEME.blue}
       />
-      <Text style={isGreen ? styles.paymentInfoText : styles.codInfoText}>{text}</Text>
+      <Text style={isOrange ? styles.paymentInfoText : styles.codInfoText}>{text}</Text>
     </View>
   );
 };
@@ -922,7 +1113,7 @@ const PaymentOption = ({ active, icon, title, subtitle, badge, onPress }: any) =
   >
     <View style={styles.rowCenter}>
       <View style={[styles.paymentIcon, active && styles.paymentIconActive]}>
-        <Icon name={icon} size={22} color={active ? THEME.black : THEME.green} />
+        <Icon name={icon} size={22} color={active ? THEME.white : THEME.orange} />
       </View>
 
       <View style={styles.paymentTextBox}>
@@ -938,7 +1129,7 @@ const PaymentOption = ({ active, icon, title, subtitle, badge, onPress }: any) =
     <Icon
       name={active ? "radio-button-on" : "radio-button-off"}
       size={23}
-      color={active ? THEME.green : THEME.muted}
+      color={active ? THEME.orange : THEME.muted}
     />
   </TouchableOpacity>
 );
@@ -957,7 +1148,7 @@ const TaxModal = ({ visible, onClose, bill }: any) => (
     <View style={styles.modalOverlay}>
       <View style={styles.taxModal}>
         <View style={styles.taxIconBox}>
-          <Icon name="receipt-outline" size={30} color={THEME.yellow} />
+          <Icon name="receipt-outline" size={30} color={THEME.orange} />
         </View>
 
         <Text style={styles.taxTitle}>Tax Details</Text>
@@ -989,7 +1180,7 @@ const BillModal = ({ visible, onClose, bill }: any) => (
     <View style={styles.modalOverlay}>
       <View style={styles.taxModal}>
         <View style={styles.taxIconBox}>
-          <Icon name="document-text-outline" size={30} color={THEME.yellow} />
+          <Icon name="document-text-outline" size={30} color={THEME.orange} />
         </View>
 
         <Text style={styles.taxTitle}>Complete Bill</Text>
@@ -1017,6 +1208,14 @@ const BillModal = ({ visible, onClose, bill }: any) => (
   </Modal>
 );
 
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: THEME.bg },
   center: {
@@ -1031,14 +1230,13 @@ const styles = StyleSheet.create({
     height: 74,
     borderRadius: 25,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 18,
+    ...shadow,
   },
   loadingLogoText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 38,
     fontWeight: "900",
   },
@@ -1052,13 +1250,12 @@ const styles = StyleSheet.create({
     height: 106,
     borderRadius: 36,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   emptyTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
     marginTop: 16,
@@ -1070,18 +1267,19 @@ const styles = StyleSheet.create({
     textAlign: "center",
     lineHeight: 20,
   },
-  greenBtn: {
-    backgroundColor: THEME.green,
+  orangeBtn: {
+    backgroundColor: THEME.orange,
     marginTop: 22,
     paddingHorizontal: 22,
     paddingVertical: 14,
-    borderRadius: 18,
+    borderRadius: 16,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    ...shadow,
   },
-  greenBtnText: {
-    color: THEME.black,
+  orangeBtnText: {
+    color: THEME.white,
     fontWeight: "900",
   },
   secondaryBtn: {
@@ -1090,7 +1288,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   secondaryBtnText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontWeight: "900",
   },
   scrollContent: {
@@ -1110,23 +1308,23 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 44,
     height: 44,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   refreshBtn: {
     width: 42,
     height: 42,
-    borderRadius: 17,
-    backgroundColor: THEME.green,
+    borderRadius: 16,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   headerTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 27,
     fontWeight: "900",
   },
@@ -1138,24 +1336,23 @@ const styles = StyleSheet.create({
   heroBanner: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 26,
+    borderRadius: 24,
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
+    ...shadow,
   },
   heroContent: {
     flex: 1,
   },
   heroTag: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1,
   },
   heroTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
     marginTop: 5,
@@ -1165,12 +1362,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 6,
+    fontWeight: "700",
   },
   heroIcon: {
     width: 62,
     height: 62,
     borderRadius: 22,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 14,
@@ -1178,19 +1376,19 @@ const styles = StyleSheet.create({
   offerStrip: {
     marginHorizontal: 20,
     marginTop: 12,
-    backgroundColor: "#102116",
-    borderColor: "#20462C",
+    backgroundColor: THEME.orangeSoft,
+    borderColor: "#FFD6C8",
     borderWidth: 1,
-    borderRadius: 18,
+    borderRadius: 16,
     paddingHorizontal: 14,
-    paddingVertical: 13,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
   },
   offerText: {
     flex: 1,
-    color: THEME.green,
+    color: THEME.orange,
     fontWeight: "900",
     fontSize: 13,
   },
@@ -1202,12 +1400,12 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   sectionTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
   },
   sectionTitleSolo: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
     marginTop: 22,
@@ -1222,20 +1420,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   linkText: {
-    color: THEME.green,
+    color: THEME.orange,
     fontWeight: "900",
   },
   emptyAddressCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     borderRadius: 22,
     padding: 25,
     alignItems: "center",
+    ...shadow,
   },
   emptyAddressTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
     marginTop: 10,
@@ -1250,17 +1447,18 @@ const styles = StyleSheet.create({
   },
   addressCard: {
     width: 260,
-    minHeight: 155,
+    minHeight: 145,
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 15,
     marginRight: 12,
+    ...shadow,
   },
   addressCardActive: {
-    borderColor: THEME.green,
-    backgroundColor: "#102116",
+    borderColor: THEME.orange,
+    backgroundColor: THEME.orangeSoft,
   },
   addressTop: {
     flexDirection: "row",
@@ -1268,35 +1466,22 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   addressLabel: {
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 16,
     fontWeight: "900",
   },
   addressText: {
-    color: THEME.text,
+    color: THEME.blue,
     marginTop: 6,
     lineHeight: 19,
-    fontWeight: "700",
-  },
-  landmark: {
-    color: THEME.yellow,
-    marginTop: 6,
-    fontSize: 12,
     fontWeight: "800",
-  },
-  cityText: {
-    color: THEME.muted,
-    marginTop: 5,
-    fontSize: 12,
-    fontWeight: "700",
   },
   card: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    ...shadow,
   },
   itemRow: {
     flexDirection: "row",
@@ -1315,9 +1500,7 @@ const styles = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 18,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -1326,7 +1509,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   itemName: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -1337,7 +1520,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   itemPrice: {
-    color: THEME.green,
+    color: THEME.orange,
     marginTop: 4,
     fontWeight: "900",
   },
@@ -1349,36 +1532,41 @@ const styles = StyleSheet.create({
   couponCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 12,
     flexDirection: "row",
     alignItems: "center",
+    ...shadow,
   },
   couponIcon: {
     width: 42,
     height: 42,
     borderRadius: 15,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 10,
   },
   couponInput: {
     flex: 1,
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "800",
     paddingVertical: 8,
   },
   applyCouponBtn: {
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+    borderRadius: 14,
+  },
+  removeCouponBtn: {
+    backgroundColor: THEME.danger,
     paddingHorizontal: 13,
     paddingVertical: 10,
     borderRadius: 14,
   },
   applyCouponText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
   },
   paymentWrapper: {
@@ -1387,17 +1575,18 @@ const styles = StyleSheet.create({
   },
   paymentCard: {
     backgroundColor: THEME.card,
-    borderRadius: 20,
+    borderRadius: 18,
     padding: 15,
     borderWidth: 1,
     borderColor: THEME.border,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    ...shadow,
   },
   paymentCardActive: {
-    borderColor: THEME.green,
-    backgroundColor: "#102116",
+    borderColor: THEME.orange,
+    backgroundColor: THEME.orangeSoft,
   },
   rowCenter: {
     flexDirection: "row",
@@ -1409,15 +1598,12 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 14,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   paymentIconActive: {
-    backgroundColor: THEME.green,
-    borderColor: THEME.green,
+    backgroundColor: THEME.orange,
   },
   paymentTextBox: {
     flex: 1,
@@ -1429,12 +1615,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   paymentTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
   },
   paymentBadge: {
-    color: THEME.black,
-    backgroundColor: THEME.yellow,
+    color: THEME.white,
+    backgroundColor: THEME.orange,
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 99,
@@ -1450,10 +1636,10 @@ const styles = StyleSheet.create({
   paymentInfoBox: {
     marginHorizontal: 20,
     marginTop: 12,
-    backgroundColor: "#102116",
+    backgroundColor: THEME.orangeSoft,
     borderWidth: 1,
-    borderColor: "#20462C",
-    borderRadius: 18,
+    borderColor: "#FFD6C8",
+    borderRadius: 16,
     padding: 13,
     flexDirection: "row",
     alignItems: "flex-start",
@@ -1461,7 +1647,7 @@ const styles = StyleSheet.create({
   },
   paymentInfoText: {
     flex: 1,
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 12,
     lineHeight: 18,
     fontWeight: "800",
@@ -1469,18 +1655,17 @@ const styles = StyleSheet.create({
   codInfoBox: {
     marginHorizontal: 20,
     marginTop: 12,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
-    borderRadius: 18,
+    backgroundColor: THEME.card,
+    borderRadius: 16,
     padding: 13,
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 8,
+    ...shadow,
   },
   codInfoText: {
     flex: 1,
-    color: THEME.yellow,
+    color: THEME.blue,
     fontSize: 12,
     lineHeight: 18,
     fontWeight: "800",
@@ -1488,14 +1673,13 @@ const styles = StyleSheet.create({
   noteInput: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    color: THEME.text,
-    borderRadius: 20,
+    color: THEME.blue,
+    borderRadius: 18,
     padding: 14,
     minHeight: 90,
-    borderWidth: 1,
-    borderColor: THEME.border,
     textAlignVertical: "top",
     fontWeight: "700",
+    ...shadow,
   },
   noteCounter: {
     color: THEME.muted,
@@ -1522,19 +1706,19 @@ const styles = StyleSheet.create({
   },
   billLabel: {
     color: THEME.muted,
-    fontWeight: "700",
-  },
-  billValue: {
-    color: THEME.text,
     fontWeight: "800",
   },
+  billValue: {
+    color: THEME.blue,
+    fontWeight: "900",
+  },
   billBold: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 16,
   },
   billTotal: {
-    color: THEME.green,
+    color: THEME.orange,
     fontWeight: "900",
     fontSize: 18,
   },
@@ -1553,13 +1737,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     backgroundColor: THEME.card,
-    borderTopWidth: 1,
-    borderTopColor: THEME.border,
     padding: 16,
     paddingBottom: Platform.OS === "ios" ? 28 : 22,
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    ...shadow,
   },
   footerLabel: {
     color: THEME.muted,
@@ -1567,13 +1750,13 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   footerTotal: {
-    color: THEME.green,
+    color: THEME.orange,
     fontWeight: "900",
     fontSize: 22,
   },
   placeBtn: {
-    backgroundColor: THEME.green,
-    borderRadius: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
     paddingVertical: 15,
     paddingHorizontal: 22,
     flexDirection: "row",
@@ -1581,42 +1764,39 @@ const styles = StyleSheet.create({
     gap: 8,
     minWidth: 146,
     justifyContent: "center",
+    ...shadow,
   },
   disabledPlaceBtn: {
     opacity: 0.65,
   },
   placeText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 16,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.72)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     padding: 22,
   },
   taxModal: {
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
   taxIconBox: {
     width: 64,
     height: 64,
-    borderRadius: 24,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
+    borderRadius: 22,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
   taxTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
   },
@@ -1629,22 +1809,20 @@ const styles = StyleSheet.create({
   },
   taxBreakBox: {
     alignSelf: "stretch",
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
-    borderWidth: 1,
-    borderColor: THEME.border,
     padding: 14,
     marginTop: 18,
   },
   modalBtn: {
     marginTop: 18,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     paddingHorizontal: 24,
     paddingVertical: 13,
     borderRadius: 16,
   },
   modalBtnText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
   },
 });

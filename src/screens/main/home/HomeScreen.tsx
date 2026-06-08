@@ -19,6 +19,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import Geolocation from "react-native-geolocation-service";
 import Toast from "react-native-toast-message";
 
+import apiClient from "@/api/apiClient";
 import { useAuth } from "@/context/AuthContext";
 import {
   restaurantService,
@@ -26,6 +27,13 @@ import {
   Restaurant,
 } from "@/services/api/restaurantService";
 import { cartService } from "@/services/api/cartService";
+import { orderService, Order } from "@/services/api/orderService";
+import {
+  connectSocket,
+  joinOrderRoom,
+  leaveOrderRoom,
+  onOrderUpdated,
+} from "@/api/socketClient";
 import { discountService, Discount } from "@/services/api/discountService";
 import { favoriteService } from "@/services/api/favouriteService";
 import AuthRequiredModal from "@/components/AuthRequiredModal";
@@ -52,9 +60,222 @@ const getImage = (item: any) =>
   item?.image_url || item?.imageUrl || item?.image || item?.logoUrl || null;
 
 const getName = (item: any) =>
-  item?.restaurant_name || item?.restaurantName || item?.name || item?.title || "Karto Store";
+  item?.restaurant_name ||
+  item?.restaurantName ||
+  item?.name ||
+  item?.title ||
+  "Karto Store";
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(0)}`;
+
+const shortText = (value?: string | null) =>
+  String(value || "")
+    .trim()
+    .replace(/\s+/g, " ");
+
+const formatSavedAddress = (addr: any) => {
+  if (!addr) return "";
+
+  const address = shortText(addr.address);
+  const landmark = shortText(addr.landmark);
+  const city = shortText(addr.city);
+  const state = shortText(addr.state);
+  const pincode = shortText(addr.pincode);
+
+  const firstLine = [address, landmark].filter(Boolean).join(", ");
+  const secondLine = [city, state].filter(Boolean).join(", ");
+
+  if (firstLine && secondLine && pincode) return `${firstLine}, ${secondLine} - ${pincode}`;
+  if (firstLine && secondLine) return `${firstLine}, ${secondLine}`;
+  if (firstLine && pincode) return `${firstLine} - ${pincode}`;
+  if (firstLine) return firstLine;
+
+  return "Tap to select address";
+};
+
+
+const ACTIVE_ORDER_STATUSES = [
+  "PLACED",
+  "ACCEPTED_BY_VENDOR",
+  "PREPARING",
+  "READY_FOR_PICKUP",
+  "ASSIGNED_TO_RIDER",
+  "PICKED_UP",
+  "OUT_FOR_DELIVERY",
+];
+
+const STEPS_INDEX: Record<string, number> = {
+  PLACED: 1,
+  ACCEPTED_BY_VENDOR: 2,
+  PREPARING: 3,
+  READY_FOR_PICKUP: 4,
+  ASSIGNED_TO_RIDER: 5,
+  PICKED_UP: 6,
+  OUT_FOR_DELIVERY: 7,
+};
+
+const STATUS_ALIASES: Record<string, string> = {
+  ACCEPTED: "ACCEPTED_BY_VENDOR",
+  VENDOR_ACCEPTED: "ACCEPTED_BY_VENDOR",
+  READY: "READY_FOR_PICKUP",
+  READY_FOR_DELIVERY: "READY_FOR_PICKUP",
+  RIDER_ASSIGNED: "ASSIGNED_TO_RIDER",
+  ASSIGNED: "ASSIGNED_TO_RIDER",
+  PICKED: "PICKED_UP",
+  PICKUP_DONE: "PICKED_UP",
+  ON_THE_WAY: "OUT_FOR_DELIVERY",
+  COMPLETED: "DELIVERED",
+};
+
+const normalizeOrderStatus = (value: any) => {
+  const raw = String(value || "PLACED").toUpperCase();
+  return STATUS_ALIASES[raw] || raw;
+};
+
+const getOrderIdFromSocketPayload = (payload: any) =>
+  payload?.orderId ||
+  payload?.id ||
+  payload?.order?.id ||
+  payload?.data?.orderId ||
+  payload?.data?.order?.id;
+
+const getStatusFromSocketPayload = (payload: any) =>
+  payload?.status ||
+  payload?.order?.status ||
+  payload?.data?.status ||
+  payload?.data?.order?.status;
+
+const getActiveOrderEta = (order: any) => {
+  const status = normalizeOrderStatus(order?.status);
+
+  if (status === "DELIVERED" || status === "CANCELLED") return 0;
+
+  const base =
+    Number(order?.estimatedPreparationMinutes || order?.estimated_preparation_minutes || 30) +
+    15;
+
+  const createdAt = order?.createdAt || order?.created_at;
+
+  if (!createdAt) return base;
+
+  const elapsed = Math.floor((Date.now() - new Date(createdAt).getTime()) / 60000);
+
+  return Math.max(base - elapsed, 5);
+};
+
+const getActiveOrderMeta = (statusValue: any) => {
+  const status = normalizeOrderStatus(statusValue);
+
+  switch (status) {
+    case "PLACED":
+      return {
+        title: "Order placed",
+        subtitle: "Waiting for store confirmation",
+        icon: "receipt-outline",
+        color: THEME.yellow,
+      };
+    case "ACCEPTED_BY_VENDOR":
+      return {
+        title: "Order accepted",
+        subtitle: "Store is getting ready",
+        icon: "checkmark-done-outline",
+        color: THEME.green,
+      };
+    case "PREPARING":
+      return {
+        title: "Preparing your order",
+        subtitle: "Fresh food is being prepared",
+        icon: "restaurant-outline",
+        color: THEME.yellow,
+      };
+    case "READY_FOR_PICKUP":
+      return {
+        title: "Ready for pickup",
+        subtitle: "Waiting for rider pickup",
+        icon: "bag-check-outline",
+        color: THEME.green,
+      };
+    case "ASSIGNED_TO_RIDER":
+      return {
+        title: "Rider assigned",
+        subtitle: "Rider is heading to the store",
+        icon: "person-add-outline",
+        color: THEME.green,
+      };
+    case "PICKED_UP":
+      return {
+        title: "Order picked up",
+        subtitle: "Your order is with the rider",
+        icon: "cube-outline",
+        color: THEME.green,
+      };
+    case "OUT_FOR_DELIVERY":
+      return {
+        title: "Out for delivery",
+        subtitle: "Your order is arriving soon",
+        icon: "bicycle-outline",
+        color: THEME.green,
+      };
+    default:
+      return {
+        title: "Order in progress",
+        subtitle: "Track latest order status",
+        icon: "time-outline",
+        color: THEME.yellow,
+      };
+  }
+};
+
+const getOrderFromSocketPayload = (payload: any) =>
+  payload?.order || payload?.data?.order || payload?.data || payload;
+
+const formatReverseAddress = (data: any) => {
+  const a = data?.address || {};
+
+  const house =
+    a.house_number ||
+    a.building ||
+    a.residential ||
+    a.neighbourhood ||
+    "";
+
+  const road =
+    a.road ||
+    a.suburb ||
+    a.quarter ||
+    a.hamlet ||
+    a.village ||
+    "";
+
+  const area =
+    a.sector ||
+    a.neighbourhood ||
+    a.suburb ||
+    a.locality ||
+    "";
+
+  const city =
+    a.city ||
+    a.town ||
+    a.village ||
+    a.county ||
+    "";
+
+  const state = a.state || "";
+  const pincode = a.postcode || "";
+
+  const main = [house, road || area].filter(Boolean).join(" ");
+  const location = [city, state].filter(Boolean).join(", ");
+
+  if (main && location && pincode) return `${main}, ${location} - ${pincode}`;
+  if (road && location && pincode) return `${road}, ${location} - ${pincode}`;
+  if (location && pincode) return `${location} - ${pincode}`;
+  if (data?.display_name) {
+    return String(data.display_name).split(",").slice(0, 4).join(",").trim();
+  }
+
+  return "Tap to select address";
+};
 
 export default function HomeScreen() {
   const navigation = useNavigation<any>();
@@ -68,8 +289,11 @@ export default function HomeScreen() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [locationText, setLocationText] = useState("Select delivery location");
+  const [locationText, setLocationText] = useState("Fetching location...");
+  const [locationSubText, setLocationSubText] = useState("Delivering to");
   const [cartSummary, setCartSummary] = useState({ itemCount: 0, total: 0 });
+  const [activeOrder, setActiveOrder] = useState<Order | any>(null);
+  const [activeOrderLoading, setActiveOrderLoading] = useState(false);
 
   const [authModal, setAuthModal] = useState(false);
   const [authMessage, setAuthMessage] = useState("Login to continue.");
@@ -88,6 +312,30 @@ export default function HomeScreen() {
     const remaining = featuredRestaurants.filter((item: any) => !topIds.has(item.id));
     return remaining.length ? remaining : featuredRestaurants;
   }, [featuredRestaurants, topRated]);
+
+  const activeOrderMeta = useMemo(
+    () => getActiveOrderMeta(activeOrder?.status),
+    [activeOrder?.status]
+  );
+
+  const activeOrderEta = useMemo(
+    () => getActiveOrderEta(activeOrder),
+    [activeOrder?.id, activeOrder?.status, activeOrder?.createdAt, activeOrder?.created_at]
+  );
+
+  const activeOrderNumber =
+    activeOrder?.orderNumber ||
+    activeOrder?.order_number ||
+    activeOrder?.id?.slice?.(0, 8) ||
+    "ORDER";
+
+  const activeOrderRestaurant =
+    activeOrder?.restaurant?.restaurant_name ||
+    activeOrder?.restaurant?.restaurantName ||
+    activeOrder?.restaurant?.name ||
+    activeOrder?.vendor?.fullName ||
+    activeOrder?.vendor?.name ||
+    "Karto Store";
 
   const showToast = (
     type: "success" | "error" | "info",
@@ -110,15 +358,39 @@ export default function HomeScreen() {
     return false;
   };
 
-  const requestLocation = async () => {
+  const reverseGeocode = async (latitude: number, longitude: number) => {
     try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&addressdetails=1`;
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": "KartoApp/1.0",
+          Accept: "application/json",
+        },
+      });
+
+      const json = await res.json();
+      const formatted = formatReverseAddress(json);
+
+      setLocationSubText("Current location");
+      setLocationText(formatted || "Tap to select address");
+    } catch {
+      setLocationSubText("Current location");
+      setLocationText("Tap to select address");
+    }
+  };
+
+  const fetchCurrentAddress = async () => {
+    try {
+      setLocationText("Fetching location...");
+
       if (Platform.OS === "android") {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
         );
 
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-          setLocationText("Tap to select location");
+          setLocationSubText("Location permission needed");
+          setLocationText("Tap to select address");
           return;
         }
       }
@@ -126,14 +398,44 @@ export default function HomeScreen() {
       Geolocation.getCurrentPosition(
         position => {
           const { latitude, longitude } = position.coords;
-          setLocationText(`Near you • ${latitude.toFixed(2)}, ${longitude.toFixed(2)}`);
+          reverseGeocode(latitude, longitude);
         },
-        () => setLocationText("Tap to select location"),
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 }
+        () => {
+          setLocationSubText("Location unavailable");
+          setLocationText("Tap to select address");
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
       );
     } catch {
-      setLocationText("Tap to select location");
+      setLocationSubText("Location unavailable");
+      setLocationText("Tap to select address");
     }
+  };
+
+  const loadDefaultAddress = async () => {
+    if (!isLoggedIn) {
+      await fetchCurrentAddress();
+      return;
+    }
+
+    try {
+      const res = await apiClient.get("/address/default");
+      const addr = res.data?.address || res.data?.data;
+
+      if (addr?.id) {
+        setLocationSubText(addr.label || "Selected address");
+        setLocationText(formatSavedAddress(addr));
+      } else {
+        await fetchCurrentAddress();
+      }
+    } catch {
+      await fetchCurrentAddress();
+    }
+  };
+
+  const openAddress = () => {
+    if (!requireAuth("Login to select or save delivery address.")) return;
+    navigation.navigate("Address");
   };
 
   const loadCartSummary = async () => {
@@ -158,6 +460,49 @@ export default function HomeScreen() {
     }
   };
 
+  const loadActiveOrder = async () => {
+    if (!isLoggedIn) {
+      setActiveOrder(null);
+      return;
+    }
+
+    try {
+      setActiveOrderLoading(true);
+
+      const { data, error } = await orderService.getMyOrders();
+
+      if (error) {
+        setActiveOrder(null);
+        return;
+      }
+
+      const list =
+        Array.isArray(data)
+          ? data
+          : Array.isArray((data as any)?.orders)
+          ? (data as any).orders
+          : Array.isArray((data as any)?.data)
+          ? (data as any).data
+          : [];
+
+      const active = list
+        .filter((order: any) =>
+          ACTIVE_ORDER_STATUSES.includes(normalizeOrderStatus(order?.status))
+        )
+        .sort((a: any, b: any) => {
+          const aDate = new Date(a?.createdAt || a?.created_at || 0).getTime();
+          const bDate = new Date(b?.createdAt || b?.created_at || 0).getTime();
+          return bDate - aDate;
+        })?.[0];
+
+      setActiveOrder(active || null);
+    } catch {
+      setActiveOrder(null);
+    } finally {
+      setActiveOrderLoading(false);
+    }
+  };
+
   const loadPersonalSections = async () => {
     if (!isLoggedIn) {
       setFavoriteItems([]);
@@ -169,9 +514,7 @@ export default function HomeScreen() {
       const { data } = await favoriteService.getFavorites();
       const anyData: any = data || {};
 
-      setFavoriteRestaurants(
-        Array.isArray(anyData.restaurants) ? anyData.restaurants : []
-      );
+      setFavoriteRestaurants(Array.isArray(anyData.restaurants) ? anyData.restaurants : []);
       setFavoriteItems(Array.isArray(anyData.items) ? anyData.items : []);
     } catch {
       setFavoriteItems([]);
@@ -208,7 +551,7 @@ export default function HomeScreen() {
         setDiscounts(normalizeList(discRes.value.data));
       }
 
-      await Promise.all([loadCartSummary(), loadPersonalSections()]);
+      await Promise.all([loadCartSummary(), loadPersonalSections(), loadActiveOrder()]);
     } catch {
       showToast("error", "Unable to refresh home", "Please try again.");
     } finally {
@@ -218,19 +561,55 @@ export default function HomeScreen() {
 
   useEffect(() => {
     loadData();
-    requestLocation();
+    loadDefaultAddress();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
       loadCartSummary();
       loadPersonalSections();
+      loadActiveOrder();
+      loadDefaultAddress();
     }, [user?.id])
   );
 
+  useEffect(() => {
+    if (!isLoggedIn || !activeOrder?.id) return;
+
+    connectSocket().catch(() => {});
+    joinOrderRoom(activeOrder.id);
+
+    const cleanup = onOrderUpdated((payload: any) => {
+      const payloadOrderId = getOrderIdFromSocketPayload(payload);
+      const nextStatus = getStatusFromSocketPayload(payload);
+
+      if (payloadOrderId !== activeOrder.id) return;
+
+      const normalizedStatus = normalizeOrderStatus(nextStatus || activeOrder.status);
+
+      if (!ACTIVE_ORDER_STATUSES.includes(normalizedStatus)) {
+        setActiveOrder(null);
+        return;
+      }
+
+      setActiveOrder((prev: any) => ({
+        ...(prev || {}),
+        ...getOrderFromSocketPayload(payload),
+        ...(payload?.order || {}),
+        status: normalizedStatus,
+        updatedAt: payload?.updatedAt || payload?.order?.updatedAt || prev?.updatedAt,
+      }));
+    });
+
+    return () => {
+      cleanup?.();
+      leaveOrderRoom(activeOrder.id);
+    };
+  }, [isLoggedIn, activeOrder?.id]);
+
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadData(), requestLocation()]);
+    await Promise.all([loadData(), loadDefaultAddress(), loadActiveOrder()]);
     setRefreshing(false);
   };
 
@@ -242,6 +621,15 @@ export default function HomeScreen() {
   const openNotifications = () => {
     if (!requireAuth("Login to view notifications and order updates.")) return;
     navigation.navigate("Notifications");
+  };
+
+  const openActiveOrder = () => {
+    if (!activeOrder?.id) return;
+
+    navigation.navigate("OrderDetail", {
+      orderId: activeOrder.id,
+      order: activeOrder,
+    });
   };
 
   const openCoupons = () => {
@@ -336,7 +724,8 @@ export default function HomeScreen() {
             </View>
 
             <Text style={styles.deliveryLine} numberOfLines={1}>
-              {isOpen ? "Open now" : "Closed"} • Delivery {deliveryFee === 0 ? "Free" : money(deliveryFee)}
+              {isOpen ? "Open now" : "Closed"} • Delivery{" "}
+              {deliveryFee === 0 ? "Free" : money(deliveryFee)}
             </Text>
           </View>
 
@@ -386,6 +775,58 @@ export default function HomeScreen() {
     );
   };
 
+  const ActiveOrderBanner = () => {
+    if (!activeOrder || activeOrderLoading) return null;
+
+    return (
+      <TouchableOpacity
+        style={styles.activeOrderCard}
+        activeOpacity={0.92}
+        onPress={openActiveOrder}
+      >
+        <View style={styles.activeOrderGlow} />
+
+        <View style={[styles.activeOrderIcon, { backgroundColor: activeOrderMeta.color }]}>
+          <Icon name={activeOrderMeta.icon as any} size={24} color={THEME.black} />
+        </View>
+
+        <View style={styles.activeOrderContent}>
+          <Text style={styles.activeOrderLabel}>LIVE ORDER</Text>
+          <Text style={styles.activeOrderTitle} numberOfLines={1}>
+            {activeOrderMeta.title}
+          </Text>
+          <Text style={styles.activeOrderSub} numberOfLines={1}>
+            {activeOrderRestaurant} • #{activeOrderNumber}
+          </Text>
+
+          <View style={styles.activeProgressTrack}>
+            <View
+              style={[
+                styles.activeProgressFill,
+                {
+                  width: `${
+                    Math.max(
+                      12,
+                      ((STEPS_INDEX[normalizeOrderStatus(activeOrder.status)] || 1) / 7) * 100
+                    )
+                  }%`,
+                },
+              ]}
+            />
+          </View>
+        </View>
+
+        <View style={styles.activeEtaBox}>
+          <Text style={styles.activeEtaValue}>{activeOrderEta}</Text>
+          <Text style={styles.activeEtaLabel}>min</Text>
+          <View style={styles.trackPill}>
+            <Text style={styles.trackPillText}>Track</Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -418,19 +859,25 @@ export default function HomeScreen() {
       >
         <View style={styles.heroArea}>
           <View style={styles.topBar}>
-            <TouchableOpacity style={styles.locationPill} onPress={requestLocation} activeOpacity={0.85}>
+            <TouchableOpacity
+              style={styles.locationPill}
+              onPress={openAddress}
+              activeOpacity={0.85}
+            >
               <View style={styles.locationIcon}>
-                <Icon name="location" size={16} color={THEME.black} />
+                <Icon name="location" size={18} color={THEME.black} />
               </View>
 
               <View style={styles.locationTextBox}>
-                <Text style={styles.locationLabel}>Delivering to</Text>
+                <Text style={styles.locationLabel} numberOfLines={1}>
+                  {locationSubText}
+                </Text>
                 <Text style={styles.locationText} numberOfLines={1}>
                   {locationText}
                 </Text>
               </View>
 
-              <Icon name="chevron-down" size={16} color={THEME.green} />
+              <Icon name="chevron-down" size={17} color={THEME.green} />
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.roundBtn} onPress={openCart} activeOpacity={0.85}>
@@ -454,7 +901,9 @@ export default function HomeScreen() {
             <View style={styles.heroLeft}>
               <Text style={styles.heroBrand}>KARTO</Text>
               <Text style={styles.heroTitle}>Everything nearby, delivered fast.</Text>
-              <Text style={styles.heroSub}>Food, groceries, gifts and daily essentials from trusted local stores.</Text>
+              <Text style={styles.heroSub}>
+                Food, groceries, gifts and daily essentials from trusted local stores.
+              </Text>
 
               <TouchableOpacity style={styles.heroBtn} onPress={openSearch} activeOpacity={0.9}>
                 <Text style={styles.heroBtnText}>Start shopping</Text>
@@ -483,6 +932,8 @@ export default function HomeScreen() {
             <Icon name="options-outline" size={18} color={THEME.black} />
           </View>
         </TouchableOpacity>
+
+        <ActiveOrderBanner />
 
         <View style={styles.section}>
           <View style={styles.sectionHeaderRow}>
@@ -657,16 +1108,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 18,
   },
-  loadingLogoText: {
-    color: THEME.yellow,
-    fontSize: 38,
-    fontWeight: "900",
-  },
-  loadingText: {
-    marginTop: 12,
-    color: THEME.muted,
-    fontWeight: "800",
-  },
+  loadingLogoText: { color: THEME.yellow, fontSize: 38, fontWeight: "900" },
+  loadingText: { marginTop: 12, color: THEME.muted, fontWeight: "800" },
   imageFallback: {
     backgroundColor: THEME.card2,
     borderWidth: 1,
@@ -674,13 +1117,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  heroArea: {
-    backgroundColor: THEME.bg,
-    paddingBottom: 18,
-  },
+  heroArea: { backgroundColor: THEME.bg, paddingBottom: 18 },
   topBar: {
     flexDirection: "row",
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingTop: Platform.OS === "ios" ? 54 : 18,
     paddingBottom: 12,
     alignItems: "center",
@@ -688,18 +1128,19 @@ const styles = StyleSheet.create({
   locationPill: {
     flex: 1,
     backgroundColor: THEME.card,
-    borderRadius: 18,
-    padding: 9,
+    borderRadius: 17,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
     flexDirection: "row",
     alignItems: "center",
     marginRight: 8,
-    borderWidth: 1,
+    borderWidth: 1.2,
     borderColor: THEME.border,
   },
   locationIcon: {
-    width: 33,
-    height: 33,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 16,
     backgroundColor: THEME.green,
     justifyContent: "center",
     alignItems: "center",
@@ -710,11 +1151,13 @@ const styles = StyleSheet.create({
     color: THEME.green,
     fontSize: 10,
     fontWeight: "900",
+    marginBottom: 2,
   },
   locationText: {
     color: THEME.text,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "900",
+    letterSpacing: 0.1,
   },
   roundBtn: {
     width: 42,
@@ -741,11 +1184,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.card,
   },
-  cartDotText: {
-    color: THEME.black,
-    fontSize: 10,
-    fontWeight: "900",
-  },
+  cartDotText: { color: THEME.black, fontSize: 10, fontWeight: "900" },
   heroCard: {
     marginHorizontal: 16,
     minHeight: 176,
@@ -766,11 +1205,7 @@ const styles = StyleSheet.create({
     borderRadius: 85,
     backgroundColor: "#183A23",
   },
-  heroLeft: {
-    flex: 1,
-    padding: 18,
-    justifyContent: "center",
-  },
+  heroLeft: { flex: 1, padding: 18, justifyContent: "center" },
   heroBrand: {
     color: THEME.yellow,
     fontSize: 12,
@@ -802,11 +1237,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  heroBtnText: {
-    color: THEME.black,
-    fontSize: 13,
-    fontWeight: "900",
-  },
+  heroBtnText: { color: THEME.black, fontSize: 13, fontWeight: "900" },
   heroVisual: {
     width: 116,
     justifyContent: "center",
@@ -877,21 +1308,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-  sectionTitle: {
-    color: THEME.text,
-    fontSize: 20,
-    fontWeight: "900",
-  },
-  sectionHint: {
-    color: THEME.green,
-    fontWeight: "900",
-    fontSize: 13,
-  },
-  emptyText: {
-    color: THEME.muted,
-    marginHorizontal: 20,
-    fontWeight: "800",
-  },
+  sectionTitle: { color: THEME.text, fontSize: 20, fontWeight: "900" },
+  sectionHint: { color: THEME.green, fontWeight: "900", fontSize: 13 },
+  emptyText: { color: THEME.muted, marginHorizontal: 20, fontWeight: "800" },
   horizontalList: { paddingHorizontal: 20 },
   categoryItem: {
     width: 88,
@@ -911,11 +1330,7 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.yellowSoft,
     marginBottom: 8,
   },
-  categoryImage: {
-    width: "100%",
-    height: "100%",
-    borderRadius: 18,
-  },
+  categoryImage: { width: "100%", height: "100%", borderRadius: 18 },
   categoryName: {
     color: THEME.text,
     fontSize: 12,
@@ -974,28 +1389,11 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     overflow: "hidden",
   },
-  restaurantImage: {
-    width: "100%",
-    height: 172,
-    backgroundColor: THEME.card2,
-  },
-  restaurantBody: {
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-  },
+  restaurantImage: { width: "100%", height: 172, backgroundColor: THEME.card2 },
+  restaurantBody: { padding: 14, flexDirection: "row", alignItems: "center" },
   restaurantInfo: { flex: 1 },
-  restaurantName: {
-    color: THEME.text,
-    fontSize: 18,
-    fontWeight: "900",
-  },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 8,
-    gap: 8,
-  },
+  restaurantName: { color: THEME.text, fontSize: 18, fontWeight: "900" },
+  metaRow: { flexDirection: "row", alignItems: "center", marginTop: 8, gap: 8 },
   ratingPill: {
     backgroundColor: THEME.yellow,
     paddingHorizontal: 8,
@@ -1004,17 +1402,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
   },
-  ratingText: {
-    color: THEME.black,
-    fontSize: 12,
-    fontWeight: "900",
-    marginLeft: 4,
-  },
-  metaText: {
-    color: THEME.muted,
-    fontSize: 13,
-    fontWeight: "800",
-  },
+  ratingText: { color: THEME.black, fontSize: 12, fontWeight: "900", marginLeft: 4 },
+  metaText: { color: THEME.muted, fontSize: 13, fontWeight: "800" },
   deliveryLine: {
     color: THEME.muted,
     fontSize: 13,
@@ -1039,11 +1428,7 @@ const styles = StyleSheet.create({
     marginRight: 13,
     overflow: "hidden",
   },
-  smallItemImage: {
-    width: "100%",
-    height: 92,
-    backgroundColor: THEME.card2,
-  },
+  smallItemImage: { width: "100%", height: 92, backgroundColor: THEME.card2 },
   smallItemName: {
     color: THEME.text,
     fontSize: 13,
@@ -1101,6 +1486,98 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 4,
   },
+
+  activeOrderCard: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "#294733",
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+  activeOrderGlow: {
+    position: "absolute",
+    right: -34,
+    top: -42,
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    backgroundColor: "rgba(34,197,94,0.13)",
+  },
+  activeOrderIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  activeOrderContent: {
+    flex: 1,
+  },
+  activeOrderLabel: {
+    color: THEME.green,
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  activeOrderTitle: {
+    color: THEME.text,
+    fontSize: 17,
+    fontWeight: "900",
+    marginTop: 3,
+  },
+  activeOrderSub: {
+    color: THEME.muted,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 4,
+  },
+  activeProgressTrack: {
+    height: 5,
+    borderRadius: 99,
+    backgroundColor: THEME.card2,
+    overflow: "hidden",
+    marginTop: 10,
+  },
+  activeProgressFill: {
+    height: "100%",
+    borderRadius: 99,
+    backgroundColor: THEME.green,
+  },
+  activeEtaBox: {
+    width: 62,
+    alignItems: "center",
+    marginLeft: 10,
+  },
+  activeEtaValue: {
+    color: THEME.yellow,
+    fontSize: 23,
+    fontWeight: "900",
+    lineHeight: 26,
+  },
+  activeEtaLabel: {
+    color: THEME.muted,
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  trackPill: {
+    marginTop: 7,
+    backgroundColor: THEME.green,
+    borderRadius: 99,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  trackPillText: {
+    color: THEME.black,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+
   cartBanner: {
     position: "absolute",
     bottom: 14,
@@ -1117,10 +1594,7 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     elevation: 10,
   },
-  cartLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
+  cartLeft: { flexDirection: "row", alignItems: "center" },
   cartIconCircle: {
     width: 38,
     height: 38,
@@ -1130,16 +1604,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 10,
   },
-  cartBannerTitle: {
-    color: THEME.text,
-    fontWeight: "900",
-    fontSize: 15,
-  },
-  cartBannerSub: {
-    color: THEME.muted,
-    fontWeight: "800",
-    marginTop: 2,
-  },
+  cartBannerTitle: { color: THEME.text, fontWeight: "900", fontSize: 15 },
+  cartBannerSub: { color: THEME.muted, fontWeight: "800", marginTop: 2 },
   cartBannerRight: {
     flexDirection: "row",
     alignItems: "center",
@@ -1148,9 +1614,5 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     borderRadius: 99,
   },
-  cartBannerBtn: {
-    color: THEME.black,
-    fontWeight: "900",
-    marginRight: 6,
-  },
+  cartBannerBtn: { color: THEME.black, fontWeight: "900", marginRight: 6 },
 });

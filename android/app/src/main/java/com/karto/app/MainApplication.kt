@@ -1,4 +1,4 @@
-package com.nanbites
+package com.karto.app
 
 import android.app.Application
 import com.facebook.react.PackageList

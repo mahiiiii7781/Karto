@@ -9,6 +9,8 @@ import {
   Image,
   ActivityIndicator,
   StatusBar,
+  PermissionsAndroid,
+  Platform,
 } from "react-native";
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 import Icon from "react-native-vector-icons/Ionicons";
@@ -41,11 +43,15 @@ type MessageState = {
   onPrimary?: () => void;
 };
 
-export default function AdminRiderCreateScreen({ navigation }: any) {
+export default function AdminRiderCreateScreen({ route, navigation }: any) {
+  const editingRider = route?.params?.rider || null;
+  const isEditMode = route?.params?.mode === "edit" || !!editingRider;
+
   const [cities, setCities] = useState<any[]>([]);
   const [loadingCities, setLoadingCities] = useState(true);
   const [saving, setSaving] = useState(false);
   const [image, setImage] = useState<any>(null);
+  const [existingImageUrl, setExistingImageUrl] = useState("");
 
   const [message, setMessage] = useState<MessageState>({
     visible: false,
@@ -63,11 +69,30 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
     vehicleNo: "",
     vehicleType: "BIKE",
     address: "",
+    isActive: true,
   });
 
   useEffect(() => {
     loadCities();
   }, []);
+
+  useEffect(() => {
+    if (editingRider) {
+      setForm({
+        cityId: editingRider.cityId || editingRider.city?.id || "",
+        fullName: editingRider.fullName || "",
+        email: editingRider.email || "",
+        password: "",
+        phone: editingRider.phone || "",
+        vehicleNo: editingRider.vehicleNo || "",
+        vehicleType: editingRider.vehicleType || "BIKE",
+        address: editingRider.address || "",
+        isActive: editingRider.isActive !== false,
+      });
+
+      setExistingImageUrl(editingRider.imageUrl || editingRider.image_url || "");
+    }
+  }, [editingRider]);
 
   const showMessage = (
     type: KartoMessageType,
@@ -90,6 +115,11 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
     setMessage((prev) => ({ ...prev, visible: false }));
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminRiders");
+  };
+
   const loadCities = async () => {
     setLoadingCities(true);
 
@@ -108,12 +138,12 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
 
     setCities(data || []);
 
-    if (data?.length) {
+    if (!editingRider && data?.length) {
       setForm((prev: any) => ({ ...prev, cityId: data[0].id }));
     }
   };
 
-  const update = (key: string, value: string) => {
+  const update = (key: string, value: any) => {
     setForm((prev: any) => ({ ...prev, [key]: value }));
   };
 
@@ -122,34 +152,79 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
     [cities, form.cityId]
   );
 
+  const requestCameraPermission = async () => {
+    if (Platform.OS !== "android") return true;
+
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.CAMERA,
+      {
+        title: "Camera Permission",
+        message: "Karto needs camera access to capture rider image.",
+        buttonPositive: "Allow",
+        buttonNegative: "Cancel",
+      }
+    );
+
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
   const pickImage = async (fromCamera = false) => {
-    const fn = fromCamera ? launchCamera : launchImageLibrary;
+    try {
+      if (fromCamera) {
+        const granted = await requestCameraPermission();
 
-    const result = await fn({
-      mediaType: "photo",
-      quality: 0.8,
-      selectionLimit: 1,
-    });
+        if (!granted) {
+          showMessage(
+            "warning",
+            "Camera Permission Required",
+            "Camera permission allow karo, tabhi camera open hoga."
+          );
+          return;
+        }
+      }
 
-    if (result.didCancel) return;
+      const fn = fromCamera ? launchCamera : launchImageLibrary;
 
-    if (result.errorCode) {
+      const result = await fn({
+        mediaType: "photo",
+        quality: 0.8,
+        selectionLimit: 1,
+        includeBase64: false,
+        saveToPhotos: fromCamera,
+        cameraType: "back",
+      });
+
+      if (result.didCancel) return;
+
+      if (result.errorCode) {
+        showMessage(
+          "error",
+          "Image Selection Failed",
+          result.errorMessage || "Unable to select image. Please try again."
+        );
+        return;
+      }
+
+      const asset = result.assets?.[0];
+
+      if (!asset?.uri) {
+        showMessage("warning", "No Image Found", "Please select a valid rider image.");
+        return;
+      }
+
+      setImage({
+        uri: asset.uri,
+        type: asset.type || "image/jpeg",
+        fileName: asset.fileName || `rider-${Date.now()}.jpg`,
+        name: asset.fileName || `rider-${Date.now()}.jpg`,
+      });
+    } catch (error: any) {
       showMessage(
         "error",
-        "Image Selection Failed",
-        result.errorMessage || "Unable to select image. Please try again."
+        "Image Error",
+        error?.message || "Camera/gallery open nahi ho paya."
       );
-      return;
     }
-
-    const asset = result.assets?.[0];
-
-    if (!asset?.uri) {
-      showMessage("warning", "No Image Found", "Please select a valid rider image.");
-      return;
-    }
-
-    setImage(asset);
   };
 
   const validate = () => {
@@ -164,7 +239,11 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
       return "Please enter a valid email address for rider login.";
     }
 
-    if (form.password.length < 6) {
+    if (!isEditMode && form.password.length < 6) {
+      return "Password must be at least 6 characters.";
+    }
+
+    if (isEditMode && form.password && form.password.length < 6) {
       return "Password must be at least 6 characters.";
     }
 
@@ -190,37 +269,44 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
     setSaving(true);
 
     const payload = {
-      ...form,
+      cityId: form.cityId,
       fullName: form.fullName.trim(),
       email: form.email.trim().toLowerCase(),
       phone: form.phone.trim(),
+      password: form.password?.trim() || undefined,
       vehicleNo: form.vehicleNo.trim().toUpperCase(),
+      vehicleType: form.vehicleType,
       address: form.address.trim(),
+      isActive: form.isActive,
       role: "RIDER",
       image,
     };
 
-    const res = await adminService.createRider(payload);
+    const res = isEditMode
+      ? await adminService.updateRider(editingRider.id, payload)
+      : await adminService.createRider(payload);
 
     setSaving(false);
 
     if (res.error) {
       showMessage(
         "error",
-        "Rider Creation Failed",
-        res.error.message || "Unable to create rider. Please try again."
+        isEditMode ? "Rider Update Failed" : "Rider Creation Failed",
+        res.error.message || "Unable to save rider. Please try again."
       );
       return;
     }
 
     showMessage(
       "success",
-      "Rider Created Successfully",
-      "Delivery partner login, city and vehicle profile are ready.",
+      isEditMode ? "Rider Updated Successfully" : "Rider Created Successfully",
+      isEditMode
+        ? "Delivery partner profile has been updated."
+        : "Delivery partner login, city and vehicle profile are ready.",
       "Back to Riders",
       () => {
         closeMessage();
-        navigation.goBack();
+        goBack();
       }
     );
   };
@@ -235,15 +321,30 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <TouchableOpacity onPress={goBack} style={styles.backBtn}>
             <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.smallLabel}>RIDER ONBOARDING</Text>
-            <Text style={styles.title}>Add Delivery Partner</Text>
-            <Text style={styles.subtitle}>Create rider login, city and vehicle profile</Text>
+            <Text style={styles.smallLabel}>
+              {isEditMode ? "RIDER PROFILE" : "RIDER ONBOARDING"}
+            </Text>
+            <Text style={styles.title}>
+              {isEditMode ? "Edit Delivery Partner" : "Add Delivery Partner"}
+            </Text>
+            <Text style={styles.subtitle}>
+              {isEditMode
+                ? "Update rider login, city and vehicle profile"
+                : "Create rider login, city and vehicle profile"}
+            </Text>
           </View>
+
+          <TouchableOpacity
+            style={styles.homeBtn}
+            onPress={() => navigation.navigate("AdminDashboard")}
+          >
+            <Icon name="home-outline" size={21} color="#000" />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.heroCard}>
@@ -262,8 +363,8 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
         </View>
 
         <TouchableOpacity style={styles.imageBox} activeOpacity={0.9}>
-          {image?.uri ? (
-            <Image source={{ uri: image.uri }} style={styles.imagePreview} />
+          {image?.uri || existingImageUrl ? (
+            <Image source={{ uri: image?.uri || existingImageUrl }} style={styles.imagePreview} />
           ) : (
             <View style={styles.imagePlaceholder}>
               <Icon name="person-circle-outline" size={42} color={THEME.yellow} />
@@ -276,12 +377,12 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
         <View style={styles.imageActions}>
           <TouchableOpacity style={styles.greenImageBtn} onPress={() => pickImage(true)}>
             <Icon name="camera-outline" size={20} color="#000" />
-            <Text style={styles.imageBtnText}>Camera</Text>
+            <Text style={styles.imageBtnText}>Open Camera</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.yellowImageBtn} onPress={() => pickImage(false)}>
             <Icon name="images-outline" size={20} color="#000" />
-            <Text style={styles.imageBtnText}>Gallery</Text>
+            <Text style={styles.imageBtnText}>Upload File</Text>
           </TouchableOpacity>
         </View>
 
@@ -393,14 +494,38 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
           />
 
           <Input
-            label="Password"
+            label={isEditMode ? "New Password Optional" : "Password"}
             icon="lock-closed-outline"
             value={form.password}
             onChangeText={(v: string) => update("password", v)}
             secureTextEntry
-            placeholder="Minimum 6 characters"
+            placeholder={isEditMode ? "Leave blank to keep old password" : "Minimum 6 characters"}
           />
         </Section>
+
+        {isEditMode ? (
+          <Section title="Rider Status" icon="checkmark-circle-outline">
+            <TouchableOpacity
+              style={[styles.statusToggle, form.isActive && styles.statusToggleActive]}
+              onPress={() => update("isActive", !form.isActive)}
+              activeOpacity={0.86}
+            >
+              <Icon
+                name={form.isActive ? "checkmark-circle-outline" : "ban-outline"}
+                size={22}
+                color={form.isActive ? "#000" : THEME.danger}
+              />
+              <Text
+                style={[
+                  styles.statusToggleText,
+                  form.isActive && styles.statusToggleTextActive,
+                ]}
+              >
+                {form.isActive ? "Rider Active" : "Rider Blocked"}
+              </Text>
+            </TouchableOpacity>
+          </Section>
+        ) : null}
 
         <TouchableOpacity
           style={[styles.createBtn, saving && { opacity: 0.7 }]}
@@ -413,7 +538,9 @@ export default function AdminRiderCreateScreen({ navigation }: any) {
           ) : (
             <>
               <Icon name="checkmark-circle-outline" size={22} color="#000" />
-              <Text style={styles.createText}>Create Delivery Partner</Text>
+              <Text style={styles.createText}>
+                {isEditMode ? "Update Delivery Partner" : "Create Delivery Partner"}
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -481,17 +608,8 @@ function Input({ label, icon, multiline, ...props }: any) {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: THEME.bg,
-  },
-
-  container: {
-    flex: 1,
-    backgroundColor: THEME.bg,
-    paddingHorizontal: 16,
-  },
-
+  root: { flex: 1, backgroundColor: THEME.bg },
+  container: { flex: 1, backgroundColor: THEME.bg, paddingHorizontal: 16 },
   header: {
     flexDirection: "row",
     gap: 12,
@@ -499,7 +617,6 @@ const styles = StyleSheet.create({
     paddingTop: 22,
     paddingBottom: 16,
   },
-
   backBtn: {
     width: 46,
     height: 46,
@@ -510,28 +627,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   smallLabel: {
     color: THEME.green,
     fontWeight: "900",
     fontSize: 11,
     letterSpacing: 1.1,
   },
-
   title: {
     color: THEME.text,
     fontSize: 26,
     fontWeight: "900",
     marginTop: 2,
   },
-
   subtitle: {
     color: THEME.muted,
     marginTop: 3,
     fontWeight: "700",
     fontSize: 12,
   },
-
   heroCard: {
     backgroundColor: THEME.card,
     borderRadius: 26,
@@ -543,20 +664,17 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 16,
   },
-
   heroLabel: {
     color: THEME.muted,
     fontSize: 12,
     fontWeight: "800",
   },
-
   heroTitle: {
     color: THEME.yellow,
     fontSize: 19,
     fontWeight: "900",
     marginTop: 5,
   },
-
   heroIcon: {
     width: 58,
     height: 58,
@@ -567,7 +685,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   imageBox: {
     height: 174,
     borderRadius: 26,
@@ -576,41 +693,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
-  imagePreview: {
-    width: "100%",
-    height: "100%",
-  },
-
+  imagePreview: { width: "100%", height: "100%" },
   imagePlaceholder: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
   },
-
   imageTitle: {
     color: THEME.text,
     fontSize: 17,
     fontWeight: "900",
     marginTop: 8,
   },
-
   imageSub: {
     color: THEME.muted,
     marginTop: 4,
     fontWeight: "700",
   },
-
   imageActions: {
     flexDirection: "row",
     gap: 10,
     marginTop: 12,
     marginBottom: 16,
   },
-
   greenImageBtn: {
     flex: 1,
-    height: 50,
+    minHeight: 50,
     borderRadius: 18,
     backgroundColor: THEME.green,
     alignItems: "center",
@@ -618,10 +726,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
   },
-
   yellowImageBtn: {
     flex: 1,
-    height: 50,
+    minHeight: 50,
     borderRadius: 18,
     backgroundColor: THEME.yellow,
     alignItems: "center",
@@ -629,12 +736,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
   },
-
   imageBtnText: {
     color: "#000",
     fontWeight: "900",
   },
-
   section: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -643,14 +748,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
     marginBottom: 14,
   },
-
   sectionIcon: {
     width: 34,
     height: 34,
@@ -661,13 +764,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   sectionTitle: {
     color: THEME.text,
     fontSize: 17,
     fontWeight: "900",
   },
-
   loadingCityBox: {
     height: 48,
     borderRadius: 17,
@@ -679,12 +780,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 9,
   },
-
   loadingCityText: {
     color: THEME.muted,
     fontWeight: "800",
   },
-
   emptyCityBox: {
     padding: 14,
     borderRadius: 17,
@@ -692,12 +791,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   emptyCityText: {
     color: THEME.muted,
     fontWeight: "800",
   },
-
   chip: {
     borderWidth: 1,
     borderColor: THEME.border,
@@ -707,27 +804,22 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: THEME.input,
   },
-
   chipActive: {
     backgroundColor: THEME.yellow,
     borderColor: THEME.yellow,
   },
-
   chipText: {
     color: THEME.muted,
     fontWeight: "900",
   },
-
   chipTextActive: {
     color: "#000",
   },
-
   typeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 9,
   },
-
   typeBtn: {
     width: "48%",
     borderWidth: 1,
@@ -739,33 +831,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 7,
   },
-
   typeBtnActive: {
     backgroundColor: THEME.yellow,
     borderColor: THEME.yellow,
   },
-
   typeText: {
     color: THEME.text,
     fontWeight: "900",
     fontSize: 12,
   },
-
   typeTextActive: {
     color: "#000",
   },
-
-  inputGroup: {
-    marginBottom: 13,
-  },
-
+  inputGroup: { marginBottom: 13 },
   label: {
     color: THEME.text,
     fontWeight: "900",
     marginBottom: 8,
     fontSize: 13,
   },
-
   inputBox: {
     minHeight: 55,
     backgroundColor: THEME.input,
@@ -777,24 +861,42 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
   input: {
     flex: 1,
     color: THEME.text,
     fontWeight: "800",
   },
-
   textAreaBox: {
     minHeight: 98,
     alignItems: "flex-start",
     paddingTop: 14,
   },
-
   textArea: {
     minHeight: 76,
     textAlignVertical: "top",
   },
-
+  statusToggle: {
+    minHeight: 54,
+    borderRadius: 19,
+    backgroundColor: "#251010",
+    borderWidth: 1,
+    borderColor: "#6B1F1F",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  statusToggleActive: {
+    backgroundColor: THEME.green,
+    borderColor: THEME.green,
+  },
+  statusToggleText: {
+    color: THEME.danger,
+    fontWeight: "900",
+  },
+  statusToggleTextActive: {
+    color: "#000",
+  },
   createBtn: {
     backgroundColor: THEME.yellow,
     height: 58,
@@ -805,7 +907,6 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 4,
   },
-
   createText: {
     color: "#000",
     fontWeight: "900",

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -17,17 +17,28 @@ import Toast from "react-native-toast-message";
 
 import { orderService, Order } from "@/services/api/orderService";
 import { useAuth } from "@/context/AuthContext";
+import {
+  connectSocket,
+  joinOrderRoom,
+  leaveOrderRoom,
+  onOrderUpdated,
+} from "@/api/socketClient";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
   green: "#22C55E",
-  yellow: "#FACC15",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
+  yellow: "#F59E0B",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
+  white: "#FFFFFF",
   black: "#050807",
 };
 
@@ -68,17 +79,31 @@ const normalizeStatus = (statusRaw: any) => {
   }
 };
 
-const normalizeOrders = (res: any) => {
+const normalizeOrders = (value: any): Order[] => {
   const list =
-    res?.data?.data?.orders ||
-    res?.data?.orders ||
-    res?.data?.data ||
-    res?.data ||
-    res ||
+    value?.data?.data?.orders ||
+    value?.data?.orders ||
+    value?.data?.data ||
+    value?.data ||
+    value?.orders ||
+    value ||
     [];
 
   return Array.isArray(list) ? list : [];
 };
+
+const getOrderIdFromSocketPayload = (payload: any) =>
+  payload?.orderId ||
+  payload?.id ||
+  payload?.order?.id ||
+  payload?.data?.orderId ||
+  payload?.data?.order?.id;
+
+const getStatusFromSocketPayload = (payload: any) =>
+  payload?.status ||
+  payload?.order?.status ||
+  payload?.data?.status ||
+  payload?.data?.order?.status;
 
 export default function OrdersScreen() {
   const navigation = useNavigation<any>();
@@ -158,6 +183,45 @@ export default function OrdersScreen() {
     }, [loadOrders])
   );
 
+  useEffect(() => {
+    if (isGuest || orders.length === 0) return;
+
+    connectSocket().catch(() => {});
+
+    orders.forEach(order => {
+      if (order?.id && ACTIVE_STATUSES.includes(normalizeStatus(order.status))) {
+        joinOrderRoom(order.id);
+      }
+    });
+
+    const cleanup = onOrderUpdated((payload: any) => {
+      const orderId = getOrderIdFromSocketPayload(payload);
+      const status = getStatusFromSocketPayload(payload);
+
+      if (!orderId || !status) return;
+
+      setOrders(prev =>
+        prev.map(order =>
+          order.id === orderId
+            ? {
+                ...order,
+                ...(payload?.order || {}),
+                status: normalizeStatus(status),
+                updatedAt: payload?.updatedAt || order.updatedAt,
+              }
+            : order
+        )
+      );
+    });
+
+    return () => {
+      cleanup?.();
+      orders.forEach(order => {
+        if (order?.id) leaveOrderRoom(order.id);
+      });
+    };
+  }, [isGuest, orders.map(o => `${o.id}:${o.status}`).join("|")]);
+
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
       const status = normalizeStatus(order.status);
@@ -207,7 +271,13 @@ export default function OrdersScreen() {
       : 0;
   };
 
-  const getStatusMeta = (statusRaw: string) => {
+  const getPaymentStatus = (order: any) =>
+    String(order.paymentStatus || order.payment_status || "PENDING").toUpperCase();
+
+  const getPaymentMethod = (order: any) =>
+    String(order.paymentMethod || order.payment_method || "COD").toUpperCase();
+
+  const getStatusMeta = (statusRaw: any) => {
     const status = normalizeStatus(statusRaw);
 
     switch (status) {
@@ -217,7 +287,9 @@ export default function OrdersScreen() {
           short: "Placed",
           icon: "receipt-outline",
           color: THEME.yellow,
+          bg: "#FFF7E8",
           message: "Your order has been placed successfully.",
+          progress: 1,
         };
       case "ACCEPTED_BY_VENDOR":
         return {
@@ -225,7 +297,9 @@ export default function OrdersScreen() {
           short: "Accepted",
           icon: "checkmark-done-outline",
           color: THEME.green,
+          bg: "#EAFBF1",
           message: "The store has accepted your order.",
+          progress: 2,
         };
       case "PREPARING":
         return {
@@ -233,7 +307,9 @@ export default function OrdersScreen() {
           short: "Preparing",
           icon: "restaurant-outline",
           color: THEME.yellow,
+          bg: "#FFF7E8",
           message: "Your order is being prepared.",
+          progress: 3,
         };
       case "READY_FOR_PICKUP":
         return {
@@ -241,7 +317,9 @@ export default function OrdersScreen() {
           short: "Ready",
           icon: "bag-check-outline",
           color: THEME.green,
+          bg: "#EAFBF1",
           message: "Your order is ready for rider pickup.",
+          progress: 4,
         };
       case "ASSIGNED_TO_RIDER":
         return {
@@ -249,7 +327,9 @@ export default function OrdersScreen() {
           short: "Assigned",
           icon: "person-add-outline",
           color: THEME.green,
+          bg: "#EAFBF1",
           message: "A delivery partner has been assigned.",
+          progress: 5,
         };
       case "PICKED_UP":
         return {
@@ -257,15 +337,19 @@ export default function OrdersScreen() {
           short: "Picked",
           icon: "cube-outline",
           color: THEME.green,
+          bg: "#EAFBF1",
           message: "Your order has been picked up.",
+          progress: 6,
         };
       case "OUT_FOR_DELIVERY":
         return {
           label: "Out for Delivery",
           short: "On the way",
           icon: "bicycle-outline",
-          color: THEME.green,
+          color: THEME.orange,
+          bg: THEME.orangeSoft,
           message: "Your order is on the way.",
+          progress: 7,
         };
       case "DELIVERED":
         return {
@@ -273,7 +357,9 @@ export default function OrdersScreen() {
           short: "Delivered",
           icon: "checkmark-circle-outline",
           color: THEME.green,
+          bg: "#EAFBF1",
           message: "Order completed successfully.",
+          progress: 7,
         };
       case "CANCELLED":
         return {
@@ -281,7 +367,9 @@ export default function OrdersScreen() {
           short: "Cancelled",
           icon: "close-circle-outline",
           color: THEME.danger,
+          bg: "#FFF1F1",
           message: "This order has been cancelled.",
+          progress: 0,
         };
       default:
         return {
@@ -289,7 +377,9 @@ export default function OrdersScreen() {
           short: status.replaceAll("_", " "),
           icon: "time-outline",
           color: THEME.muted,
+          bg: THEME.card2,
           message: "Order status updated.",
+          progress: 1,
         };
     }
   };
@@ -352,18 +442,41 @@ export default function OrdersScreen() {
     navigation.navigate("UserApp", { screen: "Home" });
   };
 
+  const renderProgress = (progress: number, cancelled: boolean) => {
+    const totalSteps = 7;
+
+    return (
+      <View style={styles.progressTrack}>
+        {Array.from({ length: totalSteps }).map((_, index) => {
+          const active = !cancelled && index < progress;
+
+          return (
+            <View
+              key={index}
+              style={[
+                styles.progressDot,
+                active && styles.progressDotActive,
+                cancelled && index === 0 && styles.progressDotDanger,
+              ]}
+            />
+          );
+        })}
+      </View>
+    );
+  };
+
   const renderOrder = ({ item }: { item: Order }) => {
     const meta = getStatusMeta(item.status);
     const itemCount = getItemsCount(item);
     const isCancelling = cancellingId === item.id;
-    const paymentStatus = String(
-      item.paymentStatus || item.payment_status || "PENDING"
-    ).toUpperCase();
+    const paymentStatus = getPaymentStatus(item);
+    const paymentMethod = getPaymentMethod(item);
+    const status = normalizeStatus(item.status);
 
     return (
       <TouchableOpacity
         style={styles.card}
-        activeOpacity={0.9}
+        activeOpacity={0.92}
         onPress={() => goToDetails(item)}
       >
         <View style={styles.cardTop}>
@@ -372,15 +485,17 @@ export default function OrdersScreen() {
             <Text style={styles.date}>{getDate(item)}</Text>
           </View>
 
-          <View style={[styles.statusPill, { borderColor: meta.color }]}> 
+          <View style={[styles.statusPill, { backgroundColor: meta.bg }]}> 
             <Icon name={meta.icon as any} size={13} color={meta.color} />
-            <Text style={[styles.statusText, { color: meta.color }]}> {meta.short} </Text>
+            <Text style={[styles.statusText, { color: meta.color }]}>
+              {meta.short}
+            </Text>
           </View>
         </View>
 
         <View style={styles.storeRow}>
           <View style={styles.storeIcon}>
-            <Icon name="storefront-outline" size={21} color={THEME.green} />
+            <Icon name="storefront-outline" size={21} color={THEME.orange} />
           </View>
 
           <View style={{ flex: 1 }}>
@@ -394,6 +509,8 @@ export default function OrdersScreen() {
             </Text>
           </View>
         </View>
+
+        {renderProgress(meta.progress, status === "CANCELLED")}
 
         <View style={styles.timelineBox}>
           <View style={[styles.timelineDot, { backgroundColor: meta.color }]} />
@@ -411,13 +528,13 @@ export default function OrdersScreen() {
                 paymentStatus === "FAILED" && { color: THEME.danger },
               ]}
             >
-              {paymentStatus}
+              {paymentMethod} • {paymentStatus}
             </Text>
           </View>
 
           <View style={styles.metaBox}>
             <Text style={styles.metaLabel}>Status</Text>
-            <Text style={[styles.metaValue, { color: meta.color }]}>{meta.short}</Text>
+            <Text style={[styles.metaValue, { color: meta.color }]}>{meta.label}</Text>
           </View>
         </View>
 
@@ -448,8 +565,10 @@ export default function OrdersScreen() {
               onPress={() => goToDetails(item)}
               activeOpacity={0.85}
             >
-              <Text style={styles.trackText}>{activeTab === "ACTIVE" ? "Track" : "Details"}</Text>
-              <Icon name="arrow-forward" size={16} color={THEME.black} />
+              <Text style={styles.trackText}>
+                {activeTab === "ACTIVE" ? "Track" : "Details"}
+              </Text>
+              <Icon name="arrow-forward" size={16} color={THEME.white} />
             </TouchableOpacity>
           </View>
         </View>
@@ -460,11 +579,11 @@ export default function OrdersScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.muted}>Loading your orders...</Text>
       </View>
     );
@@ -472,7 +591,7 @@ export default function OrdersScreen() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
@@ -490,7 +609,7 @@ export default function OrdersScreen() {
           }}
           activeOpacity={0.85}
         >
-          <Icon name="refresh" size={21} color={THEME.black} />
+          <Icon name="refresh" size={21} color={THEME.white} />
         </TouchableOpacity>
       </View>
 
@@ -508,7 +627,7 @@ export default function OrdersScreen() {
         </View>
 
         <View style={styles.heroIcon}>
-          <Icon name="bicycle-outline" size={34} color={THEME.black} />
+          <Icon name="bicycle-outline" size={34} color={THEME.white} />
         </View>
       </View>
 
@@ -521,8 +640,10 @@ export default function OrdersScreen() {
           <Text style={[styles.tabText, activeTab === "ACTIVE" && styles.tabTextActive]}>
             Active
           </Text>
-          <View style={styles.countBadge}>
-            <Text style={styles.countText}>{activeCount}</Text>
+          <View style={[styles.countBadge, activeTab === "ACTIVE" && styles.countBadgeActive]}>
+            <Text style={[styles.countText, activeTab === "ACTIVE" && styles.countTextActive]}>
+              {activeCount}
+            </Text>
           </View>
         </TouchableOpacity>
 
@@ -534,8 +655,10 @@ export default function OrdersScreen() {
           <Text style={[styles.tabText, activeTab === "HISTORY" && styles.tabTextActive]}>
             History
           </Text>
-          <View style={styles.countBadge}>
-            <Text style={styles.countText}>{historyCount}</Text>
+          <View style={[styles.countBadge, activeTab === "HISTORY" && styles.countBadgeActive]}>
+            <Text style={[styles.countText, activeTab === "HISTORY" && styles.countTextActive]}>
+              {historyCount}
+            </Text>
           </View>
         </TouchableOpacity>
       </View>
@@ -552,8 +675,8 @@ export default function OrdersScreen() {
               if (!requireAuth("Please sign in to view your orders.")) return;
               loadOrders(true);
             }}
-            tintColor={THEME.green}
-            colors={[THEME.green]}
+            tintColor={THEME.orange}
+            colors={[THEME.orange]}
           />
         }
         contentContainerStyle={filteredOrders.length === 0 ? styles.emptyList : styles.list}
@@ -561,9 +684,15 @@ export default function OrdersScreen() {
           <View style={styles.emptyBox}>
             <View style={styles.emptyIcon}>
               <Icon
-                name={isGuest ? "person-circle-outline" : activeTab === "ACTIVE" ? "receipt-outline" : "archive-outline"}
+                name={
+                  isGuest
+                    ? "person-circle-outline"
+                    : activeTab === "ACTIVE"
+                    ? "receipt-outline"
+                    : "archive-outline"
+                }
                 size={54}
-                color={THEME.yellow}
+                color={THEME.orange}
               />
             </View>
 
@@ -588,8 +717,10 @@ export default function OrdersScreen() {
               onPress={isGuest ? () => navigation.navigate("Auth") : goExplore}
               activeOpacity={0.9}
             >
-              <Text style={styles.exploreText}>{isGuest ? "Login / Signup" : "Explore Stores"}</Text>
-              <Icon name="arrow-forward" size={17} color={THEME.black} />
+              <Text style={styles.exploreText}>
+                {isGuest ? "Login / Signup" : "Explore Stores"}
+              </Text>
+              <Icon name="arrow-forward" size={17} color={THEME.white} />
             </TouchableOpacity>
           </View>
         }
@@ -609,7 +740,8 @@ export default function OrdersScreen() {
 
             <Text style={styles.confirmTitle}>Cancel order?</Text>
             <Text style={styles.confirmText}>
-              This action will request cancellation for Order #{cancelTarget ? getOrderNumber(cancelTarget) : ""}.
+              This action will request cancellation for Order #
+              {cancelTarget ? getOrderNumber(cancelTarget) : ""}.
             </Text>
 
             <View style={styles.confirmActions}>
@@ -627,7 +759,7 @@ export default function OrdersScreen() {
                 disabled={!!cancellingId}
               >
                 {cancellingId ? (
-                  <ActivityIndicator color={THEME.black} />
+                  <ActivityIndicator color={THEME.white} />
                 ) : (
                   <Text style={styles.cancelConfirmText}>Cancel Order</Text>
                 )}
@@ -639,6 +771,14 @@ export default function OrdersScreen() {
     </View>
   );
 }
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: THEME.bg },
@@ -653,14 +793,13 @@ const styles = StyleSheet.create({
     height: 74,
     borderRadius: 25,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 18,
+    ...shadow,
   },
   loadingLogoText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 38,
     fontWeight: "900",
   },
@@ -678,7 +817,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   title: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 29,
     fontWeight: "900",
   },
@@ -691,30 +830,30 @@ const styles = StyleSheet.create({
   refreshBtn: {
     width: 44,
     height: 44,
-    borderRadius: 18,
-    backgroundColor: THEME.green,
+    borderRadius: 16,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   heroBanner: {
     marginHorizontal: 20,
     marginBottom: 14,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 26,
+    borderRadius: 24,
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
+    ...shadow,
   },
   heroTag: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1,
   },
   heroTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 21,
     fontWeight: "900",
     marginTop: 5,
@@ -730,7 +869,7 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 22,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 14,
@@ -738,35 +877,38 @@ const styles = StyleSheet.create({
   tabs: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 5,
     flexDirection: "row",
     marginBottom: 10,
+    ...shadow,
   },
   tabBtn: {
     flex: 1,
-    borderRadius: 14,
+    borderRadius: 13,
     paddingVertical: 10,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 8,
   },
-  tabBtnActive: { backgroundColor: THEME.green },
+  tabBtnActive: { backgroundColor: THEME.orange },
   tabText: { color: THEME.muted, fontWeight: "900" },
-  tabTextActive: { color: THEME.black },
+  tabTextActive: { color: THEME.white },
   countBadge: {
     minWidth: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: THEME.black,
+    backgroundColor: THEME.card2,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 6,
   },
-  countText: { color: THEME.green, fontWeight: "900", fontSize: 11 },
+  countBadgeActive: {
+    backgroundColor: THEME.white,
+  },
+  countText: { color: THEME.blue, fontWeight: "900", fontSize: 11 },
+  countTextActive: { color: THEME.orange },
   list: { padding: 20, paddingTop: 8, paddingBottom: 35 },
   emptyList: {
     flexGrow: 1,
@@ -780,13 +922,12 @@ const styles = StyleSheet.create({
     height: 104,
     borderRadius: 36,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   emptyTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 20,
     fontWeight: "900",
     marginTop: 14,
@@ -800,22 +941,22 @@ const styles = StyleSheet.create({
   },
   exploreBtn: {
     marginTop: 20,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     paddingHorizontal: 18,
     paddingVertical: 13,
     borderRadius: 16,
     flexDirection: "row",
     alignItems: "center",
     gap: 7,
+    ...shadow,
   },
-  exploreText: { color: THEME.black, fontWeight: "900" },
+  exploreText: { color: THEME.white, fontWeight: "900" },
   card: {
     backgroundColor: THEME.card,
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 16,
     marginBottom: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    ...shadow,
   },
   cardTop: {
     flexDirection: "row",
@@ -823,11 +964,9 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 12,
   },
-  orderNo: { color: THEME.text, fontSize: 16, fontWeight: "900" },
+  orderNo: { color: THEME.blue, fontSize: 16, fontWeight: "900" },
   date: { color: THEME.muted, marginTop: 4, fontSize: 12, fontWeight: "700" },
   statusPill: {
-    backgroundColor: THEME.black,
-    borderWidth: 1,
     borderRadius: 99,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -841,21 +980,35 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 15,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 11,
   },
-  storeName: { color: THEME.text, fontSize: 15, fontWeight: "900" },
+  storeName: { color: THEME.blue, fontSize: 15, fontWeight: "900" },
   itemCount: { color: THEME.muted, marginTop: 3, fontSize: 12, fontWeight: "700" },
-  timelineBox: {
+  progressTrack: {
     marginTop: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  progressDot: {
+    flex: 1,
+    height: 5,
+    borderRadius: 99,
     backgroundColor: THEME.card2,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: THEME.border,
+  },
+  progressDotActive: {
+    backgroundColor: THEME.orange,
+  },
+  progressDotDanger: {
+    backgroundColor: THEME.danger,
+  },
+  timelineBox: {
+    marginTop: 14,
+    backgroundColor: THEME.surface,
+    borderRadius: 15,
     paddingHorizontal: 13,
     paddingVertical: 11,
     flexDirection: "row",
@@ -872,15 +1025,13 @@ const styles = StyleSheet.create({
   metaGrid: { flexDirection: "row", gap: 10, marginTop: 14 },
   metaBox: {
     flex: 1,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 16,
+    backgroundColor: THEME.surface,
+    borderRadius: 15,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
   metaLabel: { color: THEME.muted, fontSize: 11, fontWeight: "800" },
-  metaValue: { color: THEME.text, fontSize: 13, fontWeight: "900", marginTop: 3 },
+  metaValue: { color: THEME.blue, fontSize: 12, fontWeight: "900", marginTop: 3 },
   bottomRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -889,12 +1040,10 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   amountLabel: { color: THEME.muted, fontSize: 11, fontWeight: "800" },
-  amount: { color: THEME.green, fontSize: 21, fontWeight: "900", marginTop: 2 },
+  amount: { color: THEME.orange, fontSize: 21, fontWeight: "900", marginTop: 2 },
   actionRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   cancelBtn: {
-    borderWidth: 1,
-    borderColor: "#3F1717",
-    backgroundColor: "#1B0E0E",
+    backgroundColor: "#FFF1F1",
     borderRadius: 14,
     paddingHorizontal: 13,
     paddingVertical: 10,
@@ -903,25 +1052,23 @@ const styles = StyleSheet.create({
   },
   cancelText: { color: THEME.danger, fontWeight: "900", fontSize: 12 },
   trackBtn: {
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 10,
     flexDirection: "row",
     alignItems: "center",
   },
-  trackText: { color: THEME.black, fontWeight: "900", marginRight: 6 },
+  trackText: { color: THEME.white, fontWeight: "900", marginRight: 6 },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.72)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     padding: 22,
   },
   confirmBox: {
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
@@ -929,14 +1076,12 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 24,
-    backgroundColor: "#1B0E0E",
-    borderWidth: 1,
-    borderColor: "#3F1717",
+    backgroundColor: "#FFF1F1",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
-  confirmTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
+  confirmTitle: { color: THEME.blue, fontSize: 22, fontWeight: "900" },
   confirmText: {
     color: THEME.muted,
     textAlign: "center",
@@ -948,19 +1093,17 @@ const styles = StyleSheet.create({
   keepBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
   },
-  keepText: { color: THEME.text, fontWeight: "900" },
+  keepText: { color: THEME.blue, fontWeight: "900" },
   cancelConfirmBtn: {
     flex: 1,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.danger,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
   },
-  cancelConfirmText: { color: THEME.black, fontWeight: "900" },
+  cancelConfirmText: { color: THEME.white, fontWeight: "900" },
 });

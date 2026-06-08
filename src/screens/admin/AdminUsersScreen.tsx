@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -53,7 +53,9 @@ export default function AdminUsersScreen({ navigation }: any) {
   const [refreshing, setRefreshing] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
+  const [roleModalVisible, setRoleModalVisible] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<any>(null);
 
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("ALL");
@@ -98,22 +100,28 @@ export default function AdminUsersScreen({ navigation }: any) {
     setMessage((prev) => ({ ...prev, visible: false, loading: false }));
   };
 
-  const loadUsers = async () => {
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
+
+  const loadUsers = useCallback(async () => {
     const { data, error } = await adminService.users();
 
     if (error) {
       showMessage("error", "Unable to Load Users", error.message || "Failed to load users.");
+      setUsers([]);
     } else {
       setUsers(data || []);
     }
 
     setLoading(false);
     setRefreshing(false);
-  };
+  }, []);
 
   useEffect(() => {
     loadUsers();
-  }, []);
+  }, [loadUsers]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -141,15 +149,19 @@ export default function AdminUsersScreen({ navigation }: any) {
 
   const validate = () => {
     if (!form.fullName.trim()) return "Full name is required.";
+
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) {
       return "Please enter a valid email address.";
     }
+
     if (form.phone.trim() && !/^[6-9]\d{9}$/.test(form.phone.trim())) {
       return "Phone number should contain 10 digits and start with 6, 7, 8 or 9.";
     }
+
     if (form.password.length < 6) {
       return "Password must be at least 6 characters.";
     }
+
     if (!form.role) return "Please select a user role.";
 
     return null;
@@ -197,7 +209,8 @@ export default function AdminUsersScreen({ navigation }: any) {
   };
 
   const askToggleStatus = (user: any) => {
-    const willActivate = !user.isActive;
+    const active = user.isActive !== false;
+    const willActivate = !active;
 
     showMessage(
       willActivate ? "success" : "warning",
@@ -213,9 +226,11 @@ export default function AdminUsersScreen({ navigation }: any) {
   };
 
   const toggleStatus = async (user: any) => {
+    const active = user.isActive !== false;
+
     setMessage((prev) => ({ ...prev, loading: true }));
 
-    const { error } = await adminService.updateUserStatus(user.id, !user.isActive);
+    const { error } = await adminService.updateUserStatus(user.id, !active);
 
     if (error) {
       setMessage({
@@ -232,9 +247,105 @@ export default function AdminUsersScreen({ navigation }: any) {
       visible: true,
       type: "success",
       title: "User Status Updated",
-      message: user.isActive
+      message: active
         ? "User has been blocked successfully."
         : "User has been activated successfully.",
+      primaryText: "Done",
+      onPrimary: () => {
+        closeMessage();
+        loadUsers();
+      },
+    });
+  };
+
+  const openRoleModal = (user: any) => {
+    setSelectedUser(user);
+    setRoleModalVisible(true);
+  };
+
+  const closeRoleModal = () => {
+    setSelectedUser(null);
+    setRoleModalVisible(false);
+  };
+
+  const changeRole = async (role: string) => {
+    if (!selectedUser) return;
+
+    setRoleModalVisible(false);
+
+    showMessage(
+      "warning",
+      "Change User Role?",
+      `${selectedUser.fullName || selectedUser.email || "This user"} ka role ${formatRole(role)} karna hai?`,
+      "Change",
+      () => updateUserRole(selectedUser, role),
+      "Cancel",
+      closeMessage
+    );
+  };
+
+  const updateUserRole = async (user: any, role: string) => {
+    setMessage((prev) => ({ ...prev, loading: true }));
+
+    const { error } = await adminService.updateUserRole(user.id, role);
+
+    if (error) {
+      setMessage({
+        visible: true,
+        type: "error",
+        title: "Role Update Failed",
+        message: error.message || "Failed to update user role.",
+        primaryText: "Okay",
+      });
+      return;
+    }
+
+    setMessage({
+      visible: true,
+      type: "success",
+      title: "Role Updated",
+      message: `User role updated to ${formatRole(role)}.`,
+      primaryText: "Done",
+      onPrimary: () => {
+        closeMessage();
+        loadUsers();
+      },
+    });
+  };
+
+  const askDeleteUser = (user: any) => {
+    showMessage(
+      "warning",
+      "Delete User?",
+      `${user.fullName || user.email || "This user"} ko delete/block karna hai? Linked orders/vendors/riders hue to backend safe block karega.`,
+      "Delete",
+      () => deleteUser(user),
+      "Cancel",
+      closeMessage
+    );
+  };
+
+  const deleteUser = async (user: any) => {
+    setMessage((prev) => ({ ...prev, loading: true }));
+
+    const { error } = await adminService.deleteUser(user.id);
+
+    if (error) {
+      setMessage({
+        visible: true,
+        type: "error",
+        title: "Delete Failed",
+        message: error.message || "Unable to delete user.",
+        primaryText: "Okay",
+      });
+      return;
+    }
+
+    setMessage({
+      visible: true,
+      type: "success",
+      title: "User Deleted",
+      message: "User deleted/blocked successfully.",
       primaryText: "Done",
       onPrimary: () => {
         closeMessage();
@@ -302,7 +413,7 @@ export default function AdminUsersScreen({ navigation }: any) {
         ListHeaderComponent={
           <>
             <View style={styles.header}>
-              <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+              <TouchableOpacity style={styles.backBtn} onPress={goBack}>
                 <Icon name="chevron-back" size={24} color={THEME.text} />
               </TouchableOpacity>
 
@@ -334,8 +445,8 @@ export default function AdminUsersScreen({ navigation }: any) {
               </View>
 
               <View style={styles.summaryStats}>
-                <MiniStat label="Active" value={stats.active} />
-                <MiniStat label="Blocked" value={stats.blocked} />
+                <MiniStat label="Active" value={stats.active} green />
+                <MiniStat label="Blocked" value={stats.blocked} danger />
                 <MiniStat label="Admins" value={stats.admins} />
               </View>
 
@@ -344,6 +455,29 @@ export default function AdminUsersScreen({ navigation }: any) {
                 <RoleStat label="Vendors" value={stats.vendors} />
                 <RoleStat label="Riders" value={stats.riders} />
               </View>
+            </View>
+
+            <View style={styles.quickRail}>
+              <QuickAction
+                icon="storefront-outline"
+                label="Vendors"
+                onPress={() => navigation.navigate("AdminVendors")}
+              />
+              <QuickAction
+                icon="bicycle-outline"
+                label="Riders"
+                onPress={() => navigation.navigate("AdminRiders")}
+              />
+              <QuickAction
+                icon="person-add-outline"
+                label="Create"
+                onPress={() => setModalVisible(true)}
+              />
+              <QuickAction
+                icon="shield-checkmark-outline"
+                label="Admins"
+                onPress={() => setRoleFilter("ADMIN")}
+              />
             </View>
 
             <View style={styles.searchBox}>
@@ -411,7 +545,12 @@ export default function AdminUsersScreen({ navigation }: any) {
           </View>
         }
         renderItem={({ item }) => (
-          <UserCard user={item} onToggleStatus={() => askToggleStatus(item)} />
+          <UserCard
+            user={item}
+            onToggleStatus={() => askToggleStatus(item)}
+            onChangeRole={() => openRoleModal(item)}
+            onDelete={() => askDeleteUser(item)}
+          />
         )}
       />
 
@@ -422,6 +561,13 @@ export default function AdminUsersScreen({ navigation }: any) {
         updateForm={updateForm}
         onClose={closeCreateModal}
         onCreate={createUser}
+      />
+
+      <RoleChangeModal
+        visible={roleModalVisible}
+        user={selectedUser}
+        onClose={closeRoleModal}
+        onChangeRole={changeRole}
       />
 
       <KartoMessageModal
@@ -440,12 +586,23 @@ export default function AdminUsersScreen({ navigation }: any) {
   );
 }
 
-function MiniStat({ label, value }: any) {
+function MiniStat({ label, value, green, danger }: any) {
   return (
     <View style={styles.miniStat}>
-      <Text style={styles.miniValue}>{value}</Text>
+      <Text style={[styles.miniValue, green && { color: THEME.green }, danger && { color: THEME.danger }]}>
+        {value}
+      </Text>
       <Text style={styles.miniLabel}>{label}</Text>
     </View>
+  );
+}
+
+function QuickAction({ icon, label, onPress }: any) {
+  return (
+    <TouchableOpacity style={styles.quickItem} onPress={onPress} activeOpacity={0.86}>
+      <Icon name={icon} size={21} color={THEME.yellow} />
+      <Text style={styles.quickText}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -458,7 +615,7 @@ function RoleStat({ label, value }: any) {
   );
 }
 
-function UserCard({ user, onToggleStatus }: any) {
+function UserCard({ user, onToggleStatus, onChangeRole, onDelete }: any) {
   const active = user.isActive !== false;
 
   return (
@@ -494,20 +651,31 @@ function UserCard({ user, onToggleStatus }: any) {
         </View>
       </View>
 
-      <TouchableOpacity
-        style={[styles.statusAction, active ? styles.blockBtn : styles.activateBtn]}
-        onPress={onToggleStatus}
-        activeOpacity={0.86}
-      >
-        <Icon
-          name={active ? "ban-outline" : "checkmark-circle-outline"}
-          size={18}
-          color={active ? THEME.danger : "#000"}
-        />
-        <Text style={[styles.statusActionText, active ? styles.blockText : styles.activateText]}>
-          {active ? "Block User" : "Activate User"}
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.actionRow}>
+        <TouchableOpacity
+          style={[styles.statusAction, active ? styles.blockBtn : styles.activateBtn]}
+          onPress={onToggleStatus}
+          activeOpacity={0.86}
+        >
+          <Icon
+            name={active ? "ban-outline" : "checkmark-circle-outline"}
+            size={18}
+            color={active ? THEME.danger : "#000"}
+          />
+          <Text style={[styles.statusActionText, active ? styles.blockText : styles.activateText]}>
+            {active ? "Block" : "Activate"}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.roleBtn} onPress={onChangeRole} activeOpacity={0.86}>
+          <Icon name="swap-horizontal-outline" size={18} color="#000" />
+          <Text style={styles.roleBtnText}>Role</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.deleteBtn} onPress={onDelete} activeOpacity={0.86}>
+          <Icon name="trash-outline" size={18} color={THEME.danger} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -654,6 +822,53 @@ function CreateUserModal({
   );
 }
 
+function RoleChangeModal({ visible, user, onClose, onChangeRole }: any) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBoxSmall}>
+          <View style={styles.modalHandle} />
+
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalLabel}>CHANGE ROLE</Text>
+              <Text style={styles.modalTitle}>{user?.fullName || user?.email || "User"}</Text>
+            </View>
+
+            <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
+              <Icon name="close" size={23} color={THEME.text} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.roleRow}>
+            {ROLES.map((role) => (
+              <TouchableOpacity
+                key={role}
+                style={[styles.roleChip, user?.role === role && styles.roleChipActive]}
+                onPress={() => onChangeRole(role)}
+              >
+                <Icon
+                  name={getRoleConfig(role).icon}
+                  size={17}
+                  color={user?.role === role ? "#000" : THEME.yellow}
+                />
+                <Text
+                  style={[
+                    styles.roleChipText,
+                    user?.role === role && styles.roleChipTextActive,
+                  ]}
+                >
+                  {formatRole(role)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function FormInput({ label, icon, ...props }: any) {
   return (
     <View style={styles.inputGroup}>
@@ -698,7 +913,6 @@ function getRoleConfig(role: string) {
         border: "#5D4D0B",
         icon: "shield-checkmark-outline",
       };
-
     case "VENDOR":
       return {
         color: THEME.green,
@@ -706,7 +920,6 @@ function getRoleConfig(role: string) {
         border: "#1F6B35",
         icon: "storefront-outline",
       };
-
     case "RIDER":
       return {
         color: "#6EE7FF",
@@ -714,7 +927,6 @@ function getRoleConfig(role: string) {
         border: "#155E75",
         icon: "bicycle-outline",
       };
-
     default:
       return {
         color: THEME.orange,
@@ -726,29 +938,22 @@ function getRoleConfig(role: string) {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: THEME.bg,
-  },
-
+  root: { flex: 1, backgroundColor: THEME.bg },
   center: {
     flex: 1,
     backgroundColor: THEME.bg,
     justifyContent: "center",
     alignItems: "center",
   },
-
   loadingText: {
     color: THEME.muted,
     marginTop: 12,
     fontWeight: "800",
   },
-
   listContent: {
     paddingHorizontal: 16,
     paddingBottom: 38,
   },
-
   header: {
     paddingTop: 22,
     paddingBottom: 16,
@@ -756,7 +961,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-
   backBtn: {
     width: 46,
     height: 46,
@@ -767,7 +971,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   addBtn: {
     width: 46,
     height: 46,
@@ -776,28 +979,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   smallLabel: {
     color: THEME.green,
     fontWeight: "900",
     fontSize: 11,
     letterSpacing: 1.1,
   },
-
   title: {
     color: THEME.text,
     fontSize: 27,
     fontWeight: "900",
     marginTop: 2,
   },
-
   subtitle: {
     color: THEME.muted,
     fontWeight: "700",
     marginTop: 3,
     fontSize: 12,
   },
-
   summaryCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -809,26 +1008,22 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 7,
   },
-
   summaryTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
-
   summaryLabel: {
     color: THEME.muted,
     fontSize: 13,
     fontWeight: "800",
   },
-
   summaryValue: {
     color: THEME.yellow,
     fontSize: 40,
     fontWeight: "900",
     marginTop: 5,
   },
-
   summaryIcon: {
     width: 64,
     height: 64,
@@ -839,13 +1034,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   summaryStats: {
     flexDirection: "row",
     gap: 10,
     marginTop: 20,
   },
-
   miniStat: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -854,26 +1047,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   miniValue: {
     color: THEME.text,
     fontSize: 20,
     fontWeight: "900",
   },
-
   miniLabel: {
     color: THEME.muted,
     fontSize: 10.5,
     fontWeight: "800",
     marginTop: 3,
   },
-
   roleStats: {
     flexDirection: "row",
     gap: 10,
     marginTop: 12,
   },
-
   roleStat: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -882,20 +1071,38 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   roleStatValue: {
     color: THEME.green,
     fontSize: 18,
     fontWeight: "900",
   },
-
   roleStatLabel: {
     color: THEME.muted,
     fontSize: 10.5,
     fontWeight: "800",
     marginTop: 3,
   },
-
+  quickRail: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  quickItem: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  quickText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: "900",
+    marginTop: 6,
+    textAlign: "center",
+  },
   searchBox: {
     marginTop: 17,
     height: 54,
@@ -908,19 +1115,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
   searchInput: {
     flex: 1,
     color: THEME.text,
     fontWeight: "800",
     fontSize: 14,
   },
-
   filterList: {
     maxHeight: 48,
     marginTop: 15,
   },
-
   chip: {
     height: 38,
     borderWidth: 1,
@@ -931,22 +1135,18 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: THEME.card,
   },
-
   chipActive: {
     backgroundColor: THEME.yellow,
     borderColor: THEME.yellow,
   },
-
   chipText: {
     color: THEME.muted,
     fontWeight: "900",
     fontSize: 11,
   },
-
   chipTextActive: {
     color: "#000",
   },
-
   sectionHeader: {
     marginTop: 24,
     marginBottom: 12,
@@ -954,18 +1154,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   sectionTitle: {
     color: THEME.text,
     fontSize: 20,
     fontWeight: "900",
   },
-
   sectionCount: {
     color: THEME.yellow,
     fontWeight: "900",
   },
-
   emptyBox: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -974,14 +1171,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   emptyTitle: {
     color: THEME.text,
     fontSize: 18,
     fontWeight: "900",
     marginTop: 10,
   },
-
   emptyText: {
     color: THEME.muted,
     textAlign: "center",
@@ -989,7 +1184,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "700",
   },
-
   emptyAddBtn: {
     marginTop: 18,
     height: 48,
@@ -1001,12 +1195,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
   },
-
   emptyAddText: {
     color: "#000",
     fontWeight: "900",
   },
-
   card: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -1015,13 +1207,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   userTop: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
   },
-
   avatarBox: {
     width: 58,
     height: 58,
@@ -1032,51 +1222,43 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   avatarText: {
     color: THEME.yellow,
     fontSize: 17,
     fontWeight: "900",
   },
-
   nameRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-
   name: {
     flex: 1,
     fontSize: 17,
     fontWeight: "900",
     color: THEME.text,
   },
-
   meta: {
     color: THEME.muted,
     marginTop: 4,
     fontSize: 12,
     fontWeight: "800",
   },
-
   roleBadge: {
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
   },
-
   roleBadgeText: {
     fontSize: 10,
     fontWeight: "900",
   },
-
   infoRow: {
     flexDirection: "row",
     gap: 8,
     marginTop: 13,
   },
-
   statusBadge: {
     flex: 1,
     minHeight: 35,
@@ -1088,30 +1270,24 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 6,
   },
-
   activeBadge: {
     backgroundColor: "#102517",
     borderColor: "#1F6B35",
   },
-
   blockedBadge: {
     backgroundColor: "#251010",
     borderColor: "#6B1F1F",
   },
-
   statusBadgeText: {
     fontSize: 11,
     fontWeight: "900",
   },
-
   activeText: {
     color: THEME.green,
   },
-
   blockedText: {
     color: THEME.danger,
   },
-
   userIdPill: {
     flex: 1,
     minHeight: 35,
@@ -1123,53 +1299,73 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 10,
   },
-
   userIdText: {
     color: THEME.muted,
     fontSize: 11,
     fontWeight: "800",
   },
-
+  actionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+  },
   statusAction: {
+    flex: 1,
     height: 45,
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 7,
-    marginTop: 12,
     borderWidth: 1,
   },
-
   blockBtn: {
     backgroundColor: "#251010",
     borderColor: "#6B1F1F",
   },
-
   activateBtn: {
     backgroundColor: THEME.green,
     borderColor: THEME.green,
   },
-
   statusActionText: {
     fontWeight: "900",
     fontSize: 13,
   },
-
   blockText: {
     color: THEME.danger,
   },
-
   activateText: {
     color: "#000",
   },
-
+  roleBtn: {
+    flex: 1,
+    height: 45,
+    borderRadius: 17,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  roleBtnText: {
+    color: "#000",
+    fontWeight: "900",
+  },
+  deleteBtn: {
+    width: 48,
+    height: 45,
+    borderRadius: 17,
+    backgroundColor: "#251010",
+    borderWidth: 1,
+    borderColor: "#6B1F1F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.76)",
     justifyContent: "flex-end",
   },
-
   modalBox: {
     maxHeight: "92%",
     backgroundColor: THEME.bg,
@@ -1179,7 +1375,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
+  modalBoxSmall: {
+    maxHeight: "75%",
+    backgroundColor: THEME.bg,
+    padding: 18,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
   modalHandle: {
     width: 52,
     height: 5,
@@ -1188,28 +1392,24 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginBottom: 16,
   },
-
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginBottom: 18,
   },
-
   modalLabel: {
     color: THEME.green,
     fontSize: 11,
     letterSpacing: 1.1,
     fontWeight: "900",
   },
-
   modalTitle: {
     color: THEME.text,
     fontSize: 24,
     fontWeight: "900",
     marginTop: 3,
   },
-
   closeBtn: {
     width: 43,
     height: 43,
@@ -1220,18 +1420,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   inputGroup: {
     marginBottom: 14,
   },
-
   inputLabel: {
     color: THEME.text,
     fontSize: 13,
     fontWeight: "900",
     marginBottom: 8,
   },
-
   inputBox: {
     minHeight: 55,
     borderRadius: 19,
@@ -1243,20 +1440,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
   input: {
     flex: 1,
     color: THEME.text,
     fontWeight: "800",
   },
-
   roleRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 9,
     marginBottom: 16,
   },
-
   roleChip: {
     width: "48%",
     minHeight: 48,
@@ -1269,22 +1463,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 7,
   },
-
   roleChipActive: {
     backgroundColor: THEME.yellow,
     borderColor: THEME.yellow,
   },
-
   roleChipText: {
     color: THEME.text,
     fontWeight: "900",
     fontSize: 12,
   },
-
   roleChipTextActive: {
     color: "#000",
   },
-
   createBtn: {
     height: 56,
     borderRadius: 20,
@@ -1295,20 +1485,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-
   createText: {
     color: "#000",
     fontSize: 16,
     fontWeight: "900",
   },
-
   cancelBtn: {
     height: 50,
     alignItems: "center",
     justifyContent: "center",
     marginTop: 8,
   },
-
   cancelText: {
     color: THEME.muted,
     fontWeight: "900",

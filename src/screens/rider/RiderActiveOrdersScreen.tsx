@@ -1,6 +1,8 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
+  Linking,
   RefreshControl,
   SafeAreaView,
   ScrollView,
@@ -16,6 +18,7 @@ import { riderService } from "@/services/api/riderApi";
 const T = {
   bg: "#070A08",
   card: "#101713",
+  card2: "#0D120F",
   green: "#22C55E",
   yellow: "#FACC15",
   text: "#F8FAFC",
@@ -27,6 +30,42 @@ const T = {
 
 const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
 const shortId = (id?: string) => (id ? id.slice(0, 8).toUpperCase() : "ORDER");
+
+const statusText = (status?: string) =>
+  String(status || "ASSIGNED").replaceAll("_", " ");
+
+const getCustomer = (order: any) => order?.customer || order?.user || {};
+const getVendor = (order: any) => order?.vendor || order?.restaurant || {};
+
+const getAddress = (address: any) =>
+  address?.address ||
+  address?.addressLine ||
+  address?.fullAddress ||
+  address?.street ||
+  address?.landmark ||
+  address?.city ||
+  "Address not available";
+
+const getPickupAddress = (order: any) =>
+  order?.pickupAddress || getVendor(order)?.address || "Pickup address not available";
+
+const getDropAddress = (order: any) =>
+  getAddress(order?.deliveryAddress || order?.address);
+
+const callPhone = (phone?: string) => {
+  if (!phone) {
+    Alert.alert("Phone unavailable", "Phone number is not available.");
+    return;
+  }
+
+  Linking.openURL(`tel:${phone}`);
+};
+
+const openMap = (address: string) => {
+  if (!address) return;
+  const query = encodeURIComponent(address);
+  Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
+};
 
 export default function RiderActiveOrdersScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
@@ -43,7 +82,14 @@ export default function RiderActiveOrdersScreen({ navigation }: any) {
   const loadOrders = useCallback(async () => {
     try {
       const res = await riderService.getActiveOrders();
-      setOrders(res?.orders || []);
+
+      if (res?.error) {
+        showToast(res?.error?.message || "Failed to load active orders");
+        setOrders([]);
+        return;
+      }
+
+      setOrders(res?.data || []);
     } catch (e: any) {
       showToast(e?.message || "Failed to load active orders");
     } finally {
@@ -62,18 +108,39 @@ export default function RiderActiveOrdersScreen({ navigation }: any) {
   };
 
   const nextAction = async (order: any) => {
+    if (!order?.id) return;
+
     setBusyId(order.id);
+
     try {
+      let res: any = null;
+
       if (order.status === "ASSIGNED_TO_RIDER") {
-        await riderService.markPicked(order.id);
+        res = await riderService.markPicked(order.id);
         showToast("Order marked as picked");
       } else if (order.status === "PICKED_UP") {
-        await riderService.startDelivery(order.id);
+        res = await riderService.startDelivery(order.id);
         showToast("Delivery started");
       } else if (order.status === "OUT_FOR_DELIVERY") {
-        await riderService.completeOrder(order.id);
-        showToast("Order completed");
+        navigation?.navigate?.("RiderOrderDetail", {
+          orderId: order.id,
+          order,
+          openOtp: true,
+        });
+        return;
+      } else {
+        navigation?.navigate?.("RiderOrderDetail", {
+          orderId: order.id,
+          order,
+        });
+        return;
       }
+
+      if (res?.error) {
+        showToast(res?.error?.message || "Action failed");
+        return;
+      }
+
       loadOrders();
     } catch (e: any) {
       showToast(e?.message || "Action failed");
@@ -85,9 +152,11 @@ export default function RiderActiveOrdersScreen({ navigation }: any) {
   const actionLabel = (status: string) => {
     if (status === "ASSIGNED_TO_RIDER") return "Mark Picked";
     if (status === "PICKED_UP") return "Start Delivery";
-    if (status === "OUT_FOR_DELIVERY") return "Complete Order";
-    return "View";
+    if (status === "OUT_FOR_DELIVERY") return "Verify OTP";
+    return "View Details";
   };
+
+  const runningCount = useMemo(() => orders.length, [orders]);
 
   if (loading) {
     return (
@@ -114,10 +183,15 @@ export default function RiderActiveOrdersScreen({ navigation }: any) {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack?.()}>
           <Icon name="arrow-back" size={22} color={T.text} />
         </TouchableOpacity>
-        <View>
+
+        <View style={{ flex: 1 }}>
           <Text style={styles.title}>Active Orders</Text>
-          <Text style={styles.sub}>{orders.length} running deliveries</Text>
+          <Text style={styles.sub}>{runningCount} running deliveries</Text>
         </View>
+
+        <TouchableOpacity style={styles.refreshBtn} onPress={loadOrders}>
+          <Icon name="refresh" size={21} color={T.yellow} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -134,63 +208,139 @@ export default function RiderActiveOrdersScreen({ navigation }: any) {
             <Text style={styles.emptyText}>Accepted orders will appear here.</Text>
           </View>
         ) : (
-          orders.map((order) => (
-            <TouchableOpacity
-              key={order.id}
-              activeOpacity={0.9}
-              style={styles.card}
-              onPress={() => navigation?.navigate?.("RiderOrderDetail", { orderId: order.id })}
-            >
-              <View style={styles.top}>
-                <View>
-                  <Text style={styles.orderNo}>#{order.orderNumber || shortId(order.id)}</Text>
-                  <Text style={styles.store}>{order.restaurant?.name || "Karto Store"}</Text>
+          orders.map((order) => {
+            const customer = getCustomer(order);
+            const vendor = getVendor(order);
+            const pickupAddress = getPickupAddress(order);
+            const dropAddress = getDropAddress(order);
+
+            return (
+              <TouchableOpacity
+                key={order.id}
+                activeOpacity={0.9}
+                style={styles.card}
+                onPress={() =>
+                  navigation?.navigate?.("RiderOrderDetail", {
+                    orderId: order.id,
+                    order,
+                  })
+                }
+              >
+                <View style={styles.top}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.orderNo}>
+                      #{order.orderNumber || shortId(order.id)}
+                    </Text>
+                    <Text style={styles.store}>{vendor?.name || "Karto Store"}</Text>
+                  </View>
+
+                  <View style={styles.badge}>
+                    <Text style={styles.badgeText}>{statusText(order.status)}</Text>
+                  </View>
                 </View>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{String(order.status || "").replaceAll("_", " ")}</Text>
+
+                <View style={styles.routeBox}>
+                  <RouteLine
+                    icon="storefront-outline"
+                    title="Pickup"
+                    value={pickupAddress}
+                  />
+                  <View style={styles.dash} />
+                  <RouteLine
+                    icon="location-outline"
+                    title="Drop"
+                    value={dropAddress}
+                  />
                 </View>
-              </View>
 
-              <View style={styles.routeBox}>
-                <RouteLine icon="storefront-outline" title="Pickup" value={order.restaurant?.address || order.restaurant?.name || "Store address"} />
-                <View style={styles.dash} />
-                <RouteLine icon="location-outline" title="Drop" value={order.address?.address || "Customer address"} />
-              </View>
+                <View style={styles.metaRow}>
+                  <Meta icon="cash-outline" label="Fee" value={money(order.deliveryFee)} />
+                  <Meta icon="card-outline" label="Payment" value={order.paymentMethod || "COD"} />
+                  <Meta icon="bag-handle-outline" label="Items" value={order.items?.length || 0} />
+                </View>
 
-              <View style={styles.metaRow}>
-                <Meta icon="cash-outline" label="Fee" value={money(order.deliveryFee)} />
-                <Meta icon="card-outline" label="Payment" value={order.paymentMethod || "COD"} />
-                <Meta icon="bag-handle-outline" label="Items" value={order.items?.length || 0} />
-              </View>
+                <View style={styles.contactGrid}>
+                  <TouchableOpacity
+                    style={styles.contactBtn}
+                    onPress={() => callPhone(vendor?.phone || vendor?.ownerMobileNo)}
+                  >
+                    <Icon name="call" size={17} color={T.green} />
+                    <Text style={styles.contactText}>Call Vendor</Text>
+                  </TouchableOpacity>
 
-              <View style={styles.actions}>
-                <TouchableOpacity
-                  style={styles.detailBtn}
-                  onPress={() => navigation?.navigate?.("RiderOrderDetail", { orderId: order.id })}
-                >
-                  <Text style={styles.detailText}>Details</Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.contactBtn}
+                    onPress={() => callPhone(customer?.phone)}
+                  >
+                    <Icon name="call" size={17} color={T.green} />
+                    <Text style={styles.contactText}>Call Customer</Text>
+                  </TouchableOpacity>
+                </View>
 
-                <TouchableOpacity
-                  disabled={busyId === order.id}
-                  style={styles.mainBtn}
-                  onPress={() => nextAction(order)}
-                >
-                  {busyId === order.id ? (
-                    <ActivityIndicator size="small" color={T.black} />
-                  ) : (
-                    <>
-                      <Text style={styles.mainBtnText}>{actionLabel(order.status)}</Text>
-                      <Icon name="arrow-forward" size={18} color={T.black} />
-                    </>
-                  )}
-                </TouchableOpacity>
-              </View>
-            </TouchableOpacity>
-          ))
+                <View style={styles.contactGrid}>
+                  <TouchableOpacity
+                    style={styles.mapBtn}
+                    onPress={() => openMap(pickupAddress)}
+                  >
+                    <Icon name="navigate" size={17} color={T.yellow} />
+                    <Text style={styles.mapText}>Pickup Map</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.mapBtn}
+                    onPress={() => openMap(dropAddress)}
+                  >
+                    <Icon name="map" size={17} color={T.yellow} />
+                    <Text style={styles.mapText}>Customer Map</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.actions}>
+                  <TouchableOpacity
+                    style={styles.detailBtn}
+                    onPress={() =>
+                      navigation?.navigate?.("RiderOrderDetail", {
+                        orderId: order.id,
+                        order,
+                      })
+                    }
+                  >
+                    <Text style={styles.detailText}>Details</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.trackBtn}
+                    onPress={() =>
+                      navigation?.navigate?.("RiderLiveTracking", {
+                        orderId: order.id,
+                        order,
+                      })
+                    }
+                  >
+                    <Icon name="radio-outline" size={18} color={T.green} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    disabled={busyId === order.id}
+                    style={styles.mainBtn}
+                    onPress={() => nextAction(order)}
+                  >
+                    {busyId === order.id ? (
+                      <ActivityIndicator size="small" color={T.black} />
+                    ) : (
+                      <>
+                        <Text style={styles.mainBtnText}>{actionLabel(order.status)}</Text>
+                        <Icon name="arrow-forward" size={18} color={T.black} />
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            );
+          })
         )}
 
-        <View style={{ height: 30 }} />
+        <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -204,7 +354,9 @@ function RouteLine({ icon, title, value }: any) {
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.routeTitle}>{title}</Text>
-        <Text style={styles.routeValue} numberOfLines={1}>{value}</Text>
+        <Text style={styles.routeValue} numberOfLines={2}>
+          {value}
+        </Text>
       </View>
     </View>
   );
@@ -222,7 +374,12 @@ function Meta({ icon, label, value }: any) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: T.bg },
-  center: { flex: 1, backgroundColor: T.bg, justifyContent: "center", alignItems: "center" },
+  center: {
+    flex: 1,
+    backgroundColor: T.bg,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   loadingText: { color: T.muted, marginTop: 12, fontWeight: "700" },
   container: { flex: 1, padding: 18 },
 
@@ -251,6 +408,16 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: T.card,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  refreshBtn: {
     width: 44,
     height: 44,
     borderRadius: 16,
@@ -294,9 +461,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     alignSelf: "flex-start",
-    maxWidth: 135,
+    maxWidth: 145,
   },
-  badgeText: { color: T.green, fontSize: 10, fontWeight: "900", textAlign: "center" },
+  badgeText: {
+    color: T.green,
+    fontSize: 10,
+    fontWeight: "900",
+    textAlign: "center",
+  },
 
   routeBox: {
     backgroundColor: T.black,
@@ -337,6 +509,46 @@ const styles = StyleSheet.create({
   metaLabel: { color: T.muted, fontSize: 11, marginTop: 5 },
   metaValue: { color: T.text, fontSize: 13, fontWeight: "900", marginTop: 2 },
 
+  contactGrid: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+  },
+  contactBtn: {
+    flex: 1,
+    backgroundColor: "#0B100D",
+    borderWidth: 1,
+    borderColor: "#1F6B3B",
+    borderRadius: 15,
+    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  contactText: {
+    color: T.green,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  mapBtn: {
+    flex: 1,
+    backgroundColor: T.black,
+    borderWidth: 1,
+    borderColor: "#3F3210",
+    borderRadius: 15,
+    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  mapText: {
+    color: T.yellow,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+
   actions: { flexDirection: "row", gap: 10, marginTop: 15 },
   detailBtn: {
     flex: 1,
@@ -347,6 +559,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   detailText: { color: T.yellow, fontWeight: "900" },
+  trackBtn: {
+    width: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#1F6B3B",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   mainBtn: {
     flex: 1.5,
     backgroundColor: T.yellow,

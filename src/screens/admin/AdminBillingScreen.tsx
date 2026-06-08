@@ -46,11 +46,8 @@ export default function AdminBillingScreen({ navigation }: any) {
   const [billing, setBilling] = useState<any>(null);
   const [orders, setOrders] = useState<any[]>([]);
   const [riders, setRiders] = useState<any[]>([]);
-  const [vendors, setVendors] = useState<any[]>([]);
-
   const [filter, setFilter] = useState("THIS_MONTH");
   const [search, setSearch] = useState("");
-
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -67,13 +64,7 @@ export default function AdminBillingScreen({ navigation }: any) {
     msg: string,
     primaryText = "Done"
   ) => {
-    setMessage({
-      visible: true,
-      type,
-      title,
-      message: msg,
-      primaryText,
-    });
+    setMessage({ visible: true, type, title, message: msg, primaryText });
   };
 
   const closeMessage = () => {
@@ -81,41 +72,32 @@ export default function AdminBillingScreen({ navigation }: any) {
   };
 
   const loadBilling = useCallback(async () => {
-    const [billingRes, ordersRes, ridersRes, vendorsRes] = await Promise.all([
+    const [billingRes, ordersRes, ridersRes] = await Promise.all([
       adminService.monthlyBilling(),
       adminService.getOrders({}),
       adminService.riders(),
-      adminService.vendors?.() || Promise.resolve({ data: [], error: null }),
     ]);
 
-    if (billingRes.error) {
+    if (!billingRes.error) setBilling(billingRes.data || null);
+    else {
       showMessage(
         "warning",
         "Billing API Notice",
         billingRes.error.message ||
           "Monthly billing API did not return data. Showing calculated billing from orders."
       );
-    } else {
-      setBilling(billingRes.data || null);
     }
 
-    if (ordersRes.error) {
+    if (!ordersRes.error) setOrders(ordersRes.data || []);
+    else {
       showMessage(
         "error",
         "Unable to Load Orders",
         ordersRes.error.message || "Failed to load order billing."
       );
-    } else {
-      setOrders(ordersRes.data || []);
     }
 
-    if (!ridersRes.error) {
-      setRiders(ridersRes.data || []);
-    }
-
-    if (!vendorsRes.error) {
-      setVendors(vendorsRes.data || []);
-    }
+    if (!ridersRes.error) setRiders(ridersRes.data || []);
 
     setLoading(false);
     setRefreshing(false);
@@ -126,10 +108,7 @@ export default function AdminBillingScreen({ navigation }: any) {
   }, [loadBilling]);
 
   const filteredOrders = useMemo(() => {
-    let list = [...orders];
-
-    list = filterOrdersByPeriod(list, filter);
-
+    let list = filterOrdersByPeriod([...orders], filter);
     const q = search.trim().toLowerCase();
 
     if (q) {
@@ -173,17 +152,17 @@ export default function AdminBillingScreen({ navigation }: any) {
       riderPayout += Number(rider.totalDeliveryFee || 0);
     });
 
-    const netKartoIncome = kartoIncome - riderPayout;
-
     return {
       totalOrders: filteredOrders.length,
       delivered,
       cancelled,
       totalRevenue: billing?.totalRevenue ?? totalRevenue,
-      kartoIncome: billing?.kartoIncome ?? kartoIncome,
-      vendorPayout: billing?.vendorIncome ?? vendorPayout,
-      riderPayout: billing?.riderPayout ?? riderPayout,
-      netKartoIncome,
+      kartoIncome: billing?.platformCommission ?? billing?.kartoIncome ?? kartoIncome,
+      vendorPayout: billing?.vendorPayable ?? billing?.vendorIncome ?? vendorPayout,
+      riderPayout: billing?.riderPayable ?? riderPayout,
+      netKartoIncome:
+        (billing?.platformCommission ?? billing?.kartoIncome ?? kartoIncome) -
+        (billing?.riderPayable ?? riderPayout),
     };
   }, [filteredOrders, riders, billing]);
 
@@ -224,6 +203,11 @@ export default function AdminBillingScreen({ navigation }: any) {
     loadBilling();
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -254,7 +238,7 @@ export default function AdminBillingScreen({ navigation }: any) {
         ListHeaderComponent={
           <>
             <View style={styles.header}>
-              <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+              <TouchableOpacity style={styles.backBtn} onPress={goBack}>
                 <Icon name="chevron-back" size={24} color={THEME.text} />
               </TouchableOpacity>
 
@@ -265,6 +249,13 @@ export default function AdminBillingScreen({ navigation }: any) {
                   Vendor payouts, rider earnings and Karto income
                 </Text>
               </View>
+
+              <TouchableOpacity
+                style={styles.homeBtn}
+                onPress={() => navigation.navigate("AdminDashboard")}
+              >
+                <Icon name="home-outline" size={21} color="#000" />
+              </TouchableOpacity>
             </View>
 
             <View style={styles.heroCard}>
@@ -309,6 +300,13 @@ export default function AdminBillingScreen({ navigation }: any) {
                 icon="cash-outline"
                 green
               />
+            </View>
+
+            <View style={styles.quickRail}>
+              <QuickAction icon="receipt-outline" label="Orders" onPress={() => navigation.navigate("AdminOrders")} />
+              <QuickAction icon="storefront-outline" label="Vendors" onPress={() => navigation.navigate("AdminVendors")} />
+              <QuickAction icon="bicycle-outline" label="Riders" onPress={() => navigation.navigate("AdminRiders")} />
+              <QuickAction icon="bar-chart-outline" label="Analytics" onPress={() => navigation.navigate("AdminAnalytics")} />
             </View>
 
             <View style={styles.searchBox}>
@@ -440,6 +438,15 @@ function MiniStat({ label, value }: any) {
   );
 }
 
+function QuickAction({ icon, label, onPress }: any) {
+  return (
+    <TouchableOpacity style={styles.quickItem} onPress={onPress} activeOpacity={0.86}>
+      <Icon name={icon} size={21} color={THEME.yellow} />
+      <Text style={styles.quickText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function FinanceBox({ title, value, icon, green }: any) {
   return (
     <View style={styles.financeBox}>
@@ -499,8 +506,8 @@ function RiderBillingCard({ rider }: any) {
           </Text>
         </View>
 
-        <View style={styles.activePill}>
-          <Text style={styles.activePillText}>
+        <View style={rider.isActive === false ? styles.blockedPill : styles.activePill}>
+          <Text style={rider.isActive === false ? styles.blockedPillText : styles.activePillText}>
             {rider.isActive === false ? "Blocked" : "Active"}
           </Text>
         </View>
@@ -557,7 +564,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 36,
   },
-
   header: {
     paddingTop: 22,
     paddingBottom: 16,
@@ -572,6 +578,14 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -593,7 +607,6 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 12,
   },
-
   heroCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -655,7 +668,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 3,
   },
-
   financeGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -696,7 +708,26 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 5,
   },
-
+  quickRail: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  quickItem: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  quickText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: "900",
+    marginTop: 6,
+  },
   searchBox: {
     marginTop: 17,
     height: 54,
@@ -715,7 +746,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     fontSize: 14,
   },
-
   filterList: {
     maxHeight: 48,
     marginTop: 15,
@@ -742,7 +772,6 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: "#000",
   },
-
   sectionHeader: {
     marginTop: 24,
     marginBottom: 12,
@@ -759,7 +788,6 @@ const styles = StyleSheet.create({
     color: THEME.yellow,
     fontWeight: "900",
   },
-
   emptyBox: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -781,7 +809,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "700",
   },
-
   billingCard: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -852,7 +879,19 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "900",
   },
-
+  blockedPill: {
+    backgroundColor: "#251010",
+    borderColor: "#6B1F1F",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  blockedPillText: {
+    color: THEME.danger,
+    fontSize: 10,
+    fontWeight: "900",
+  },
   moneyRow: {
     flexDirection: "row",
     gap: 8,

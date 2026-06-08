@@ -1,51 +1,101 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import apiClient from "@/api/apiClient";
 
-const API_BASE_URL = "https://karto-backend-kor1.onrender.com/api";
+/* =====================================================
+   TYPES
+===================================================== */
+
+export type ApiResult<T> = {
+  data: T | null;
+  error: any | null;
+};
 
 export interface Category {
   id: string;
   category_name: string;
-  category_description: string;
-  image_url?: string;
+  category_description?: string | null;
+  image_url?: string | null;
+
+  name?: string | null;
+  description?: string | null;
+  imageUrl?: string | null;
 }
 
 export interface Restaurant {
   id: string;
+
   restaurant_name: string;
-  address: string;
-  phone: string;
-  email: string;
-  category_id: string;
-  image_url?: string;
-  rating: number;
-  total_reviews: number;
-  delivery_fee: number;
-  minimum_order: number;
-  delivery_time: string;
-  is_open: boolean;
-  is_featured: boolean;
+  name?: string | null;
+
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+
+  category_id?: string | null;
+  categoryId?: string | null;
+
+  image_url?: string | null;
+  imageUrl?: string | null;
+
+  rating?: number;
+  total_reviews?: number;
+  totalReviews?: number;
+
+  delivery_fee?: number;
+  deliveryFee?: number;
+
+  minimum_order?: number;
+  minimumOrder?: number;
+
+  delivery_time?: string;
+  deliveryTime?: string;
+
+  is_open?: boolean;
+  isOpen?: boolean;
+
+  is_featured?: boolean;
+  isFeatured?: boolean;
+
   isPureVeg?: boolean;
-  category?: Category;
+  is_pure_veg?: boolean;
+
+  category?: Category | null;
+
   menu_items?: MenuItem[];
+  menuItems?: MenuItem[];
 }
 
 export interface MenuItemAddon {
   id: string;
-  menuItemId?: string;
+  menuItemId?: string | null;
+  menu_item_id?: string | null;
+
   title: string;
+  name?: string | null;
+
   price: number;
+
   imageUrl?: string | null;
   image_url?: string | null;
+
   isActive?: boolean;
+  is_active?: boolean;
 }
 
 export interface MenuItemCustomization {
   id: string;
-  menuItemId?: string;
+  menuItemId?: string | null;
+  menu_item_id?: string | null;
+
   title: string;
+  name?: string | null;
+
   price: number;
+
   isRequired?: boolean;
+  is_required?: boolean;
+
   isActive?: boolean;
+  is_active?: boolean;
 }
 
 export interface MenuItemReview {
@@ -53,39 +103,62 @@ export interface MenuItemReview {
   rating: number;
   review?: string | null;
   isActive?: boolean;
+  is_active?: boolean;
   user?: {
     id?: string;
     fullName?: string | null;
     avatarUrl?: string | null;
-  };
+    avatar_url?: string | null;
+  } | null;
 }
 
 export interface MenuItem {
   id: string;
-  restaurant_id: string;
-  restaurantId?: string;
-  name: string;
-  description?: string;
-  price: number;
-  image_url?: string;
-  imageUrl?: string;
 
-  is_vegetarian: boolean;
+  restaurant_id: string;
+  restaurantId?: string | null;
+
+  restaurant?: Restaurant | null;
+
+  name: string;
+  description?: string | null;
+
+  price: number;
+  discountPrice?: number | null;
+  discount_price?: number | null;
+
+  image_url?: string | null;
+  imageUrl?: string | null;
+
+  is_vegetarian?: boolean;
   isVegetarian?: boolean;
   isVeg?: boolean;
-  is_popular: boolean;
+
+  is_popular?: boolean;
   isPopular?: boolean;
   isBestSeller?: boolean;
-  is_available: boolean;
+  is_best_seller?: boolean;
+
+  is_available?: boolean;
   isAvailable?: boolean;
 
-  category?: string;
+  category?: string | null;
+  categoryId?: string | null;
+  category_id?: string | null;
+  categoryName?: string | null;
+  category_name?: string | null;
+
   calories?: number | null;
   servingInfo?: string | null;
+  serving_info?: string | null;
   prepTimeMin?: number | null;
+  prep_time_min?: number | null;
   spiceLevel?: number | null;
+  spice_level?: number | null;
+
   rating?: number;
   totalReviews?: number;
+  total_reviews?: number;
 
   addons?: MenuItemAddon[];
   customizations?: MenuItemCustomization[];
@@ -94,17 +167,31 @@ export interface MenuItem {
 
 export interface CartItem {
   id: string;
-  user_id: string;
-  menu_item_id: string;
-  restaurant_id: string;
+
+  user_id?: string;
+  userId?: string;
+
+  menu_item_id?: string;
+  menuItemId?: string;
+
+  restaurant_id?: string;
+  restaurantId?: string;
+
   quantity: number;
   price: number;
-  total_price: number;
-  note?: string;
+  total_price?: number;
+  totalPrice?: number;
+
+  note?: string | null;
   customizationJson?: any;
+  customization_json?: any;
   addonJson?: any;
-  menu_item?: MenuItem;
-  restaurant?: Restaurant;
+  addon_json?: any;
+
+  menu_item?: MenuItem | null;
+  menuItem?: MenuItem | null;
+
+  restaurant?: Restaurant | null;
 }
 
 export interface Order {
@@ -118,449 +205,851 @@ export interface Order {
   created_at?: string;
 }
 
-type ApiResult<T> = Promise<{ data: T | null; error: any }>;
+/* =====================================================
+   HELPERS
+===================================================== */
 
-const getToken = async () => {
-  return (
-    (await AsyncStorage.getItem("accessToken")) ||
-    (await AsyncStorage.getItem("token")) ||
-    (await AsyncStorage.getItem("authToken"))
+const unwrap = (res: any) => res?.data ?? res;
+
+const getData = (res: any) => {
+  const json = unwrap(res);
+
+  return json?.data ?? json;
+};
+
+const getList = (res: any) => {
+  const data = getData(res);
+
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.restaurants)) return data.restaurants;
+  if (Array.isArray(data?.menuItems)) return data.menuItems;
+  if (Array.isArray(data?.menu_items)) return data.menu_items;
+  if (Array.isArray(data?.categories)) return data.categories;
+
+  return [];
+};
+
+const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
+  try {
+    const res = await fn();
+    return {
+      data: getData(res) as T,
+      error: null,
+    };
+  } catch (error: any) {
+    console.log(
+      "RESTAURANT SERVICE API ERROR:",
+      error?.response?.data || error?.message || error
+    );
+
+    return {
+      data: null,
+      error: error?.response?.data || error,
+    };
+  }
+};
+
+const safeMapped = async <T>(
+  fn: () => Promise<any>,
+  mapper: (value: any) => T
+): Promise<ApiResult<T>> => {
+  try {
+    const res = await fn();
+    return {
+      data: mapper(getData(res)),
+      error: null,
+    };
+  } catch (error: any) {
+    console.log(
+      "RESTAURANT SERVICE API ERROR:",
+      error?.response?.data || error?.message || error
+    );
+
+    return {
+      data: null,
+      error: error?.response?.data || error,
+    };
+  }
+};
+
+const safeMappedList = async <T>(
+  fn: () => Promise<any>,
+  mapper: (value: any) => T
+): Promise<ApiResult<T[]>> => {
+  try {
+    const res = await fn();
+    const list = getList(res);
+
+    return {
+      data: list.map(mapper),
+      error: null,
+    };
+  } catch (error: any) {
+    console.log(
+      "RESTAURANT SERVICE API ERROR:",
+      error?.response?.data || error?.message || error
+    );
+
+    return {
+      data: null,
+      error: error?.response?.data || error,
+    };
+  }
+};
+
+const n = (value: any, fallback = 0) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
+const b = (value: any, fallback = false) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+
+  return ["true", "1", "yes", "y", "on"].includes(
+    String(value).trim().toLowerCase()
   );
 };
 
-const apiRequest = async (path: string, options: RequestInit = {}) => {
-  const token = await getToken();
+const s = (value: any, fallback = "") =>
+  value === undefined || value === null ? fallback : String(value);
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
+/* =====================================================
+   MAPPERS
+===================================================== */
 
-  const json = await res.json().catch(() => null);
+export const mapCategory = (item: any): Category => ({
+  id: s(item?.id),
+  category_name: s(item?.category_name ?? item?.name),
+  category_description: item?.category_description ?? item?.description ?? null,
+  image_url: item?.image_url ?? item?.imageUrl ?? null,
 
-  if (!res.ok || json?.success === false) {
-    throw new Error(json?.message || "API request failed");
-  }
-
-  return json;
-};
-
-const mapCategory = (item: any): Category => ({
-  id: item?.id ?? "",
-  category_name: item?.category_name ?? item?.name ?? "",
-  category_description: item?.category_description ?? item?.description ?? "",
-  image_url: item?.image_url ?? item?.imageUrl ?? "",
+  name: item?.name ?? item?.category_name ?? null,
+  description: item?.description ?? item?.category_description ?? null,
+  imageUrl: item?.imageUrl ?? item?.image_url ?? null,
 });
 
-const mapAddon = (item: any): MenuItemAddon => ({
-  id: item?.id ?? "",
-  menuItemId: item?.menuItemId ?? item?.menu_item_id ?? "",
-  title: item?.title ?? "",
-  price: Number(item?.price ?? 0),
+export const mapAddon = (item: any): MenuItemAddon => ({
+  id: s(item?.id),
+  menuItemId: item?.menuItemId ?? item?.menu_item_id ?? null,
+  menu_item_id: item?.menu_item_id ?? item?.menuItemId ?? null,
+
+  title: s(item?.title ?? item?.name ?? "Add-on"),
+  name: item?.name ?? item?.title ?? null,
+
+  price: n(item?.price),
+
   imageUrl: item?.imageUrl ?? item?.image_url ?? null,
   image_url: item?.image_url ?? item?.imageUrl ?? null,
-  isActive: item?.isActive ?? item?.is_active ?? true,
+
+  isActive: b(item?.isActive ?? item?.is_active, true),
+  is_active: b(item?.is_active ?? item?.isActive, true),
 });
 
-const mapCustomization = (item: any): MenuItemCustomization => ({
-  id: item?.id ?? "",
-  menuItemId: item?.menuItemId ?? item?.menu_item_id ?? "",
-  title: item?.title ?? "",
-  price: Number(item?.price ?? 0),
-  isRequired: item?.isRequired ?? item?.is_required ?? false,
-  isActive: item?.isActive ?? item?.is_active ?? true,
+export const mapCustomization = (item: any): MenuItemCustomization => ({
+  id: s(item?.id),
+  menuItemId: item?.menuItemId ?? item?.menu_item_id ?? null,
+  menu_item_id: item?.menu_item_id ?? item?.menuItemId ?? null,
+
+  title: s(item?.title ?? item?.name ?? "Customization"),
+  name: item?.name ?? item?.title ?? null,
+
+  price: n(item?.price),
+
+  isRequired: b(item?.isRequired ?? item?.is_required, false),
+  is_required: b(item?.is_required ?? item?.isRequired, false),
+
+  isActive: b(item?.isActive ?? item?.is_active, true),
+  is_active: b(item?.is_active ?? item?.isActive, true),
 });
 
-const mapReview = (item: any): MenuItemReview => ({
-  id: item?.id ?? "",
-  rating: Number(item?.rating ?? 0),
+export const mapReview = (item: any): MenuItemReview => ({
+  id: s(item?.id),
+  rating: n(item?.rating),
   review: item?.review ?? null,
-  isActive: item?.isActive ?? item?.is_active ?? true,
-  user: item?.user,
+  isActive: b(item?.isActive ?? item?.is_active, true),
+  is_active: b(item?.is_active ?? item?.isActive, true),
+  user: item?.user
+    ? {
+        id: item.user.id,
+        fullName: item.user.fullName ?? item.user.full_name ?? null,
+        avatarUrl: item.user.avatarUrl ?? item.user.avatar_url ?? null,
+        avatar_url: item.user.avatar_url ?? item.user.avatarUrl ?? null,
+      }
+    : null,
 });
 
-const mapMenuItem = (item: any): MenuItem => ({
-  id: item?.id ?? "",
+export const mapRestaurant = (item: any): Restaurant => {
+  const name = item?.restaurant_name ?? item?.restaurantName ?? item?.name ?? "";
+
+  const restaurant: Restaurant = {
+    id: s(item?.id),
+
+    restaurant_name: s(name),
+    name: name || null,
+
+    address: item?.address ?? null,
+    phone: item?.phone ?? null,
+    email: item?.email ?? null,
+
+    category_id: item?.category_id ?? item?.categoryId ?? null,
+    categoryId: item?.categoryId ?? item?.category_id ?? null,
+
+    image_url: item?.image_url ?? item?.imageUrl ?? null,
+    imageUrl: item?.imageUrl ?? item?.image_url ?? null,
+
+    rating: n(item?.rating),
+    total_reviews: n(item?.total_reviews ?? item?.totalReviews),
+    totalReviews: n(item?.totalReviews ?? item?.total_reviews),
+
+    delivery_fee: n(item?.delivery_fee ?? item?.deliveryFee),
+    deliveryFee: n(item?.deliveryFee ?? item?.delivery_fee),
+
+    minimum_order: n(item?.minimum_order ?? item?.minimumOrder),
+    minimumOrder: n(item?.minimumOrder ?? item?.minimum_order),
+
+    delivery_time: s(item?.delivery_time ?? item?.deliveryTime ?? "30-45 mins"),
+    deliveryTime: s(item?.deliveryTime ?? item?.delivery_time ?? "30-45 mins"),
+
+    is_open: b(item?.is_open ?? item?.isOpen, true),
+    isOpen: b(item?.isOpen ?? item?.is_open, true),
+
+    is_featured: b(item?.is_featured ?? item?.isFeatured, false),
+    isFeatured: b(item?.isFeatured ?? item?.is_featured, false),
+
+    isPureVeg: b(item?.isPureVeg ?? item?.is_pure_veg, false),
+    is_pure_veg: b(item?.is_pure_veg ?? item?.isPureVeg, false),
+
+    category: item?.category ? mapCategory(item.category) : null,
+    menu_items: [],
+    menuItems: [],
+  };
+
+  const rawMenuItems = Array.isArray(item?.menu_items)
+    ? item.menu_items
+    : Array.isArray(item?.menuItems)
+    ? item.menuItems
+    : [];
+
+  restaurant.menu_items = rawMenuItems.map((menuItem: any) =>
+    mapMenuItem({
+      ...menuItem,
+      restaurantId: menuItem?.restaurantId ?? menuItem?.restaurant_id ?? restaurant.id,
+      restaurant_id: menuItem?.restaurant_id ?? menuItem?.restaurantId ?? restaurant.id,
+      restaurant,
+    })
+  );
+
+  restaurant.menuItems = restaurant.menu_items;
+
+  return restaurant;
+};
+
+export const mapMenuItem = (item: any): MenuItem => {
+  const restaurantId =
+    item?.restaurant_id ??
+    item?.restaurantId ??
+    item?.restaurant?.id ??
+    item?.vendorId ??
+    item?.vendor_id ??
+    "";
+
+  const isVegetarian = b(
+    item?.is_vegetarian ?? item?.isVegetarian ?? item?.isVeg,
+    false
+  );
+
+  const isPopular = b(
+    item?.is_popular ?? item?.isPopular ?? item?.isBestSeller ?? item?.is_best_seller,
+    false
+  );
+
+  const isAvailable = b(item?.is_available ?? item?.isAvailable, true);
+
+  const categoryName =
+    item?.categoryName ??
+    item?.category_name ??
+    (typeof item?.category === "string" ? item.category : item?.category?.name) ??
+    "";
+
+  return {
+    id: s(item?.id),
+
+    restaurant_id: s(restaurantId),
+    restaurantId: s(restaurantId),
+
+    restaurant: item?.restaurant ? mapRestaurant(item.restaurant) : null,
+
+    name: s(item?.name ?? item?.menuItem?.name ?? "Menu Item"),
+    description: item?.description ?? "",
+
+    price: n(item?.price),
+    discountPrice:
+      item?.discountPrice !== undefined || item?.discount_price !== undefined
+        ? n(item?.discountPrice ?? item?.discount_price)
+        : null,
+    discount_price:
+      item?.discount_price !== undefined || item?.discountPrice !== undefined
+        ? n(item?.discount_price ?? item?.discountPrice)
+        : null,
+
+    image_url: item?.image_url ?? item?.imageUrl ?? item?.image ?? null,
+    imageUrl: item?.imageUrl ?? item?.image_url ?? item?.image ?? null,
+
+    is_vegetarian: isVegetarian,
+    isVegetarian,
+    isVeg: isVegetarian,
+
+    is_popular: isPopular,
+    isPopular,
+    isBestSeller: b(item?.isBestSeller ?? item?.is_best_seller ?? isPopular, isPopular),
+    is_best_seller: b(item?.is_best_seller ?? item?.isBestSeller ?? isPopular, isPopular),
+
+    is_available: isAvailable,
+    isAvailable,
+
+    category: categoryName,
+    categoryId: item?.categoryId ?? item?.category_id ?? item?.category?.id ?? null,
+    category_id: item?.category_id ?? item?.categoryId ?? item?.category?.id ?? null,
+    categoryName: categoryName,
+    category_name: categoryName,
+
+    calories: item?.calories ?? null,
+    servingInfo: item?.servingInfo ?? item?.serving_info ?? null,
+    serving_info: item?.serving_info ?? item?.servingInfo ?? null,
+    prepTimeMin: item?.prepTimeMin ?? item?.prep_time_min ?? null,
+    prep_time_min: item?.prep_time_min ?? item?.prepTimeMin ?? null,
+    spiceLevel: item?.spiceLevel ?? item?.spice_level ?? null,
+    spice_level: item?.spice_level ?? item?.spiceLevel ?? null,
+
+    rating: n(item?.rating),
+    totalReviews: n(item?.totalReviews ?? item?.total_reviews),
+    total_reviews: n(item?.total_reviews ?? item?.totalReviews),
+
+    addons: Array.isArray(item?.addons) ? item.addons.map(mapAddon) : [],
+    customizations: Array.isArray(item?.customizations)
+      ? item.customizations.map(mapCustomization)
+      : [],
+    reviews: Array.isArray(item?.reviews) ? item.reviews.map(mapReview) : [],
+  };
+};
+
+export const mapCartItem = (item: any): CartItem => ({
+  id: s(item?.id),
+
+  user_id: item?.user_id ?? item?.userId ?? "",
+  userId: item?.userId ?? item?.user_id ?? "",
+
+  menu_item_id: item?.menu_item_id ?? item?.menuItemId ?? "",
+  menuItemId: item?.menuItemId ?? item?.menu_item_id ?? "",
+
   restaurant_id: item?.restaurant_id ?? item?.restaurantId ?? "",
   restaurantId: item?.restaurantId ?? item?.restaurant_id ?? "",
 
-  name: item?.name ?? item?.menuItem?.name ?? "",
-  description: item?.description ?? "",
-  price: Number(item?.price ?? 0),
+  quantity: n(item?.quantity, 1),
+  price: n(item?.price ?? item?.menuItem?.price ?? item?.menu_item?.price),
+  total_price: n(item?.total_price ?? item?.totalPrice),
+  totalPrice: n(item?.totalPrice ?? item?.total_price),
 
-  image_url: item?.image_url ?? item?.imageUrl ?? "",
-  imageUrl: item?.imageUrl ?? item?.image_url ?? "",
+  note: item?.note ?? null,
 
-  is_vegetarian:
-    item?.is_vegetarian ?? item?.isVegetarian ?? item?.isVeg ?? false,
-  isVegetarian:
-    item?.isVegetarian ?? item?.is_vegetarian ?? item?.isVeg ?? false,
-  isVeg: item?.isVeg ?? item?.is_vegetarian ?? item?.isVegetarian ?? false,
-
-  is_popular:
-    item?.is_popular ?? item?.isPopular ?? item?.isBestSeller ?? false,
-  isPopular: item?.isPopular ?? item?.is_popular ?? false,
-  isBestSeller: item?.isBestSeller ?? false,
-
-  is_available: item?.is_available ?? item?.isAvailable ?? true,
-  isAvailable: item?.isAvailable ?? item?.is_available ?? true,
-
-  category: item?.category ?? "",
-
-  calories: item?.calories ?? null,
-  servingInfo: item?.servingInfo ?? item?.serving_info ?? null,
-  prepTimeMin: item?.prepTimeMin ?? item?.prep_time_min ?? null,
-  spiceLevel: item?.spiceLevel ?? item?.spice_level ?? null,
-
-  rating: Number(item?.rating ?? 0),
-  totalReviews: Number(item?.totalReviews ?? item?.total_reviews ?? 0),
-
-  addons: Array.isArray(item?.addons) ? item.addons.map(mapAddon) : [],
-  customizations: Array.isArray(item?.customizations)
-    ? item.customizations.map(mapCustomization)
-    : [],
-  reviews: Array.isArray(item?.reviews) ? item.reviews.map(mapReview) : [],
-});
-
-const mapRestaurant = (item: any): Restaurant => ({
-  id: item?.id ?? "",
-  restaurant_name: item?.restaurant_name ?? item?.name ?? "",
-  address: item?.address ?? "",
-  phone: item?.phone ?? "",
-  email: item?.email ?? "",
-  category_id: item?.category_id ?? item?.categoryId ?? "",
-  image_url: item?.image_url ?? item?.imageUrl ?? "",
-  rating: Number(item?.rating ?? 0),
-  total_reviews: Number(item?.total_reviews ?? item?.totalReviews ?? 0),
-  delivery_fee: Number(item?.delivery_fee ?? item?.deliveryFee ?? 0),
-  minimum_order: Number(item?.minimum_order ?? item?.minimumOrder ?? 0),
-  delivery_time: item?.delivery_time ?? item?.deliveryTime ?? "30-45 mins",
-  is_open: item?.is_open ?? item?.isOpen ?? true,
-  is_featured: item?.is_featured ?? item?.isFeatured ?? false,
-  isPureVeg: item?.isPureVeg ?? item?.is_pure_veg ?? false,
-  category: item?.category ? mapCategory(item.category) : undefined,
-  menu_items: Array.isArray(item?.menu_items)
-    ? item.menu_items.map(mapMenuItem)
-    : Array.isArray(item?.menuItems)
-    ? item.menuItems.map(mapMenuItem)
-    : [],
-});
-
-const mapCartItem = (item: any): CartItem => ({
-  id: item?.id ?? "",
-  user_id: item?.user_id ?? item?.userId ?? "",
-  menu_item_id: item?.menu_item_id ?? item?.menuItemId ?? "",
-  restaurant_id: item?.restaurant_id ?? item?.restaurantId ?? "",
-  quantity: Number(item?.quantity ?? 1),
-  price: Number(item?.price ?? item?.menuItem?.price ?? 0),
-  total_price: Number(item?.total_price ?? item?.totalPrice ?? 0),
-  note: item?.note ?? "",
   customizationJson: item?.customizationJson ?? item?.customization_json ?? null,
+  customization_json: item?.customization_json ?? item?.customizationJson ?? null,
+
   addonJson: item?.addonJson ?? item?.addon_json ?? null,
+  addon_json: item?.addon_json ?? item?.addonJson ?? null,
+
   menu_item: item?.menu_item
     ? mapMenuItem(item.menu_item)
     : item?.menuItem
     ? mapMenuItem(item.menuItem)
-    : undefined,
-  restaurant: item?.restaurant ? mapRestaurant(item.restaurant) : undefined,
+    : null,
+
+  menuItem: item?.menuItem
+    ? mapMenuItem(item.menuItem)
+    : item?.menu_item
+    ? mapMenuItem(item.menu_item)
+    : null,
+
+  restaurant: item?.restaurant ? mapRestaurant(item.restaurant) : null,
 });
 
+/* =====================================================
+   RESTAURANT SERVICE
+===================================================== */
+
 class RestaurantService {
-  async getCategories(): ApiResult<Category[]> {
-    try {
-      const json = await apiRequest("/categories");
-      return { data: (json.data || []).map(mapCategory), error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  /* ---------- Categories ---------- */
+
+  async getCategories(): Promise<ApiResult<Category[]>> {
+    return safeMappedList(() => apiClient.get("/categories"), mapCategory);
   }
 
-  async getFeaturedRestaurants(): ApiResult<Restaurant[]> {
-    try {
-      const json = await apiRequest("/restaurants/featured");
-      return { data: (json.data || []).map(mapRestaurant), error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  /* ---------- Restaurants ---------- */
+
+  async getFeaturedRestaurants(): Promise<ApiResult<Restaurant[]>> {
+    return safeMappedList(
+      () => apiClient.get("/restaurants/featured"),
+      mapRestaurant
+    );
   }
 
-  async getRestaurantsByCategory(categoryId: string): ApiResult<Restaurant[]> {
-    try {
-      const json = await apiRequest(`/restaurants/category/${categoryId}`);
-      return { data: (json.data || []).map(mapRestaurant), error: null };
-    } catch (error) {
-      return { data: null, error };
+  async getRestaurantsByCategory(categoryId: string): Promise<ApiResult<Restaurant[]>> {
+    if (!categoryId) {
+      return { data: [], error: null };
     }
+
+    return safeMappedList(
+      () => apiClient.get(`/restaurants/category/${categoryId}`),
+      mapRestaurant
+    );
   }
 
-  async searchRestaurants(query: string): ApiResult<Restaurant[]> {
-    try {
-      const json = await apiRequest(
-        `/restaurants/search?q=${encodeURIComponent(query)}`
-      );
-      return { data: (json.data || []).map(mapRestaurant), error: null };
-    } catch (error) {
-      return { data: null, error };
+  async getRestaurantById(id: string): Promise<ApiResult<Restaurant>> {
+    if (!id) {
+      return {
+        data: null,
+        error: { message: "Restaurant id is required" },
+      };
     }
+
+    return safeMapped(() => apiClient.get(`/restaurants/${id}`), mapRestaurant);
   }
 
-  async getRestaurantById(id: string): ApiResult<Restaurant> {
-    try {
-      const json = await apiRequest(`/restaurants/${id}`);
-      return { data: mapRestaurant(json.data), error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  async getAllRestaurants(): Promise<ApiResult<Restaurant[]>> {
+    /*
+      NOTE:
+      server.js me /restaurants route nahi dikh raha tha.
+      Isliye pehle /restaurants try karega.
+      Agar backend route missing hai to featured restaurants fallback.
+    */
+    const result = await safeMappedList(() => apiClient.get("/restaurants"), mapRestaurant);
+
+    if (!result.error) return result;
+
+    return this.getFeaturedRestaurants();
   }
 
-  async getMenuItems(restaurantId: string): ApiResult<MenuItem[]> {
-    try {
-      const json = await apiRequest(`/restaurants/${restaurantId}/menu`);
-      return { data: (json.data || []).map(mapMenuItem), error: null };
-    } catch (error) {
-      try {
-        const restaurantRes = await this.getRestaurantById(restaurantId);
-        return { data: restaurantRes.data?.menu_items || [], error: null };
-      } catch (fallbackError) {
-        return { data: null, error: fallbackError };
+  async searchRestaurants(query: string): Promise<ApiResult<Restaurant[]>> {
+    const q = String(query || "").trim();
+
+    if (!q) {
+      return this.getAllRestaurants();
+    }
+
+    /*
+      Backend me /restaurants/search route abhi missing ho sakta hai.
+      Pehle API try, fallback me client-side search.
+    */
+    const apiSearch = await safeMappedList(
+      () => apiClient.get(`/restaurants/search?q=${encodeURIComponent(q)}`),
+      mapRestaurant
+    );
+
+    if (!apiSearch.error) return apiSearch;
+
+    const all = await this.getAllRestaurants();
+
+    if (all.error || !all.data) {
+      return { data: [], error: all.error };
+    }
+
+    const lower = q.toLowerCase();
+
+    return {
+      data: all.data.filter(restaurant => {
+        const searchable = [
+          restaurant.restaurant_name,
+          restaurant.name,
+          restaurant.address,
+          restaurant.category?.category_name,
+          restaurant.category?.name,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchable.includes(lower);
+      }),
+      error: null,
+    };
+  }
+
+  /* ---------- Menu ---------- */
+
+  async getMenuItems(restaurantId: string): Promise<ApiResult<MenuItem[]>> {
+    if (!restaurantId) {
+      return { data: [], error: null };
+    }
+
+    /*
+      Backend me /restaurants/:id/menu route ho to use karega.
+      Agar missing hai to /restaurants/:id se menuItems fallback.
+    */
+    const direct = await safeMappedList(
+      () => apiClient.get(`/restaurants/${restaurantId}/menu`),
+      mapMenuItem
+    );
+
+    if (!direct.error && direct.data) {
+      return direct;
+    }
+
+    const restaurantRes = await this.getRestaurantById(restaurantId);
+
+    return {
+      data: restaurantRes.data?.menu_items || restaurantRes.data?.menuItems || [],
+      error: restaurantRes.error,
+    };
+  }
+
+  async getGroupedMenuItems(restaurantId: string): Promise<
+    ApiResult<
+      {
+        title: string;
+        categoryId?: string | null;
+        items: MenuItem[];
+      }[]
+    >
+  > {
+    const result = await this.getMenuItems(restaurantId);
+
+    if (result.error || !result.data) {
+      return { data: [], error: result.error };
+    }
+
+    const map = new Map<string, { title: string; categoryId?: string | null; items: MenuItem[] }>();
+
+    const recommended = result.data.filter(
+      item => item.isPopular || item.is_popular || item.isBestSeller || item.is_best_seller
+    );
+
+    if (recommended.length) {
+      map.set("Recommended", {
+        title: "Recommended",
+        categoryId: "recommended",
+        items: recommended,
+      });
+    }
+
+    result.data.forEach(item => {
+      const title =
+        item.categoryName ||
+        item.category_name ||
+        item.category ||
+        "Menu";
+
+      const key = String(title || "Menu");
+
+      if (!map.has(key)) {
+        map.set(key, {
+          title: key,
+          categoryId: item.categoryId || item.category_id || null,
+          items: [],
+        });
       }
-    }
+
+      map.get(key)?.items.push(item);
+    });
+
+    return {
+      data: Array.from(map.values()),
+      error: null,
+    };
   }
 
-  async getMenuItemById(itemId: string): ApiResult<MenuItem> {
-    try {
-      const json = await apiRequest(`/menu-items/${itemId}`);
-      return { data: mapMenuItem(json.data), error: null };
-    } catch (error) {
-      return { data: null, error };
+  async getMenuItemById(itemId: string): Promise<ApiResult<MenuItem>> {
+    if (!itemId) {
+      return {
+        data: null,
+        error: { message: "Menu item id is required" },
+      };
     }
+
+    return safeMapped(() => apiClient.get(`/menu-items/${itemId}`), mapMenuItem);
   }
 
-  async getAllRestaurants(): ApiResult<Restaurant[]> {
-    try {
-      const json = await apiRequest("/restaurants");
-      return { data: (json.data || []).map(mapRestaurant), error: null };
-    } catch (error) {
-      return { data: null, error };
+  /* ---------- Favorites - CORRECT BACKEND ROUTE: /favorite ---------- */
+
+  async toggleRestaurantFavorite(restaurantId: string) {
+    if (!restaurantId) {
+      return { data: null, error: { message: "Restaurant id is required" } };
     }
+
+    return safe<any>(() => apiClient.post(`/favorite/restaurant/${restaurantId}`));
   }
 
   async addToFavorites(restaurantId: string) {
-    try {
-      const json = await apiRequest(`/favorites/restaurant/${restaurantId}`, {
-        method: "POST",
-      });
-      return { data: json.data, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    return this.toggleRestaurantFavorite(restaurantId);
   }
 
   async removeFromFavorites(restaurantId: string) {
-    try {
-      const json = await apiRequest(`/favorites/restaurant/${restaurantId}`, {
-        method: "DELETE",
-      });
-      return { data: json.data, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    /*
+      Backend toggle route POST hi use kar raha hai.
+      Favorite exists ho to remove, nahi ho to add.
+    */
+    return this.toggleRestaurantFavorite(restaurantId);
   }
 
-  async isFavorite(restaurantId: string) {
-    try {
-      const json = await apiRequest(`/favorites/restaurant/${restaurantId}/status`);
-      return { data: !!json.isFavorite, error: null };
-    } catch {
+  async isFavorite(restaurantId: string): Promise<ApiResult<boolean>> {
+    if (!restaurantId) {
       return { data: false, error: null };
     }
+
+    const result = await safe<any>(() =>
+      apiClient.get(`/favorite/restaurant/${restaurantId}/status`)
+    );
+
+    return {
+      data: Boolean(
+        result.data?.isFavorite ??
+          result.data?.is_favorite ??
+          result.data?.data?.isFavorite ??
+          false
+      ),
+      error: result.error,
+    };
   }
 
-  async getUserFavorites(): ApiResult<Restaurant[]> {
-    try {
-      const json = await apiRequest("/favorites");
-      const restaurants = json.data?.restaurants || json.restaurants || json.data || [];
-      return { data: restaurants.map(mapRestaurant), error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  async getUserFavorites(): Promise<ApiResult<Restaurant[]>> {
+    const result = await safe<any>(() => apiClient.get("/favorite"));
+
+    if (result.error) return { data: [], error: result.error };
+
+    const restaurants =
+      result.data?.restaurants ||
+      result.data?.data?.restaurants ||
+      [];
+
+    return {
+      data: Array.isArray(restaurants)
+        ? restaurants.map((fav: any) => mapRestaurant(fav.restaurant || fav))
+        : [],
+      error: null,
+    };
   }
+
+  /* ---------- Menu Item Favorites - CORRECT BACKEND ROUTE: /favorite ---------- */
 
   async toggleMenuItemFavorite(menuItemId: string) {
-    try {
-      const json = await apiRequest(`/favorites/item/${menuItemId}`, {
-        method: "POST",
-      });
-      return { data: json, error: null };
-    } catch (error) {
-      return { data: null, error };
+    if (!menuItemId) {
+      return { data: null, error: { message: "Menu item id is required" } };
     }
+
+    return safe<any>(() => apiClient.post(`/favorite/item/${menuItemId}`));
   }
 
-  async isMenuItemFavorite(menuItemId: string) {
-    try {
-      const json = await apiRequest(`/favorites/item/${menuItemId}/status`);
-      return { data: !!json.isFavorite, error: null };
-    } catch {
+  async toggleItemFavorite(menuItemId: string) {
+    return this.toggleMenuItemFavorite(menuItemId);
+  }
+
+  async isMenuItemFavorite(menuItemId: string): Promise<ApiResult<boolean>> {
+    if (!menuItemId) {
       return { data: false, error: null };
     }
+
+    const result = await safe<any>(() =>
+      apiClient.get(`/favorite/item/${menuItemId}/status`)
+    );
+
+    return {
+      data: Boolean(
+        result.data?.isFavorite ??
+          result.data?.is_favorite ??
+          result.data?.data?.isFavorite ??
+          false
+      ),
+      error: result.error,
+    };
   }
 
+  async isItemFavorite(menuItemId: string) {
+    return this.isMenuItemFavorite(menuItemId);
+  }
+
+  /* ---------- Recently Viewed ---------- */
+
   async saveRecentlyViewed(menuItemId: string) {
-    try {
-      const json = await apiRequest(`/recently-viewed/${menuItemId}`, {
-        method: "POST",
-      });
-      return { data: json.data, error: null };
-    } catch (error) {
-      return { data: null, error };
+    if (!menuItemId) {
+      return { data: null, error: { message: "Menu item id is required" } };
     }
+
+    return safe<any>(() => apiClient.post(`/recently-viewed/${menuItemId}`));
+  }
+
+  async getRecentlyViewed(): Promise<ApiResult<MenuItem[]>> {
+    const result = await safe<any>(() => apiClient.get("/recently-viewed"));
+
+    if (result.error) return { data: [], error: result.error };
+
+    const items =
+      result.data?.items ||
+      result.data?.data?.items ||
+      result.data ||
+      [];
+
+    return {
+      data: Array.isArray(items)
+        ? items.map((view: any) => mapMenuItem(view.menuItem || view.menu_item || view))
+        : [],
+      error: null,
+    };
+  }
+
+  async removeRecentlyViewed(menuItemId: string) {
+    if (!menuItemId) {
+      return { data: null, error: { message: "Menu item id is required" } };
+    }
+
+    return safe<any>(() => apiClient.delete(`/recently-viewed/${menuItemId}`));
+  }
+
+  async clearRecentlyViewed() {
+    return safe<any>(() => apiClient.delete("/recently-viewed"));
   }
 }
 
 export const restaurantService = new RestaurantService();
 
-class CartService {
-  async addToCart(
-    menuItemId: string,
-    restaurantId: string,
-    quantity: number = 1,
-    note?: string,
-    customizationIds: string[] = [],
-    addonIds: string[] = []
-  ) {
-    try {
-      const json = await apiRequest("/cart/add", {
-        method: "POST",
-        body: JSON.stringify({
-          menuItemId,
-          restaurantId,
-          quantity,
-          note,
-          customizationIds,
-          addonIds,
-        }),
-      });
+/* =====================================================
+   COMPAT CART SERVICE
+   NOTE:
+   Agar tumhare paas separate cartService.ts hai to usi ko primary rakho.
+   Ye compatibility ke liye yahan safe version hai.
+===================================================== */
 
-      return { data: json.data ? mapCartItem(json.data) : null, error: null };
-    } catch (error: any) {
-      if (
-        error.message?.toLowerCase()?.includes("different") ||
-        error.message?.toLowerCase()?.includes("one restaurant") ||
-        error.message?.toLowerCase()?.includes("one store")
-      ) {
-        return { data: null, error: "DIFFERENT_RESTAURANT" };
-      }
-      return { data: null, error };
-    }
+class CompatCartService {
+  async addToCart(payloadOrMenuItemId: any, restaurantId?: string, quantity = 1, note?: string) {
+    const payload =
+      typeof payloadOrMenuItemId === "string"
+        ? {
+            menuItemId: payloadOrMenuItemId,
+            restaurantId,
+            quantity,
+            note: note || null,
+            customizationIds: [],
+            addonIds: [],
+          }
+        : {
+            menuItemId: payloadOrMenuItemId?.menuItemId,
+            restaurantId: payloadOrMenuItemId?.restaurantId,
+            quantity: payloadOrMenuItemId?.quantity ?? 1,
+            note: payloadOrMenuItemId?.note ?? null,
+            customizationIds: payloadOrMenuItemId?.customizationIds ?? [],
+            addonIds: payloadOrMenuItemId?.addonIds ?? [],
+          };
+
+    const result = await safe<any>(() => apiClient.post("/cart/add", payload));
+
+    if (result.error) return result;
+
+    return {
+      data: result.data ? mapCartItem(result.data?.cartItem || result.data) : null,
+      error: null,
+    };
   }
 
-  async getCartItems(): ApiResult<CartItem[]> {
-    try {
-      const json = await apiRequest("/cart");
-      const rawItems = Array.isArray(json.data)
-        ? json.data
-        : json.data?.items || [];
-      return { data: rawItems.map(mapCartItem), error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  async getCartItems(): Promise<ApiResult<CartItem[]>> {
+    const result = await safe<any>(() => apiClient.get("/cart"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    const rawItems = Array.isArray(result.data)
+      ? result.data
+      : result.data?.items || result.data?.cartItems || [];
+
+    return {
+      data: Array.isArray(rawItems) ? rawItems.map(mapCartItem) : [],
+      error: null,
+    };
   }
 
   async updateCartItem(cartItemId: string, quantity: number) {
-    try {
-      const json = await apiRequest(`/cart/${cartItemId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ quantity }),
-      });
-      return { data: json.data ? mapCartItem(json.data) : null, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    return safe<any>(() =>
+      apiClient.patch(`/cart/${cartItemId}`, {
+        quantity,
+      })
+    );
   }
 
   async removeFromCart(cartItemId: string) {
-    try {
-      const json = await apiRequest(`/cart/${cartItemId}`, { method: "DELETE" });
-      return { data: json.data || true, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    return safe<any>(() => apiClient.delete(`/cart/${cartItemId}`));
   }
 
   async clearCart() {
-    try {
-      const json = await apiRequest("/cart", { method: "DELETE" });
-      return { data: json.data || true, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    return safe<any>(() => apiClient.delete("/cart"));
   }
 
   async getCartTotal() {
-    try {
-      const cart = await this.getCartItems();
-      if (cart.error) return { data: null, error: cart.error };
+    const result = await safe<any>(() => apiClient.get("/cart/total"));
 
-      const items = cart.data || [];
-      const total = items.reduce(
-        (sum, item) => sum + Number(item.total_price || 0),
-        0
-      );
-      const itemCount = items.reduce(
-        (sum, item) => sum + Number(item.quantity || 0),
-        0
-      );
+    if (!result.error) return result;
 
-      return { data: { total, itemCount }, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    const cart = await this.getCartItems();
+
+    if (cart.error) return { data: null, error: cart.error };
+
+    const items = cart.data || [];
+    const total = items.reduce(
+      (sum, item) => sum + n(item.total_price ?? item.totalPrice),
+      0
+    );
+
+    const itemCount = items.reduce(
+      (sum, item) => sum + n(item.quantity),
+      0
+    );
+
+    return {
+      data: {
+        total,
+        itemCount,
+      },
+      error: null,
+    };
   }
 }
 
-export const cartService = new CartService();
+export const cartService = new CompatCartService();
 
-class OrderService {
+/* =====================================================
+   COMPAT ORDER SERVICE
+   NOTE:
+   Agar separate orderService.ts use kar rahe ho to usko primary rakho.
+===================================================== */
+
+class CompatOrderService {
   async createOrder(payload: {
     addressId?: string | null;
     paymentMethod?: "COD" | "ONLINE" | "UPI" | "CARD" | "WALLET";
-    customerNote?: string;
-    couponCode?: string;
-  }): ApiResult<Order> {
-    try {
-      const json = await apiRequest("/orders", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-
-      return { data: json.data, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+    customerNote?: string | null;
+    couponCode?: string | null;
+  }): Promise<ApiResult<Order>> {
+    return safe<Order>(() => apiClient.post("/orders", payload));
   }
 
-  async myOrders(): ApiResult<Order[]> {
-    try {
-      const json = await apiRequest("/orders/my");
-      return { data: json.data || [], error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  async myOrders(): Promise<ApiResult<Order[]>> {
+    const result = await safe<any>(() => apiClient.get("/orders/my"));
+
+    if (result.error) return { data: [], error: result.error };
+
+    const orders = Array.isArray(result.data)
+      ? result.data
+      : result.data?.orders || [];
+
+    return {
+      data: orders,
+      error: null,
+    };
   }
 
-  async getOrderById(orderId: string): ApiResult<Order> {
-    try {
-      const json = await apiRequest(`/orders/${orderId}`);
-      return { data: json.data, error: null };
-    } catch (error) {
-      return { data: null, error };
-    }
+  async getOrderById(orderId: string): Promise<ApiResult<Order>> {
+    return safe<Order>(() => apiClient.get(`/orders/${orderId}`));
   }
 }
 
-export const orderService = new OrderService();
+export const orderService = new CompatOrderService();
+
+export default restaurantService;

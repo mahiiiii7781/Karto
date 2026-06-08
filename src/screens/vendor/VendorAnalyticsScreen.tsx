@@ -40,6 +40,8 @@ type Summary = Pick<
   | "averageOrderValue"
   | "lifetimeRevenue"
   | "totalOrders"
+  | "totalMenuItems"
+  | "pendingOrders"
 >;
 
 type GraphItem = VendorEarningGraphItem;
@@ -50,11 +52,12 @@ const normalizeGraph = (items: GraphItem[] = []) => {
   return items.map((item, index) => ({
     date: item?.date || String(index),
     label: item?.label || item?.date || `D${index + 1}`,
-    earnings: Number(item?.earnings || 0),
+    earnings: Number(item?.earnings ?? item?.revenue ?? 0),
+    revenue: Number(item?.revenue ?? item?.earnings ?? 0),
   }));
 };
 
-export default function VendorAnalyticsScreen() {
+export default function VendorAnalyticsScreen({ navigation }: any) {
   const [summary, setSummary] = useState<Summary>({} as Summary);
   const [graph, setGraph] = useState<GraphItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,47 +74,53 @@ export default function VendorAnalyticsScreen() {
     toastTimer.current = setTimeout(() => setToast(""), 2200);
   }, []);
 
-  const loadAnalytics = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+  const loadAnalytics = useCallback(
+    async (silent = false) => {
+      if (!silent) setLoading(true);
 
-    const [dashboardRes, graphRes] = await Promise.all([
-      vendorService.getDashboard(),
-      vendorService.getEarningsGraph(),
-    ]);
+      const [dashboardRes, graphRes] = await Promise.all([
+        vendorService.getDashboard(),
+        vendorService.getEarningsGraph(),
+      ]);
 
-    if (!mounted.current) return;
+      if (!mounted.current) return;
 
-    if (dashboardRes.error) {
-      setSummary({} as Summary);
-      showToast(dashboardRes.error?.message || "Failed to load analytics");
-    } else if (dashboardRes.data) {
-      const dashboard = dashboardRes.data;
-      setSummary({
-        todayOrders: dashboard.todayOrders || 0,
-        todayRevenue: dashboard.todayRevenue || 0,
-        monthlyOrders: dashboard.monthlyOrders || 0,
-        monthlyRevenue: dashboard.monthlyRevenue || 0,
-        activeOrders: dashboard.activeOrders || 0,
-        completedOrders: dashboard.completedOrders || 0,
-        cancelledOrders: dashboard.cancelledOrders || 0,
-        averageOrderValue: dashboard.averageOrderValue || 0,
-        lifetimeRevenue: dashboard.lifetimeRevenue || 0,
-        totalOrders: dashboard.totalOrders || 0,
-      });
-    }
+      if (dashboardRes.error) {
+        setSummary({} as Summary);
+        showToast(dashboardRes.error.message || "Failed to load analytics");
+      } else if (dashboardRes.data) {
+        const dashboard = dashboardRes.data;
 
-    if (graphRes.error) {
-      setGraph([]);
-      if (!dashboardRes.error) {
-        showToast(graphRes.error?.message || "Earnings graph not available");
+        setSummary({
+          todayOrders: Number(dashboard.todayOrders || 0),
+          todayRevenue: Number(dashboard.todayRevenue || 0),
+          monthlyOrders: Number(dashboard.monthlyOrders || 0),
+          monthlyRevenue: Number(dashboard.monthlyRevenue || 0),
+          activeOrders: Number(dashboard.activeOrders || 0),
+          pendingOrders: Number(dashboard.pendingOrders || 0),
+          completedOrders: Number(dashboard.completedOrders || 0),
+          cancelledOrders: Number(dashboard.cancelledOrders || 0),
+          averageOrderValue: Number(dashboard.averageOrderValue || 0),
+          lifetimeRevenue: Number(dashboard.lifetimeRevenue || dashboard.revenue || 0),
+          totalOrders: Number(dashboard.totalOrders || 0),
+          totalMenuItems: Number(dashboard.totalMenuItems || 0),
+        });
       }
-    } else {
-      setGraph(normalizeGraph(graphRes.data || []));
-    }
 
-    setLoading(false);
-    setRefreshing(false);
-  }, [showToast]);
+      if (graphRes.error) {
+        setGraph([]);
+        if (!dashboardRes.error) {
+          showToast(graphRes.error.message || "Earnings graph not available");
+        }
+      } else {
+        setGraph(normalizeGraph(graphRes.data || []));
+      }
+
+      setLoading(false);
+      setRefreshing(false);
+    },
+    [showToast]
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -124,10 +133,12 @@ export default function VendorAnalyticsScreen() {
   }, [loadAnalytics]);
 
   const insight = useMemo(() => {
-    const monthlyRevenue = Number(summary?.monthlyRevenue || 0);
-    const monthlyOrders = Number(summary?.monthlyOrders || 0);
-    const cancelled = Number(summary?.cancelledOrders || 0);
-    const completed = Number(summary?.completedOrders || 0);
+    const monthlyRevenue = Number(summary.monthlyRevenue || 0);
+    const monthlyOrders = Number(summary.monthlyOrders || 0);
+    const todayRevenue = Number(summary.todayRevenue || 0);
+    const todayOrders = Number(summary.todayOrders || 0);
+    const cancelled = Number(summary.cancelledOrders || 0);
+    const completed = Number(summary.completedOrders || 0);
     const totalClosed = completed + cancelled;
     const cancelRate = totalClosed ? (cancelled / totalClosed) * 100 : 0;
 
@@ -140,13 +151,17 @@ export default function VendorAnalyticsScreen() {
       ? graph.reduce((sum, item) => sum + Number(item.earnings || 0), 0) / graph.length
       : 0;
 
+    const todayAov = todayOrders ? todayRevenue / todayOrders : 0;
+    const healthScore = Math.max(0, Math.min(100, 100 - Math.round(cancelRate)));
+
     return {
       monthlyRevenue,
       monthlyOrders,
+      todayAov,
       cancelRate,
       bestDay,
       avgDailyRevenue,
-      healthScore: Math.max(0, 100 - Math.round(cancelRate)),
+      healthScore,
     };
   }, [summary, graph]);
 
@@ -185,6 +200,14 @@ export default function VendorAnalyticsScreen() {
         }
       >
         <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backBtn}
+            activeOpacity={0.85}
+            onPress={() => navigation?.goBack?.()}
+          >
+            <Icon name="arrow-back" size={21} color={THEME.text} />
+          </TouchableOpacity>
+
           <View style={{ flex: 1 }}>
             <Text style={styles.kicker}>Vendor Panel</Text>
             <Text style={styles.title}>Analytics</Text>
@@ -207,9 +230,10 @@ export default function VendorAnalyticsScreen() {
         <View style={styles.heroCard}>
           <View style={{ flex: 1 }}>
             <Text style={styles.heroLabel}>Monthly Revenue</Text>
-            <Text style={styles.heroValue}>{money(summary?.monthlyRevenue, 2)}</Text>
+            <Text style={styles.heroValue}>{money(summary.monthlyRevenue, 2)}</Text>
             <Text style={styles.heroSub}>
-              {summary?.monthlyOrders || 0} monthly orders • Avg {money(summary?.averageOrderValue, 0)}
+              {summary.monthlyOrders || 0} monthly orders • Avg{" "}
+              {money(summary.averageOrderValue, 0)}
             </Text>
           </View>
 
@@ -219,17 +243,19 @@ export default function VendorAnalyticsScreen() {
         </View>
 
         <View style={styles.grid}>
-          <StatCard icon="receipt-outline" label="Today Orders" value={summary?.todayOrders || 0} />
-          <StatCard icon="cash-outline" label="Today Revenue" value={money(summary?.todayRevenue)} />
-          <StatCard icon="flame-outline" label="Active Orders" value={summary?.activeOrders || 0} />
-          <StatCard icon="checkmark-done-outline" label="Completed" value={summary?.completedOrders || 0} />
+          <StatCard icon="receipt-outline" label="Today Orders" value={summary.todayOrders || 0} />
+          <StatCard icon="cash-outline" label="Today Revenue" value={money(summary.todayRevenue)} />
+          <StatCard icon="time-outline" label="Pending Orders" value={summary.pendingOrders || 0} />
+          <StatCard icon="flame-outline" label="Active Orders" value={summary.activeOrders || 0} />
+          <StatCard icon="checkmark-done-outline" label="Completed" value={summary.completedOrders || 0} />
+          <StatCard icon="fast-food-outline" label="Menu Items" value={summary.totalMenuItems || 0} />
         </View>
 
         <View style={styles.chartCard}>
           <View style={styles.sectionRow}>
             <View>
-              <Text style={styles.sectionTitle}>Earnings Graph</Text>
-              <Text style={styles.sectionSub}>Tap a bar to see day revenue.</Text>
+              <Text style={styles.sectionTitle}>Revenue Graph</Text>
+              <Text style={styles.sectionSub}>Last 7 days earnings. Tap a bar.</Text>
             </View>
             <Icon name="bar-chart-outline" size={24} color={THEME.green} />
           </View>
@@ -238,10 +264,16 @@ export default function VendorAnalyticsScreen() {
             <View style={styles.emptyChart}>
               <Icon name="bar-chart-outline" size={44} color={THEME.yellow} />
               <Text style={styles.emptyTitle}>No earnings yet</Text>
-              <Text style={styles.emptyText}>Graph will update after delivered orders arrive.</Text>
+              <Text style={styles.emptyText}>
+                Graph will update after delivered orders arrive.
+              </Text>
             </View>
           ) : (
-            <BarGraph graph={graph} selectedIndex={selectedIndex} onSelect={setSelectedIndex} />
+            <BarGraph
+              graph={graph}
+              selectedIndex={selectedIndex}
+              onSelect={setSelectedIndex}
+            />
           )}
         </View>
 
@@ -249,9 +281,15 @@ export default function VendorAnalyticsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.scoreLabel}>Business Health</Text>
             <Text style={styles.scoreTitle}>
-              {insight.healthScore < 80 ? "Needs Attention" : "Healthy"}
+              {insight.healthScore < 70
+                ? "Needs Attention"
+                : insight.healthScore < 85
+                ? "Good"
+                : "Healthy"}
             </Text>
-            <Text style={styles.scoreSub}>Cancel rate: {insight.cancelRate.toFixed(1)}%</Text>
+            <Text style={styles.scoreSub}>
+              Cancel rate: {insight.cancelRate.toFixed(1)}%
+            </Text>
           </View>
 
           <View style={styles.scoreCircle}>
@@ -263,15 +301,41 @@ export default function VendorAnalyticsScreen() {
         <View style={styles.insightCard}>
           <Text style={styles.sectionTitle}>Business Insights</Text>
 
-          <InsightRow icon="flash-outline" title="Active Orders" value={`${summary?.activeOrders || 0} running now`} />
+          <InsightRow
+            icon="flash-outline"
+            title="Active Orders"
+            value={`${summary.activeOrders || 0} running now`}
+          />
           <InsightRow
             icon="trophy-outline"
             title="Best Day"
-            value={insight.bestDay ? `${insight.bestDay.label} • ${money(insight.bestDay.earnings)}` : "No data yet"}
+            value={
+              insight.bestDay
+                ? `${insight.bestDay.label} • ${money(insight.bestDay.earnings)}`
+                : "No data yet"
+            }
           />
-          <InsightRow icon="analytics-outline" title="Average Order Value" value={money(summary?.averageOrderValue, 2)} />
-          <InsightRow icon="wallet-outline" title="Lifetime Revenue" value={money(summary?.lifetimeRevenue, 2)} />
-          <InsightRow icon="close-circle-outline" title="Cancelled Orders" value={`${summary?.cancelledOrders || 0} cancelled`} danger />
+          <InsightRow
+            icon="calendar-outline"
+            title="Average Daily Revenue"
+            value={money(insight.avgDailyRevenue, 2)}
+          />
+          <InsightRow
+            icon="analytics-outline"
+            title="Average Order Value"
+            value={money(summary.averageOrderValue, 2)}
+          />
+          <InsightRow
+            icon="wallet-outline"
+            title="Lifetime Revenue"
+            value={money(summary.lifetimeRevenue, 2)}
+          />
+          <InsightRow
+            icon="close-circle-outline"
+            title="Cancelled Orders"
+            value={`${summary.cancelledOrders || 0} cancelled`}
+            danger
+          />
         </View>
 
         <View style={styles.tipCard}>
@@ -279,7 +343,8 @@ export default function VendorAnalyticsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={styles.tipTitle}>Smart Tip</Text>
             <Text style={styles.tipText}>
-              Keep prep time accurate during rush hours. It improves customer trust and reduces cancellations.
+              Keep prep time accurate during rush hours. It improves customer trust,
+              reduces cancellations, and keeps riders assigned faster.
             </Text>
           </View>
         </View>
@@ -330,7 +395,10 @@ function BarGraph({
               />
             </View>
 
-            <Text style={[styles.barLabel, selected && styles.barLabelActive]} numberOfLines={1}>
+            <Text
+              style={[styles.barLabel, selected && styles.barLabelActive]}
+              numberOfLines={1}
+            >
               {item.label}
             </Text>
           </TouchableOpacity>
@@ -346,7 +414,9 @@ function StatCard({ icon, label, value }: any) {
       <View style={styles.statIcon}>
         <Icon name={icon} size={20} color={THEME.bg} />
       </View>
-      <Text style={styles.statValue} numberOfLines={1}>{value}</Text>
+      <Text style={styles.statValue} numberOfLines={1}>
+        {value}
+      </Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
@@ -403,6 +473,16 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
   kicker: {
     color: THEME.green,

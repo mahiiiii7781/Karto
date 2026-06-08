@@ -34,14 +34,13 @@ const THEME = {
   danger: "#EF4444",
 };
 
-const money = (v: any) =>
-  `₹${Number(v || 0).toFixed(0)}`;
+const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
 
 const shortId = (id?: string) =>
   id ? id.slice(0, 8).toUpperCase() : "ORDER";
 
 const getAddressText = (address: any) => {
-  if (!address) return "Customer address";
+  if (!address) return "Address not available";
 
   return (
     address.address ||
@@ -50,33 +49,42 @@ const getAddressText = (address: any) => {
     address.street ||
     address.landmark ||
     address.city ||
-    "Customer address"
+    "Address not available"
   );
 };
 
-export default function RiderDashboardScreen({
-  navigation,
-}: any) {
+const getPickupName = (order: any) =>
+  order?.vendor?.name ||
+  order?.restaurant?.name ||
+  "Karto Store";
+
+const getPickupAddress = (order: any) =>
+  order?.pickupAddress ||
+  order?.vendor?.address ||
+  order?.restaurant?.address ||
+  getPickupName(order);
+
+const getDropAddress = (order: any) =>
+  getAddressText(order?.deliveryAddress || order?.address);
+
+export default function RiderDashboardScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] =
-    useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [online, setOnline] = useState(false);
   const [busy, setBusy] = useState(false);
-
   const [toast, setToast] = useState("");
+
   const [profile, setProfile] = useState<any>(null);
-  const [analytics, setAnalytics] =
-    useState<any>(null);
-  const [wallet, setWallet] = useState<any>(null);
-  const [newOrders, setNewOrders] = useState<any[]>(
-    []
-  );
-  const [activeOrders, setActiveOrders] = useState<
-    any[]
-  >([]);
-  const [leaderboard, setLeaderboard] = useState<
-    any[]
-  >([]);
+  const [dashboardStats, setDashboardStats] = useState<any>({});
+  const [analytics, setAnalytics] = useState<any>({});
+  const [wallet, setWallet] = useState<any>({});
+  const [settlements, setSettlements] = useState<any[]>([]);
+  const [newOrders, setNewOrders] = useState<any[]>([]);
+  const [activeOrders, setActiveOrders] = useState<any[]>([]);
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [incentives, setIncentives] = useState<any[]>([]);
+  const [currentAssignment, setCurrentAssignment] = useState<any>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -86,30 +94,46 @@ export default function RiderDashboardScreen({
   const loadDashboard = useCallback(async () => {
     try {
       const [
+        dashboardRes,
         profileRes,
         analyticsRes,
         walletRes,
+        currentAssignmentRes,
         newOrdersRes,
         activeOrdersRes,
         leaderboardRes,
+        notificationsRes,
+        incentivesRes,
       ] = await Promise.all([
+        riderService.dashboard(),
         riderService.getProfile(),
         riderService.getAnalytics(),
         riderService.getWallet(),
+        riderService.getCurrentAssignment(),
         riderService.getNewOrders(),
         riderService.getActiveOrders(),
         riderService.getLeaderboard(),
+        riderService.getNotifications(),
+        riderService.getIncentives(),
       ]);
 
-      setProfile(profileRes?.rider || null);
-      setOnline(!!profileRes?.rider?.isOnline);
-      setAnalytics(analyticsRes?.analytics || {});
-      setWallet(walletRes?.wallet || {});
-      setNewOrders(newOrdersRes?.orders || []);
-      setActiveOrders(activeOrdersRes?.orders || []);
-      setLeaderboard(
-        leaderboardRes?.leaderboard || []
-      );
+      const dashboardData = dashboardRes?.data || {};
+      const profileData = profileRes?.data || dashboardData?.rider || null;
+      const analyticsData = analyticsRes?.data || {};
+      const walletData = walletRes?.data?.wallet || walletRes?.data || {};
+
+      setProfile(profileData);
+      setOnline(Boolean(profileData?.isOnline || dashboardData?.rider?.isOnline));
+      setDashboardStats(dashboardData?.stats || {});
+      setAnalytics(analyticsData || {});
+      setWallet(walletData || {});
+      setSettlements(walletRes?.data?.settlements || []);
+      setCurrentAssignment(currentAssignmentRes?.data || null);
+      setNewOrders(newOrdersRes?.data || []);
+      setActiveOrders(activeOrdersRes?.data || []);
+      setLeaderboard(leaderboardRes?.data || []);
+      setNotifications(notificationsRes?.data || []);
+      setIncentives(incentivesRes?.data || []);
     } catch (e: any) {
       showToast(e?.message || "Dashboard load failed");
     } finally {
@@ -133,22 +157,20 @@ export default function RiderDashboardScreen({
     setBusy(true);
 
     try {
-      const res =
-        await riderService.updateOnlineStatus(value);
+      const res = await riderService.updateOnlineStatus(value);
 
-      setOnline(!!res?.rider?.isOnline);
-      showToast(
-        value
-          ? "You are online now"
-          : "You are offline now"
-      );
+      if (res?.error) {
+        setOnline(old);
+        showToast(res?.error?.message || "Could not update status");
+        return;
+      }
 
+      setOnline(Boolean(res?.data?.isOnline));
+      showToast(value ? "You are online now" : "You are offline now");
       loadDashboard();
     } catch (e: any) {
       setOnline(old);
-      showToast(
-        e?.message || "Could not update status"
-      );
+      showToast(e?.message || "Could not update status");
     } finally {
       setBusy(false);
     }
@@ -160,20 +182,22 @@ export default function RiderDashboardScreen({
     setBusy(true);
 
     try {
-      const res =
-        await riderService.acceptOrder(orderId);
+      const res = await riderService.acceptOrder(orderId);
+
+      if (res?.error) {
+        showToast(res?.error?.message || "Could not accept order");
+        return;
+      }
 
       showToast("Order accepted successfully");
       await loadDashboard();
 
       navigation?.navigate?.("RiderOrderDetail", {
         orderId,
-        order: res?.order,
+        order: res?.data,
       });
     } catch (e: any) {
-      showToast(
-        e?.message || "Could not accept order"
-      );
+      showToast(e?.message || "Could not accept order");
     } finally {
       setBusy(false);
     }
@@ -185,17 +209,17 @@ export default function RiderDashboardScreen({
     setBusy(true);
 
     try {
-      await riderService.rejectOrder(orderId);
+      const res = await riderService.rejectOrder(orderId);
 
-      setNewOrders((prev) =>
-        prev.filter((x) => x.id !== orderId)
-      );
+      if (res?.error) {
+        showToast(res?.error?.message || "Could not reject order");
+        return;
+      }
 
+      setNewOrders((prev) => prev.filter((x) => x.id !== orderId));
       showToast("Delivery request rejected");
     } catch (e: any) {
-      showToast(
-        e?.message || "Could not reject order"
-      );
+      showToast(e?.message || "Could not reject order");
     } finally {
       setBusy(false);
     }
@@ -203,63 +227,79 @@ export default function RiderDashboardScreen({
 
   const rank = useMemo(() => {
     const id = profile?.id;
-
-    return (
-      leaderboard?.find(
-        (x) => x?.rider?.id === id
-      )?.rank || "-"
-    );
+    return leaderboard?.find((x) => x?.rider?.id === id)?.rank || "-";
   }, [leaderboard, profile]);
 
+  const todayEarnings =
+    analytics?.todayEarnings ??
+    dashboardStats?.todayEarnings ??
+    wallet?.todayEarn ??
+    0;
+
+  const totalEarnings =
+    dashboardStats?.totalEarnings ??
+    analytics?.totalEarnings ??
+    wallet?.totalEarn ??
+    0;
+
+  const walletBalance =
+    dashboardStats?.walletBalance ??
+    analytics?.walletBalance ??
+    wallet?.balance ??
+    0;
+
+  const activeOrderCount =
+    analytics?.activeOrders ??
+    dashboardStats?.activeOrders ??
+    activeOrders.length ??
+    0;
+
+  const deliveredOrders =
+    analytics?.deliveredOrders ??
+    dashboardStats?.deliveredOrders ??
+    0;
+
+  const todayOrders =
+    analytics?.todayOrders ??
+    dashboardStats?.todayOrders ??
+    0;
+
+  const unreadNotifications = notifications.filter((n) => !n?.isRead).length;
+  const activeIncentives = incentives.filter((x) => !x?.isCompleted).length;
+
+  const topActiveOrder =
+    activeOrders?.[0] ||
+    dashboardStats?.activeOrder ||
+    currentAssignment?.activeOrder ||
+    null;
+
   const completionRate = useMemo(() => {
-    const delivered = Number(
-      analytics?.deliveredOrders || 0
-    );
-    const active = Number(
-      analytics?.activeOrders || 0
-    );
+    const delivered = Number(deliveredOrders || 0);
+    const active = Number(activeOrderCount || 0);
     const total = delivered + active;
 
     if (!total) return 0;
 
     return Math.round((delivered / total) * 100);
-  }, [analytics]);
+  }, [deliveredOrders, activeOrderCount]);
 
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
-        <StatusBar
-          barStyle="light-content"
-          backgroundColor={THEME.bg}
-        />
-        <ActivityIndicator
-          size="large"
-          color={THEME.yellow}
-        />
-        <Text style={styles.loadingText}>
-          Preparing rider cockpit...
-        </Text>
+        <StatusBar barStyle="light-content" backgroundColor={THEME.bg} />
+        <ActivityIndicator size="large" color={THEME.yellow} />
+        <Text style={styles.loadingText}>Preparing rider cockpit...</Text>
       </SafeAreaView>
     );
   }
-
-  return (
+    return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar
-        barStyle="light-content"
-        backgroundColor={THEME.bg}
-      />
+      <StatusBar barStyle="light-content" backgroundColor={THEME.bg} />
 
       {!!toast && (
         <View style={styles.toast}>
-          <Icon
-            name="flash-outline"
-            size={17}
-            color={THEME.black}
-          />
-          <Text style={styles.toastText}>
-            {toast}
-          </Text>
+          <Icon name="flash-outline" size={17} color={THEME.black} />
+          <Text style={styles.toastText}>{toast}</Text>
         </View>
       )}
 
@@ -276,17 +316,25 @@ export default function RiderDashboardScreen({
       >
         <View style={styles.hero}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.hello}>
-              Welcome back
-            </Text>
+            <Text style={styles.hello}>Welcome back</Text>
             <Text style={styles.name}>
               {profile?.fullName || "Karto Rider"}
             </Text>
             <Text style={styles.sub}>
               {online
-                ? "Live deliveries are ready for you"
+                ? "You are live. New delivery requests can arrive anytime."
                 : "Go online to receive new orders"}
             </Text>
+
+            <View style={styles.metaRow}>
+              <Text style={styles.metaText}>
+                KYC: {profile?.kycStatus || "PENDING"}
+              </Text>
+
+              {!!profile?.vehicleNo && (
+                <Text style={styles.metaText}>• {profile.vehicleNo}</Text>
+              )}
+            </View>
           </View>
 
           <View style={styles.statusPill}>
@@ -294,9 +342,7 @@ export default function RiderDashboardScreen({
               style={[
                 styles.statusText,
                 {
-                  color: online
-                    ? THEME.green
-                    : THEME.muted,
+                  color: online ? THEME.green : THEME.muted,
                 },
               ]}
             >
@@ -307,9 +353,7 @@ export default function RiderDashboardScreen({
               value={online}
               disabled={busy}
               onValueChange={toggleOnline}
-              thumbColor={
-                online ? THEME.yellow : THEME.muted
-              }
+              thumbColor={online ? THEME.yellow : THEME.muted}
               trackColor={{
                 false: "#1F2937",
                 true: THEME.greenDark,
@@ -321,77 +365,57 @@ export default function RiderDashboardScreen({
         <TouchableOpacity
           activeOpacity={0.9}
           style={styles.analyticsBanner}
-          onPress={() =>
-            navigation?.navigate?.("RiderAnalytics")
-          }
+          onPress={() => navigation?.navigate?.("RiderAnalytics")}
         >
           <View style={styles.analyticsIcon}>
-            <Icon
-              name="analytics"
-              size={24}
-              color={THEME.black}
-            />
+            <Icon name="analytics" size={24} color={THEME.black} />
           </View>
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.analyticsTitle}>
-              Performance Analytics
-            </Text>
+            <Text style={styles.analyticsTitle}>Performance Analytics</Text>
             <Text style={styles.analyticsSub}>
-              {completionRate}% completion • Today{" "}
-              {money(analytics?.todayEarnings)}
+              {completionRate}% completion • Today {money(todayEarnings)} •{" "}
+              {todayOrders} orders
             </Text>
 
             <View style={styles.progressOuter}>
               <View
                 style={[
                   styles.progressInner,
-                  { width: `${completionRate}%` },
+                  { width: `${Math.min(completionRate, 100)}%` },
                 ]}
               />
             </View>
           </View>
 
-          <Icon
-            name="chevron-forward"
-            size={22}
-            color={THEME.yellow}
-          />
+          <Icon name="chevron-forward" size={22} color={THEME.yellow} />
         </TouchableOpacity>
 
         <View style={styles.quickGrid}>
           <QuickAction
             icon="wallet-outline"
             title="Wallet"
-            onPress={() =>
-              navigation?.navigate?.("RiderWallet")
-            }
+            sub={money(walletBalance)}
+            onPress={() => navigation?.navigate?.("RiderWallet")}
           />
           <QuickAction
             icon="document-text-outline"
             title="History"
-            onPress={() =>
-              navigation?.navigate?.(
-                "RiderDeliveryHistory"
-              )
-            }
+            sub={`${deliveredOrders} done`}
+            onPress={() => navigation?.navigate?.("RiderDeliveryHistory")}
           />
           <QuickAction
             icon="gift-outline"
             title="Incentives"
-            onPress={() =>
-              navigation?.navigate?.(
-                "RiderIncentives"
-              )
-            }
+            sub={`${activeIncentives} active`}
+            onPress={() => navigation?.navigate?.("RiderIncentives")}
           />
-          <QuickAction
-            icon="shield-checkmark-outline"
-            title="KYC"
-            onPress={() =>
-              navigation?.navigate?.("RiderKyc")
-            }
-          />
+          {/* <QuickAction
+            icon="notifications-outline"
+            title="Alerts"
+            sub={`${unreadNotifications} new`}
+            onPress={() => navigation?.navigate?.("RiderNotifications")}
+          /> */}
         </View>
 
         <View style={styles.kycCard}>
@@ -403,16 +427,13 @@ export default function RiderDashboardScreen({
             }
             size={22}
             color={
-              profile?.kycStatus === "APPROVED"
-                ? THEME.green
-                : THEME.yellow
+              profile?.kycStatus === "APPROVED" ? THEME.green : THEME.yellow
             }
           />
 
           <View style={{ flex: 1 }}>
             <Text style={styles.kycTitle}>
-              KYC Status:{" "}
-              {profile?.kycStatus || "PENDING"}
+              KYC Status: {profile?.kycStatus || "PENDING"}
             </Text>
             <Text style={styles.kycSub}>
               {profile?.kycStatus === "APPROVED"
@@ -424,13 +445,9 @@ export default function RiderDashboardScreen({
           {profile?.kycStatus !== "APPROVED" && (
             <TouchableOpacity
               style={styles.smallYellowBtn}
-              onPress={() =>
-                navigation?.navigate?.("RiderKyc")
-              }
+              onPress={() => navigation?.navigate?.("RiderKyc")}
             >
-              <Text style={styles.smallYellowText}>
-                Update
-              </Text>
+              <Text style={styles.smallYellowText}>Update</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -438,20 +455,28 @@ export default function RiderDashboardScreen({
         <View style={styles.statsGrid}>
           <StatCard
             icon="wallet-outline"
-            title="Wallet"
-            value={money(wallet?.balance)}
+            title="Wallet Balance"
+            value={money(walletBalance)}
           />
           <StatCard
             icon="cash-outline"
             title="Today"
-            value={money(
-              analytics?.todayEarnings
-            )}
+            value={money(todayEarnings)}
+          />
+          <StatCard
+            icon="trending-up-outline"
+            title="Total"
+            value={money(totalEarnings)}
           />
           <StatCard
             icon="cube-outline"
             title="Active"
-            value={analytics?.activeOrders || 0}
+            value={activeOrderCount}
+          />
+          <StatCard
+            icon="checkmark-done-outline"
+            title="Delivered"
+            value={deliveredOrders}
           />
           <StatCard
             icon="trophy-outline"
@@ -463,77 +488,51 @@ export default function RiderDashboardScreen({
         <SectionHeader
           title="Current Delivery"
           action="View all"
-          onPress={() =>
-            navigation?.navigate?.("Orders")
-          }
+          onPress={() => navigation?.navigate?.("RiderActiveOrders")}
         />
 
-        {activeOrders.length > 0 ? (
-          activeOrders.slice(0, 1).map((order) => (
+        {topActiveOrder ? (
+          <TouchableOpacity
+            activeOpacity={0.88}
+            style={styles.activeCard}
+            onPress={() =>
+              navigation?.navigate?.("RiderOrderDetail", {
+                orderId: topActiveOrder.id,
+                order: topActiveOrder,
+              })
+            }
+          >
+            <View style={styles.activeIcon}>
+              <Icon name="navigate" size={23} color={THEME.yellow} />
+            </View>
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.orderTitle}>
+                #{topActiveOrder.orderNumber || shortId(topActiveOrder.id)}
+              </Text>
+              <Text style={styles.orderSub} numberOfLines={1}>
+                Pickup: {getPickupName(topActiveOrder)}
+              </Text>
+              <Text style={styles.orderSub} numberOfLines={1}>
+                Drop: {getDropAddress(topActiveOrder)}
+              </Text>
+              <Text style={styles.orderStatusText}>
+                {topActiveOrder.status || "ASSIGNED"}
+              </Text>
+            </View>
+
             <TouchableOpacity
-              key={order.id}
-              activeOpacity={0.88}
-              style={styles.activeCard}
+              style={styles.trackMiniBtn}
               onPress={() =>
-                navigation?.navigate?.(
-                  "RiderOrderDetail",
-                  {
-                    orderId: order.id,
-                    order,
-                  }
-                )
+                navigation?.navigate?.("RiderLiveTracking", {
+                  orderId: topActiveOrder.id,
+                  order: topActiveOrder,
+                })
               }
             >
-              <View style={styles.activeIcon}>
-                <Icon
-                  name="navigate"
-                  size={23}
-                  color={THEME.yellow}
-                />
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.orderTitle}>
-                  #
-                  {order.orderNumber ||
-                    shortId(order.id)}
-                </Text>
-                <Text
-                  style={styles.orderSub}
-                  numberOfLines={1}
-                >
-                  Pickup:{" "}
-                  {order.restaurant?.name || "Store"}
-                </Text>
-                <Text
-                  style={styles.orderSub}
-                  numberOfLines={1}
-                >
-                  Drop:{" "}
-                  {getAddressText(order.address)}
-                </Text>
-              </View>
-
-              <TouchableOpacity
-                style={styles.trackMiniBtn}
-                onPress={() =>
-                  navigation?.navigate?.(
-                    "RiderLiveTracking",
-                    {
-                      orderId: order.id,
-                      order,
-                    }
-                  )
-                }
-              >
-                <Icon
-                  name="map"
-                  size={18}
-                  color={THEME.black}
-                />
-              </TouchableOpacity>
+              <Icon name="map" size={18} color={THEME.black} />
             </TouchableOpacity>
-          ))
+          </TouchableOpacity>
         ) : (
           <EmptyCard
             icon="bicycle-outline"
@@ -561,89 +560,93 @@ export default function RiderDashboardScreen({
           />
         ) : (
           newOrders.slice(0, 5).map((order) => (
-            <View
-              key={order.id}
-              style={styles.orderCard}
-            >
+            <View key={order.id} style={styles.orderCard}>
               <View style={styles.orderTop}>
-                <View>
+                <View style={{ flex: 1 }}>
                   <Text style={styles.orderTitle}>
-                    #
-                    {order.orderNumber ||
-                      shortId(order.id)}
+                    #{order.orderNumber || shortId(order.id)}
                   </Text>
-                  <Text style={styles.orderSub}>
-                    {order.restaurant?.name ||
-                      "Karto Store"}
-                  </Text>
+                  <Text style={styles.orderSub}>{getPickupName(order)}</Text>
                 </View>
 
                 <View style={styles.feeBadge}>
-                  <Text style={styles.feeText}>
-                    {money(order.deliveryFee)}
-                  </Text>
+                  <Text style={styles.feeText}>{money(order.deliveryFee)}</Text>
                 </View>
               </View>
 
               <InfoLine
                 icon="storefront-outline"
-                text={`Pickup: ${
-                  order.restaurant?.address ||
-                  order.restaurant?.name ||
-                  "Store location"
-                }`}
+                text={`Pickup: ${getPickupAddress(order)}`}
               />
               <InfoLine
                 icon="location-outline"
-                text={`Drop: ${getAddressText(
-                  order.address
-                )}`}
+                text={`Drop: ${getDropAddress(order)}`}
+              />
+              <InfoLine
+                icon="bicycle-outline"
+                text={`Distance: ${
+                  order.distanceKm
+                    ? `${Number(order.distanceKm).toFixed(1)} km`
+                    : "-"
+                }`}
               />
               <InfoLine
                 icon="card-outline"
-                text={`Payment: ${
-                  order.paymentMethod || "COD"
-                } • ${money(order.totalAmount)}`}
+                text={`Payment: ${order.paymentMethod || "COD"} • ${money(
+                  order.totalAmount
+                )}`}
               />
 
               <View style={styles.actions}>
                 <TouchableOpacity
                   disabled={busy}
-                  style={[
-                    styles.rejectBtn,
-                    busy && styles.disabledBtn,
-                  ]}
-                  onPress={() =>
-                    rejectOrder(order.id)
-                  }
+                  style={[styles.rejectBtn, busy && styles.disabledBtn]}
+                  onPress={() => rejectOrder(order.id)}
                 >
-                  <Text style={styles.rejectText}>
-                    Reject
-                  </Text>
+                  <Text style={styles.rejectText}>Reject</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   disabled={busy}
-                  style={[
-                    styles.acceptBtn,
-                    busy && styles.disabledBtn,
-                  ]}
-                  onPress={() =>
-                    acceptOrder(order.id)
-                  }
+                  style={[styles.acceptBtn, busy && styles.disabledBtn]}
+                  onPress={() => acceptOrder(order.id)}
                 >
-                  <Text style={styles.acceptText}>
-                    Accept
-                  </Text>
-                  <Icon
-                    name="arrow-forward"
-                    size={18}
-                    color={THEME.black}
-                  />
+                  <Text style={styles.acceptText}>Accept</Text>
+                  <Icon name="arrow-forward" size={18} color={THEME.black} />
                 </TouchableOpacity>
               </View>
             </View>
           ))
+        )}
+
+        <SectionHeader
+          title="Settlements"
+          action={`${settlements.length} records`}
+          onPress={() => navigation?.navigate?.("RiderWallet")}
+        />
+
+        {settlements.length > 0 ? (
+          settlements.slice(0, 3).map((item) => (
+            <View key={item.id} style={styles.settlementCard}>
+              <View>
+                <Text style={styles.settlementTitle}>
+                  {item.status || "PENDING"} Settlement
+                </Text>
+                <Text style={styles.settlementSub}>
+                  {item.createdAt
+                    ? new Date(item.createdAt).toLocaleDateString()
+                    : "-"}
+                </Text>
+              </View>
+              <Text style={styles.settlementAmount}>{money(item.amount)}</Text>
+            </View>
+          ))
+        ) : (
+          <EmptyCard
+            icon="receipt-outline"
+            title="No settlements yet"
+            text="Your payout history will appear here."
+          />
         )}
 
         <View style={{ height: 110 }} />
@@ -652,16 +655,10 @@ export default function RiderDashboardScreen({
   );
 }
 
-function SectionHeader({
-  title,
-  action,
-  onPress,
-}: any) {
+function SectionHeader({ title, action, onPress }: any) {
   return (
     <View style={styles.sectionHead}>
-      <Text style={styles.sectionTitle}>
-        {title}
-      </Text>
+      <Text style={styles.sectionTitle}>{title}</Text>
 
       {!!action && (
         <TouchableOpacity
@@ -669,9 +666,7 @@ function SectionHeader({
           activeOpacity={0.75}
           disabled={!onPress}
         >
-          <Text style={styles.sectionAction}>
-            {action}
-          </Text>
+          <Text style={styles.sectionAction}>{action}</Text>
         </TouchableOpacity>
       )}
     </View>
@@ -681,22 +676,14 @@ function SectionHeader({
 function StatCard({ icon, title, value }: any) {
   return (
     <View style={styles.statCard}>
-      <Icon
-        name={icon}
-        size={22}
-        color={THEME.yellow}
-      />
-      <Text style={styles.statValue}>
-        {value}
-      </Text>
-      <Text style={styles.statTitle}>
-        {title}
-      </Text>
+      <Icon name={icon} size={22} color={THEME.yellow} />
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statTitle}>{title}</Text>
     </View>
   );
 }
 
-function QuickAction({ icon, title, onPress }: any) {
+function QuickAction({ icon, title, sub, onPress }: any) {
   return (
     <TouchableOpacity
       activeOpacity={0.85}
@@ -704,13 +691,10 @@ function QuickAction({ icon, title, onPress }: any) {
       onPress={onPress}
     >
       <View style={styles.quickIcon}>
-        <Icon
-          name={icon}
-          size={20}
-          color={THEME.yellow}
-        />
+        <Icon name={icon} size={20} color={THEME.yellow} />
       </View>
       <Text style={styles.quickText}>{title}</Text>
+      {!!sub && <Text style={styles.quickSub}>{sub}</Text>}
     </TouchableOpacity>
   );
 }
@@ -718,15 +702,8 @@ function QuickAction({ icon, title, onPress }: any) {
 function InfoLine({ icon, text }: any) {
   return (
     <View style={styles.infoLine}>
-      <Icon
-        name={icon}
-        size={16}
-        color={THEME.green}
-      />
-      <Text
-        style={styles.infoText}
-        numberOfLines={1}
-      >
+      <Icon name={icon} size={16} color={THEME.green} />
+      <Text style={styles.infoText} numberOfLines={1}>
         {text}
       </Text>
     </View>
@@ -736,17 +713,9 @@ function InfoLine({ icon, text }: any) {
 function EmptyCard({ icon, title, text }: any) {
   return (
     <View style={styles.emptyCard}>
-      <Icon
-        name={icon}
-        size={42}
-        color={THEME.yellow}
-      />
-      <Text style={styles.emptyTitle}>
-        {title}
-      </Text>
-      <Text style={styles.emptyText}>
-        {text}
-      </Text>
+      <Icon name={icon} size={42} color={THEME.yellow} />
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyText}>{text}</Text>
     </View>
   );
 }
@@ -772,7 +741,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontWeight: "700",
   },
-
   toast: {
     position: "absolute",
     top: 44,
@@ -792,7 +760,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     flex: 1,
   },
-
   hero: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -818,7 +785,18 @@ const styles = StyleSheet.create({
     color: THEME.muted,
     fontSize: 13,
     marginTop: 6,
-    maxWidth: 210,
+    maxWidth: 230,
+  },
+  metaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 10,
+  },
+  metaText: {
+    color: THEME.green,
+    fontSize: 12,
+    fontWeight: "800",
   },
   statusPill: {
     backgroundColor: THEME.black,
@@ -833,7 +811,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginBottom: 4,
   },
-
   analyticsBanner: {
     backgroundColor: "#0E1B12",
     borderRadius: 24,
@@ -875,7 +852,6 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: THEME.yellow,
   },
-
   quickGrid: {
     flexDirection: "row",
     gap: 10,
@@ -904,7 +880,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "900",
   },
-
+  quickSub: {
+    color: THEME.muted,
+    fontSize: 10,
+    marginTop: 3,
+    fontWeight: "700",
+  },
   kycCard: {
     backgroundColor: THEME.card2,
     borderRadius: 20,
@@ -936,7 +917,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "900",
   },
-
   statsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -961,7 +941,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
-
   sectionHead: {
     marginTop: 24,
     marginBottom: 12,
@@ -979,7 +958,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "900",
   },
-
   activeCard: {
     backgroundColor: "#0C1510",
     borderRadius: 24,
@@ -1008,7 +986,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
+  orderStatusText: {
+    color: THEME.green,
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 5,
+  },
   orderCard: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -1021,6 +1004,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 12,
+    gap: 10,
   },
   orderTitle: {
     color: THEME.text,
@@ -1043,7 +1027,6 @@ const styles = StyleSheet.create({
     color: THEME.black,
     fontWeight: "900",
   },
-
   infoLine: {
     flexDirection: "row",
     alignItems: "center",
@@ -1055,7 +1038,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
   },
-
   actions: {
     flexDirection: "row",
     gap: 10,
@@ -1090,7 +1072,31 @@ const styles = StyleSheet.create({
   disabledBtn: {
     opacity: 0.55,
   },
-
+  settlementCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  settlementTitle: {
+    color: THEME.text,
+    fontWeight: "900",
+  },
+  settlementSub: {
+    color: THEME.muted,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  settlementAmount: {
+    color: THEME.yellow,
+    fontWeight: "900",
+    fontSize: 16,
+  },
   emptyCard: {
     backgroundColor: THEME.card,
     borderRadius: 24,

@@ -33,8 +33,10 @@ const THEME = {
 const STATUSES = [
   "ALL",
   "PLACED",
+  "ACCEPTED",
   "ACCEPTED_BY_VENDOR",
   "PREPARING",
+  "READY",
   "READY_FOR_PICKUP",
   "ASSIGNED_TO_RIDER",
   "PICKED_UP",
@@ -96,11 +98,21 @@ export default function AdminOrdersScreen({ navigation }: any) {
     });
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
+
   const loadOrders = useCallback(async () => {
-    const { data, error } = await adminService.getOrders({ status });
+    const params = status === "ALL" ? {} : { status };
+    const { data, error } = await adminService.getOrders(params);
 
     if (error) {
-      showMessage("error", "Unable to Load Orders", error.message || "Failed to load orders.");
+      showMessage(
+        "error",
+        "Unable to Load Orders",
+        error.message || "Failed to load orders."
+      );
     } else {
       setOrders(data || []);
     }
@@ -124,10 +136,14 @@ export default function AdminOrdersScreen({ navigation }: any) {
         order.id?.toLowerCase().includes(q) ||
         order.user?.fullName?.toLowerCase().includes(q) ||
         order.user?.phone?.toLowerCase().includes(q) ||
+        order.user?.email?.toLowerCase().includes(q) ||
         order.restaurant?.name?.toLowerCase().includes(q) ||
+        order.restaurant?.phone?.toLowerCase().includes(q) ||
         order.restaurant?.city?.name?.toLowerCase().includes(q) ||
         order.rider?.fullName?.toLowerCase().includes(q) ||
-        order.status?.toLowerCase().includes(q)
+        order.rider?.phone?.toLowerCase().includes(q) ||
+        order.status?.toLowerCase().includes(q) ||
+        order.paymentStatus?.toLowerCase().includes(q)
       );
     });
   }, [orders, search]);
@@ -136,6 +152,8 @@ export default function AdminOrdersScreen({ navigation }: any) {
     let totalRevenue = 0;
     let kartoIncome = 0;
     let vendorIncome = 0;
+    let deliveryFee = 0;
+    let discount = 0;
 
     orders.forEach((order) => {
       const total = Number(order.totalAmount || 0);
@@ -145,6 +163,8 @@ export default function AdminOrdersScreen({ navigation }: any) {
       totalRevenue += total;
       kartoIncome += karto;
       vendorIncome += total - karto;
+      deliveryFee += Number(order.deliveryFee || 0);
+      discount += Number(order.discountAmount || 0);
     });
 
     return {
@@ -157,6 +177,8 @@ export default function AdminOrdersScreen({ navigation }: any) {
       totalRevenue,
       kartoIncome,
       vendorIncome,
+      deliveryFee,
+      discount,
     };
   }, [orders]);
 
@@ -167,11 +189,11 @@ export default function AdminOrdersScreen({ navigation }: any) {
 
   const askQuickUpdate = (order: any, nextStatus: string) => {
     showMessage(
-      "warning",
+      nextStatus === "CANCELLED" ? "warning" : "info",
       "Update Order Status?",
-      `Order #${order.orderNumber || order.id.slice(0, 8)} will be moved to ${formatStatus(
+      `Order #${order.orderNumber || order.id.slice(0, 8)} ko ${formatStatus(
         nextStatus
-      )}.`,
+      )} mark karna hai?`,
       "Update",
       () => quickUpdate(order.id, nextStatus),
       "Cancel",
@@ -182,7 +204,11 @@ export default function AdminOrdersScreen({ navigation }: any) {
   const quickUpdate = async (orderId: string, nextStatus: string) => {
     setMessage((prev) => ({ ...prev, loading: true }));
 
-    const { error } = await adminService.updateOrderStatus(orderId, nextStatus);
+    const { error } = await adminService.updateOrderStatus(
+      orderId,
+      nextStatus,
+      `Admin marked order as ${formatStatus(nextStatus)}`
+    );
 
     if (error) {
       setMessage({
@@ -199,7 +225,7 @@ export default function AdminOrdersScreen({ navigation }: any) {
       visible: true,
       type: "success",
       title: "Order Updated",
-      message: `Order status updated to ${formatStatus(nextStatus)}.`,
+      message: `Order status ${formatStatus(nextStatus)} ho gaya.`,
       primaryText: "Done",
       onPrimary: () => {
         closeMessage();
@@ -238,22 +264,33 @@ export default function AdminOrdersScreen({ navigation }: any) {
         ListHeaderComponent={
           <>
             <View style={styles.header}>
-              <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+              <TouchableOpacity style={styles.backBtn} onPress={goBack}>
                 <Icon name="chevron-back" size={24} color={THEME.text} />
               </TouchableOpacity>
 
               <View style={{ flex: 1 }}>
                 <Text style={styles.smallLabel}>ORDER OPERATIONS</Text>
                 <Text style={styles.title}>Orders</Text>
-                <Text style={styles.subtitle}>Track orders, revenue and delivery status</Text>
+                <Text style={styles.subtitle}>
+                  Track orders, revenue, payment and delivery status
+                </Text>
               </View>
+
+              <TouchableOpacity
+                style={styles.homeBtn}
+                onPress={() => navigation.navigate("AdminDashboard")}
+              >
+                <Icon name="home-outline" size={21} color="#000" />
+              </TouchableOpacity>
             </View>
 
             <View style={styles.summaryCard}>
               <View style={styles.summaryTop}>
                 <View>
                   <Text style={styles.summaryLabel}>Total Order Revenue</Text>
-                  <Text style={styles.summaryValue}>{money(stats.totalRevenue)}</Text>
+                  <Text style={styles.summaryValue}>
+                    {money(stats.totalRevenue)}
+                  </Text>
                 </View>
 
                 <View style={styles.summaryIcon}>
@@ -265,12 +302,57 @@ export default function AdminOrdersScreen({ navigation }: any) {
                 <MiniStat label="Orders" value={stats.totalOrders} />
                 <MiniStat label="Active" value={stats.activeOrders} />
                 <MiniStat label="Delivered" value={stats.deliveredOrders} />
+                <MiniStat label="Cancelled" value={stats.cancelledOrders} />
               </View>
 
               <View style={styles.revenueRow}>
-                <RevenuePill label="Karto Income" value={money(stats.kartoIncome)} color={THEME.green} />
-                <RevenuePill label="Vendor Payout" value={money(stats.vendorIncome)} color={THEME.yellow} />
+                <RevenuePill
+                  label="Karto Income"
+                  value={money(stats.kartoIncome)}
+                  color={THEME.green}
+                />
+                <RevenuePill
+                  label="Vendor Payout"
+                  value={money(stats.vendorIncome)}
+                  color={THEME.yellow}
+                />
               </View>
+
+              <View style={styles.revenueRow}>
+                <RevenuePill
+                  label="Delivery Fee"
+                  value={money(stats.deliveryFee)}
+                  color={THEME.green}
+                />
+                <RevenuePill
+                  label="Discount"
+                  value={money(stats.discount)}
+                  color={THEME.danger}
+                />
+              </View>
+            </View>
+
+            <View style={styles.quickRail}>
+              <QuickAction
+                icon="bicycle-outline"
+                label="Assign"
+                onPress={() => navigation.navigate("AdminOrders")}
+              />
+              <QuickAction
+                icon="bar-chart-outline"
+                label="Analytics"
+                onPress={() => navigation.navigate("AdminAnalytics")}
+              />
+              <QuickAction
+                icon="card-outline"
+                label="Billing"
+                onPress={() => navigation.navigate("AdminBilling")}
+              />
+              <QuickAction
+                icon="storefront-outline"
+                label="Vendors"
+                onPress={() => navigation.navigate("AdminVendors")}
+              />
             </View>
 
             <View style={styles.searchBox}>
@@ -278,7 +360,7 @@ export default function AdminOrdersScreen({ navigation }: any) {
               <TextInput
                 value={search}
                 onChangeText={setSearch}
-                placeholder="Search order, customer, vendor..."
+                placeholder="Search order, customer, vendor, rider..."
                 placeholderTextColor={THEME.muted}
                 style={styles.searchInput}
               />
@@ -303,7 +385,12 @@ export default function AdminOrdersScreen({ navigation }: any) {
                     setStatus(item);
                   }}
                 >
-                  <Text style={[styles.chipText, status === item && styles.chipTextActive]}>
+                  <Text
+                    style={[
+                      styles.chipText,
+                      status === item && styles.chipTextActive,
+                    ]}
+                  >
                     {formatStatus(item)}
                   </Text>
                 </TouchableOpacity>
@@ -312,7 +399,9 @@ export default function AdminOrdersScreen({ navigation }: any) {
 
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Order List</Text>
-              <Text style={styles.sectionCount}>{filteredOrders.length} found</Text>
+              <Text style={styles.sectionCount}>
+                {filteredOrders.length} found
+              </Text>
             </View>
           </>
         }
@@ -328,7 +417,9 @@ export default function AdminOrdersScreen({ navigation }: any) {
         renderItem={({ item }) => (
           <OrderCard
             order={item}
-            onPress={() => navigation.navigate("AdminOrderDetail", { orderId: item.id })}
+            onPress={() =>
+              navigation.navigate("AdminOrderDetail", { orderId: item.id })
+            }
             onStatus={(nextStatus: string) => askQuickUpdate(item, nextStatus)}
           />
         )}
@@ -353,6 +444,8 @@ export default function AdminOrdersScreen({ navigation }: any) {
 function OrderCard({ order, onPress, onStatus }: any) {
   const total = Number(order.totalAmount || 0);
   const commission = Number(order.restaurant?.commission || 0);
+  const deliveryFee = Number(order.deliveryFee || 0);
+  const discount = Number(order.discountAmount || 0);
   const kartoIncome = (total * commission) / 100;
   const vendorIncome = total - kartoIncome;
 
@@ -361,15 +454,17 @@ function OrderCard({ order, onPress, onStatus }: any) {
       <View style={styles.cardTop}>
         <View style={{ flex: 1 }}>
           <Text style={styles.orderTitle}>
-            #{order.orderNumber || order.id.slice(0, 8)}
+            #{order.orderNumber || order.id?.slice?.(0, 8) || "ORDER"}
           </Text>
 
           <Text style={styles.meta} numberOfLines={1}>
-            {order.user?.fullName || "Customer"} • {order.restaurant?.name || "Vendor"}
+            {order.user?.fullName || "Customer"} •{" "}
+            {order.restaurant?.name || "Vendor"}
           </Text>
 
           <Text style={styles.meta} numberOfLines={1}>
-            City: {order.restaurant?.city?.name || "-"}
+            City: {order.restaurant?.city?.name || "-"} •{" "}
+            {formatDate(order.createdAt)}
           </Text>
         </View>
 
@@ -377,8 +472,11 @@ function OrderCard({ order, onPress, onStatus }: any) {
       </View>
 
       <View style={styles.infoRow}>
-        <InfoChip icon="person-outline" text={order.user?.phone || "No customer phone"} />
-        <InfoChip icon="bicycle-outline" text={order.rider?.fullName || "Rider not assigned"} />
+        <InfoChip icon="call-outline" text={order.user?.phone || "No phone"} />
+        <InfoChip
+          icon="bicycle-outline"
+          text={order.rider?.fullName || "Rider not assigned"}
+        />
       </View>
 
       <View style={styles.incomeRow}>
@@ -387,9 +485,17 @@ function OrderCard({ order, onPress, onStatus }: any) {
         <IncomeBox label="Vendor" value={money(vendorIncome)} />
       </View>
 
+      <View style={styles.incomeRow}>
+        <IncomeBox label="Delivery" value={money(deliveryFee)} green />
+        <IncomeBox label="Discount" value={money(discount)} danger />
+        <IncomeBox label="Items" value={order.items?.length || 0} />
+      </View>
+
       <View style={styles.paymentRow}>
         <PaymentBadge status={order.paymentStatus || "PENDING"} />
-        <Text style={styles.itemsText}>{order.items?.length || 0} items</Text>
+        <Text style={styles.itemsText}>
+          {order.paymentMethod || "N/A"} • {order.items?.length || 0} items
+        </Text>
       </View>
 
       <View style={styles.actions}>
@@ -398,6 +504,7 @@ function OrderCard({ order, onPress, onStatus }: any) {
             key={action.status}
             title={action.title}
             icon={action.icon}
+            danger={action.status === "CANCELLED"}
             onPress={() => {
               if (action.status === "ASSIGN_RIDER") {
                 onPress();
@@ -423,11 +530,22 @@ function MiniStat({ label, value }: any) {
   );
 }
 
+function QuickAction({ icon, label, onPress }: any) {
+  return (
+    <TouchableOpacity style={styles.quickItem} onPress={onPress} activeOpacity={0.86}>
+      <Icon name={icon} size={21} color={THEME.yellow} />
+      <Text style={styles.quickText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function RevenuePill({ label, value, color }: any) {
   return (
     <View style={styles.revenuePill}>
       <Text style={styles.revenueLabel}>{label}</Text>
-      <Text style={[styles.revenueValue, { color }]}>{value}</Text>
+      <Text style={[styles.revenueValue, { color }]} numberOfLines={1}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -436,7 +554,12 @@ function StatusBadge({ status }: any) {
   const config = getStatusConfig(status);
 
   return (
-    <View style={[styles.statusBadge, { backgroundColor: config.bg, borderColor: config.border }]}>
+    <View
+      style={[
+        styles.statusBadge,
+        { backgroundColor: config.bg, borderColor: config.border },
+      ]}
+    >
       <Text style={[styles.statusText, { color: config.color }]}>
         {formatStatus(status)}
       </Text>
@@ -457,7 +580,13 @@ function PaymentBadge({ status }: any) {
       ]}
     >
       <Icon
-        name={paid ? "checkmark-circle-outline" : failed ? "close-circle-outline" : "time-outline"}
+        name={
+          paid
+            ? "checkmark-circle-outline"
+            : failed
+              ? "close-circle-outline"
+              : "time-outline"
+        }
         size={14}
         color={paid ? THEME.green : failed ? THEME.danger : THEME.orange}
       />
@@ -485,26 +614,47 @@ function InfoChip({ icon, text }: any) {
   );
 }
 
-function IncomeBox({ label, value, green }: any) {
+function IncomeBox({ label, value, green, danger }: any) {
   return (
     <View style={styles.incomeBox}>
       <Text style={styles.incomeLabel}>{label}</Text>
-      <Text style={[styles.incomeValue, green && { color: THEME.green }]} numberOfLines={1}>
+      <Text
+        style={[
+          styles.incomeValue,
+          green && { color: THEME.green },
+          danger && { color: THEME.danger },
+        ]}
+        numberOfLines={1}
+      >
         {value}
       </Text>
     </View>
   );
 }
 
-function Action({ title, icon, onPress, outline }: any) {
+function Action({ title, icon, onPress, outline, danger }: any) {
   return (
     <TouchableOpacity
-      style={[styles.actionBtn, outline && styles.actionOutline]}
+      style={[
+        styles.actionBtn,
+        outline && styles.actionOutline,
+        danger && styles.actionDanger,
+      ]}
       onPress={onPress}
       activeOpacity={0.86}
     >
-      <Icon name={icon} size={16} color={outline ? THEME.yellow : "#000"} />
-      <Text style={[styles.actionText, outline && styles.actionTextOutline]}>
+      <Icon
+        name={icon}
+        size={16}
+        color={outline ? THEME.yellow : danger ? THEME.danger : "#000"}
+      />
+      <Text
+        style={[
+          styles.actionText,
+          outline && styles.actionTextOutline,
+          danger && styles.actionTextDanger,
+        ]}
+      >
         {title}
       </Text>
     </TouchableOpacity>
@@ -514,11 +664,22 @@ function Action({ title, icon, onPress, outline }: any) {
 function getNextActions(status: string) {
   switch (status) {
     case "PLACED":
-      return [{ title: "Accept", status: "ACCEPTED_BY_VENDOR", icon: "checkmark-outline" }];
+      return [
+        { title: "Accept", status: "ACCEPTED", icon: "checkmark-outline" },
+        { title: "Cancel", status: "CANCELLED", icon: "close-outline" },
+      ];
+    case "ACCEPTED":
     case "ACCEPTED_BY_VENDOR":
-      return [{ title: "Preparing", status: "PREPARING", icon: "flame-outline" }];
+      return [
+        { title: "Preparing", status: "PREPARING", icon: "flame-outline" },
+        { title: "Cancel", status: "CANCELLED", icon: "close-outline" },
+      ];
     case "PREPARING":
-      return [{ title: "Ready", status: "READY_FOR_PICKUP", icon: "cube-outline" }];
+      return [
+        { title: "Ready", status: "READY", icon: "cube-outline" },
+        { title: "Cancel", status: "CANCELLED", icon: "close-outline" },
+      ];
+    case "READY":
     case "READY_FOR_PICKUP":
       return [{ title: "Assign Rider", status: "ASSIGN_RIDER", icon: "bicycle-outline" }];
     case "ASSIGNED_TO_RIDER":
@@ -552,10 +713,16 @@ function getStatusConfig(status: string) {
 function formatStatus(status: string) {
   if (!status) return "-";
   if (status === "ALL") return "All";
+
   return status
     .replace(/_/g, " ")
     .toLowerCase()
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatDate(value: any) {
+  if (!value) return "Recently";
+  return new Date(value).toLocaleDateString();
 }
 
 const styles = StyleSheet.create({
@@ -568,7 +735,6 @@ const styles = StyleSheet.create({
   },
   loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "800" },
   listContent: { paddingHorizontal: 16, paddingBottom: 38 },
-
   header: {
     paddingTop: 22,
     paddingBottom: 16,
@@ -586,6 +752,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   smallLabel: {
     color: THEME.green,
     fontWeight: "900",
@@ -594,7 +768,6 @@ const styles = StyleSheet.create({
   },
   title: { color: THEME.text, fontSize: 27, fontWeight: "900", marginTop: 2 },
   subtitle: { color: THEME.muted, fontWeight: "700", marginTop: 3, fontSize: 12 },
-
   summaryCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -619,9 +792,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  summaryStats: { flexDirection: "row", gap: 10, marginTop: 20 },
+  summaryStats: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 20 },
   miniStat: {
-    flex: 1,
+    width: "48.5%",
     backgroundColor: THEME.card2,
     borderRadius: 18,
     padding: 12,
@@ -630,7 +803,6 @@ const styles = StyleSheet.create({
   },
   miniValue: { color: THEME.text, fontSize: 20, fontWeight: "900" },
   miniLabel: { color: THEME.muted, fontSize: 10.5, fontWeight: "800", marginTop: 3 },
-
   revenueRow: { flexDirection: "row", gap: 10, marginTop: 12 },
   revenuePill: {
     flex: 1,
@@ -642,7 +814,26 @@ const styles = StyleSheet.create({
   },
   revenueLabel: { color: THEME.muted, fontSize: 11, fontWeight: "800" },
   revenueValue: { fontSize: 15, fontWeight: "900", marginTop: 5 },
-
+  quickRail: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  quickItem: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  quickText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: "900",
+    marginTop: 6,
+  },
   searchBox: {
     marginTop: 17,
     height: 54,
@@ -656,7 +847,6 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   searchInput: { flex: 1, color: THEME.text, fontWeight: "800", fontSize: 14 },
-
   statusList: { maxHeight: 48, marginTop: 15 },
   chip: {
     height: 38,
@@ -671,7 +861,6 @@ const styles = StyleSheet.create({
   chipActive: { backgroundColor: THEME.yellow, borderColor: THEME.yellow },
   chipText: { color: THEME.muted, fontWeight: "900", fontSize: 11 },
   chipTextActive: { color: "#000" },
-
   sectionHeader: {
     marginTop: 24,
     marginBottom: 12,
@@ -681,7 +870,6 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { color: THEME.text, fontSize: 20, fontWeight: "900" },
   sectionCount: { color: THEME.yellow, fontWeight: "900" },
-
   emptyBox: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -698,7 +886,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "700",
   },
-
   card: {
     backgroundColor: THEME.card,
     padding: 15,
@@ -710,7 +897,6 @@ const styles = StyleSheet.create({
   cardTop: { flexDirection: "row", justifyContent: "space-between", gap: 10 },
   orderTitle: { fontSize: 17, fontWeight: "900", color: THEME.text },
   meta: { color: THEME.muted, marginTop: 4, fontSize: 12, fontWeight: "800" },
-
   statusBadge: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -719,7 +905,6 @@ const styles = StyleSheet.create({
     alignSelf: "flex-start",
   },
   statusText: { fontWeight: "900", fontSize: 10 },
-
   infoRow: { flexDirection: "row", gap: 8, marginTop: 14 },
   infoChip: {
     flex: 1,
@@ -734,7 +919,6 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   infoChipText: { flex: 1, color: THEME.muted, fontSize: 11, fontWeight: "800" },
-
   incomeRow: { flexDirection: "row", gap: 8, marginTop: 12 },
   incomeBox: {
     flex: 1,
@@ -746,7 +930,6 @@ const styles = StyleSheet.create({
   },
   incomeLabel: { color: THEME.muted, fontSize: 10.5, fontWeight: "800" },
   incomeValue: { color: THEME.yellow, marginTop: 5, fontWeight: "900", fontSize: 12.5 },
-
   paymentRow: {
     marginTop: 12,
     flexDirection: "row",
@@ -768,7 +951,6 @@ const styles = StyleSheet.create({
   paymentFailed: { backgroundColor: "#251010", borderColor: "#6B1F1F" },
   paymentText: { color: THEME.orange, fontWeight: "900", fontSize: 10 },
   itemsText: { color: THEME.muted, fontWeight: "800", fontSize: 12 },
-
   actions: { flexDirection: "row", gap: 8, marginTop: 13, flexWrap: "wrap" },
   actionBtn: {
     backgroundColor: THEME.yellow,
@@ -782,6 +964,8 @@ const styles = StyleSheet.create({
     borderColor: THEME.yellow,
   },
   actionOutline: { backgroundColor: THEME.card2, borderColor: THEME.border },
+  actionDanger: { backgroundColor: "#251010", borderColor: "#6B1F1F" },
   actionText: { color: "#000", fontWeight: "900", fontSize: 12 },
   actionTextOutline: { color: THEME.yellow },
+  actionTextDanger: { color: THEME.danger },
 });

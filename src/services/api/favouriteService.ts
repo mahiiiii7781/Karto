@@ -23,6 +23,7 @@ export type FavoriteRestaurant = {
 
 export type FavoriteItem = {
   id: string;
+  userId?: string;
   restaurantId?: string;
   restaurant_id?: string;
   restaurant?: FavoriteRestaurant | null;
@@ -32,10 +33,12 @@ export type FavoriteItem = {
 
 export type FavoriteMenuItem = {
   id: string;
+  userId?: string;
   menuItemId?: string;
   menu_item_id?: string;
   menuItem?: any;
   menu_item?: any;
+  restaurant?: FavoriteRestaurant | null;
   createdAt?: string;
   created_at?: string;
 };
@@ -54,7 +57,9 @@ const normalizeData = (res: any) => {
   return res?.data?.data ?? res?.data ?? null;
 };
 
-const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
+const safe = async <T>(
+  fn: () => Promise<any>
+): Promise<ApiResult<T>> => {
   try {
     const res = await fn();
 
@@ -63,7 +68,10 @@ const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
       error: null,
     };
   } catch (error: any) {
-    console.log("FAVORITE API ERROR:", error?.response?.data || error?.message);
+    console.log(
+      "FAVORITE API ERROR:",
+      error?.response?.data || error?.message
+    );
 
     return {
       data: null,
@@ -73,52 +81,115 @@ const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
 };
 
 export const favoriteService = {
+  /* =========================
+     ALL FAVORITES
+  ========================= */
+
   getFavorites: async () => {
-    return safe<FavoritesResponse>(() => apiClient.get("/favorite"));
+    return safe<FavoritesResponse>(() =>
+      apiClient.get("/favorite")
+    );
   },
 
   getFavoriteRestaurants: async () => {
-    const result = await safe<FavoritesResponse>(() => apiClient.get("/favorite"));
+    const result = await safe<FavoritesResponse>(() =>
+      apiClient.get("/favorite")
+    );
 
     return {
-      data: Array.isArray(result.data?.restaurants)
-        ? result.data.restaurants
-        : [],
+      data: result.data?.restaurants || [],
       error: result.error,
     } as ApiResult<FavoriteItem[]>;
   },
 
-  toggleFavorite: async (restaurantId: string) => {
+  getFavoriteItems: async () => {
+    const result = await safe<FavoritesResponse>(() =>
+      apiClient.get("/favorite")
+    );
+
+    return {
+      data: result.data?.items || [],
+      error: result.error,
+    } as ApiResult<FavoriteMenuItem[]>;
+  },
+
+  /* =========================
+     RESTAURANTS
+  ========================= */
+
+  toggleRestaurantFavorite: async (
+    restaurantId: string
+  ) => {
     return safe<any>(() =>
-      apiClient.post(`/favorite/restaurant/${restaurantId}`)
+      apiClient.post(
+        `/favorite/restaurant/${restaurantId}`
+      )
     );
   },
 
   addFavorite: async (restaurantId: string) => {
     return safe<any>(() =>
-      apiClient.post(`/favorite/restaurant/${restaurantId}`)
+      apiClient.post(
+        `/favorite/restaurant/${restaurantId}`
+      )
     );
   },
 
   removeFavorite: async (restaurantId: string) => {
     return safe<any>(() =>
-      apiClient.post(`/favorite/restaurant/${restaurantId}`)
+      apiClient.post(
+        `/favorite/restaurant/${restaurantId}`
+      )
     );
   },
 
   isFavorite: async (restaurantId: string) => {
-    return safe<{ success: boolean; isFavorite: boolean }>(() =>
-      apiClient.get(`/favorite/restaurant/${restaurantId}/status`)
+    return safe<{
+      success: boolean;
+      isFavorite: boolean;
+    }>(() =>
+      apiClient.get(
+        `/favorite/restaurant/${restaurantId}/status`
+      )
     );
   },
 
-  toggleItemFavorite: async (menuItemId: string) => {
-    return safe<any>(() => apiClient.post(`/favorite/item/${menuItemId}`));
+  /* =========================
+     MENU ITEMS
+  ========================= */
+
+  toggleItemFavorite: async (
+    menuItemId: string
+  ) => {
+    return safe<any>(() =>
+      apiClient.post(
+        `/favorite/item/${menuItemId}`
+      )
+    );
   },
 
-  isItemFavorite: async (menuItemId: string) => {
-    return safe<{ success: boolean; isFavorite: boolean }>(() =>
-      apiClient.get(`/favorite/item/${menuItemId}/status`)
+  removeFavoriteItem: async (
+    menuItemId: string
+  ) => {
+    return safe<any>(() =>
+      apiClient.post(
+        `/favorite/item/${menuItemId}`
+      )
+    );
+  },
+
+  isItemFavorite: async (
+    menuItemId: string
+  ) => {
+    return safe<{
+      success: boolean;
+      isFavorite: boolean;
+    }>(() =>
+      apiClient.get(
+        `/favorite/item/${menuItemId}/status`
+      )
     );
   },
 };
+
+export default favoriteService;

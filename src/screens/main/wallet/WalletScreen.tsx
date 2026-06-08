@@ -9,6 +9,7 @@ import {
   RefreshControl,
   StatusBar,
   Platform,
+  Modal,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -22,19 +23,22 @@ import {
 } from "@/services/api/walletService";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
   green: "#22C55E",
-  greenDark: "#16A34A",
-  yellow: "#FACC15",
-  orange: "#FB923C",
-  blue: "#38BDF8",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
-  black: "#050807",
+  yellow: "#F59E0B",
+  purple: "#8B5CF6",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
+  white: "#FFFFFF",
+  black: "#050807",
 };
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
@@ -59,21 +63,79 @@ const normalizeList = (value: any): WalletTransaction[] => {
     value?.data?.data?.transactions ||
     value?.data?.data ||
     value?.data ||
+    value?.transactions ||
+    value ||
     [];
 
   return Array.isArray(list) ? list : [];
 };
 
 const normalizeSummary = (value: any): WalletSummary | null => {
-  return (
+  const data =
     value?.data?.summary ||
     value?.data?.wallet ||
     value?.data?.data?.summary ||
     value?.data?.data?.wallet ||
     value?.data?.data ||
     value?.data ||
-    null
-  );
+    value?.summary ||
+    value?.wallet ||
+    value ||
+    null;
+
+  if (!data || Array.isArray(data)) return null;
+  return data;
+};
+
+const getDate = (date?: string) => {
+  if (!date) return "Recently";
+
+  const parsed = new Date(date);
+  if (Number.isNaN(parsed.getTime())) return "Recently";
+
+  return parsed.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const normalizeType = (type?: string) => String(type || "CREDIT").toUpperCase();
+
+const isCreditType = (type?: string) => {
+  const t = normalizeType(type);
+
+  return [
+    "CREDIT",
+    "REFUND",
+    "REWARD",
+    "CASHBACK",
+    "BONUS",
+    "ORDER_REFUND",
+    "WALLET_CREDIT",
+    "ADJUSTMENT_CREDIT",
+  ].includes(t);
+};
+
+const getTxIcon = (type?: string) => {
+  const t = normalizeType(type);
+
+  if (["DEBIT", "ORDER_PAYMENT", "PAYMENT", "WALLET_DEBIT"].includes(t)) {
+    return "arrow-up-circle-outline";
+  }
+
+  if (["REFUND", "ORDER_REFUND"].includes(t)) {
+    return "return-down-back-outline";
+  }
+
+  if (["REWARD", "CASHBACK", "BONUS"].includes(t)) {
+    return "gift-outline";
+  }
+
+  if (t.includes("COUPON")) return "pricetag-outline";
+
+  return "arrow-down-circle-outline";
 };
 
 export default function WalletScreen() {
@@ -85,6 +147,9 @@ export default function WalletScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [infoModalVisible, setInfoModalVisible] = useState(false);
+  const [txModal, setTxModal] = useState<WalletTransaction | null>(null);
+
   const isGuest = !user?.id;
 
   const balance = useMemo(() => {
@@ -92,6 +157,8 @@ export default function WalletScreen() {
       summary?.availableBalance ??
         summary?.available_balance ??
         summary?.balance ??
+        (summary as any)?.walletBalance ??
+        (summary as any)?.wallet_balance ??
         0
     );
   }, [summary]);
@@ -100,6 +167,17 @@ export default function WalletScreen() {
     summary?.credits ??
       (summary as any)?.creditAmount ??
       (summary as any)?.credit_amount ??
+      (summary as any)?.totalCredits ??
+      (summary as any)?.total_credits ??
+      0
+  );
+
+  const debits = Number(
+    (summary as any)?.debits ??
+      (summary as any)?.debitAmount ??
+      (summary as any)?.debit_amount ??
+      (summary as any)?.totalDebits ??
+      (summary as any)?.total_debits ??
       0
   );
 
@@ -117,89 +195,78 @@ export default function WalletScreen() {
       0
   );
 
+  const creditTxCount = useMemo(
+    () => transactions.filter(tx => isCreditType(tx.type)).length,
+    [transactions]
+  );
+
+  const debitTxCount = useMemo(
+    () => transactions.filter(tx => !isCreditType(tx.type)).length,
+    [transactions]
+  );
+
+  const lastUpdated = useMemo(() => {
+    const latest =
+      (summary as any)?.updatedAt ||
+      (summary as any)?.updated_at ||
+      transactions?.[0]?.createdAt ||
+      (transactions?.[0] as any)?.created_at;
+
+    return latest ? getDate(latest) : "Just now";
+  }, [summary, transactions]);
+
+  const loadWallet = useCallback(
+    async (isRefresh = false) => {
+      if (isGuest) {
+        setSummary(null);
+        setTransactions([]);
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      if (refreshing && isRefresh) return;
+
+      isRefresh ? setRefreshing(true) : setLoading(true);
+
+      try {
+        const [summaryRes, txRes] = await Promise.allSettled([
+          walletService.getWalletSummary(),
+          walletService.getTransactions(),
+        ]);
+
+        if (summaryRes.status === "fulfilled" && !summaryRes.value?.error) {
+          setSummary(normalizeSummary(summaryRes.value));
+        } else {
+          setSummary(null);
+        }
+
+        if (txRes.status === "fulfilled" && !txRes.value?.error) {
+          setTransactions(normalizeList(txRes.value));
+        } else {
+          setTransactions([]);
+        }
+
+        if (isRefresh) {
+          showToast("success", "Wallet refreshed", "Latest wallet details updated.");
+        }
+      } catch {
+        setSummary(null);
+        setTransactions([]);
+        showToast("error", "Unable to load wallet", "Please try again.");
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [isGuest, refreshing]
+  );
+
   useFocusEffect(
     useCallback(() => {
       loadWallet(false);
-    }, [user?.id])
+    }, [loadWallet])
   );
-
-  const loadWallet = async (isRefresh = false) => {
-    if (isGuest) {
-      setSummary(null);
-      setTransactions([]);
-      setLoading(false);
-      setRefreshing(false);
-      return;
-    }
-
-    if (refreshing && isRefresh) return;
-
-    isRefresh ? setRefreshing(true) : setLoading(true);
-
-    try {
-      const [summaryRes, txRes] = await Promise.allSettled([
-        walletService.getWalletSummary(),
-        walletService.getTransactions(),
-      ]);
-
-      if (summaryRes.status === "fulfilled" && !summaryRes.value?.error) {
-        setSummary(normalizeSummary(summaryRes.value));
-      } else {
-        setSummary(null);
-      }
-
-      if (txRes.status === "fulfilled" && !txRes.value?.error) {
-        setTransactions(normalizeList(txRes.value));
-      } else {
-        setTransactions([]);
-      }
-
-      if (isRefresh) {
-        showToast("success", "Wallet refreshed", "Latest wallet details updated.");
-      }
-    } catch {
-      setSummary(null);
-      setTransactions([]);
-      showToast("error", "Unable to load wallet", "Please try again.");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  const formatDate = (date?: string) => {
-    if (!date) return "Recently";
-
-    return new Date(date).toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const getTxIcon = (type?: string) => {
-    const t = String(type || "").toUpperCase();
-
-    if (["DEBIT", "ORDER_PAYMENT", "PAYMENT"].includes(t)) {
-      return "arrow-up-circle-outline";
-    }
-
-    if (["REFUND", "ORDER_REFUND"].includes(t)) {
-      return "return-down-back-outline";
-    }
-
-    if (["REWARD", "CASHBACK", "BONUS"].includes(t)) {
-      return "gift-outline";
-    }
-
-    return "arrow-down-circle-outline";
-  };
-
-  const isCredit = (type?: string) => {
-    const t = String(type || "").toUpperCase();
-    return ["CREDIT", "REFUND", "REWARD", "CASHBACK", "BONUS", "ORDER_REFUND"].includes(t);
-  };
 
   const goToLogin = () => {
     navigation.navigate("Auth");
@@ -209,15 +276,51 @@ export default function WalletScreen() {
     navigation.navigate("Orders");
   };
 
+  const goToCoupons = () => {
+    navigation.navigate("Coupons");
+  };
+
+  const goToSupport = () => {
+    navigation.navigate("HelpSupport");
+  };
+
+  const getTxTitle = (tx: WalletTransaction) => {
+    const rawTitle =
+      tx.title ||
+      (tx as any).name ||
+      (tx as any).transactionTitle ||
+      (tx as any).transaction_title ||
+      tx.type ||
+      "Wallet Transaction";
+
+    return String(rawTitle).replaceAll("_", " ");
+  };
+
+  const getTxDescription = (tx: WalletTransaction) => {
+    return (
+      tx.description ||
+      (tx as any).note ||
+      (tx as any).message ||
+      getDate(tx.createdAt || (tx as any).created_at)
+    );
+  };
+
+  const getTxAmount = (tx: WalletTransaction) => {
+    return Number(tx.amount ?? (tx as any).value ?? 0);
+  };
+
   const renderTransaction = (tx: WalletTransaction, index: number) => {
-    const credit = isCredit(tx.type);
-    const amount = Number(tx.amount || 0);
-    const txTitle = tx.title || tx.type || "Wallet Transaction";
-    const txSub =
-      tx.description || formatDate(tx.createdAt || (tx as any).created_at);
+    const credit = isCreditType(tx.type);
+    const amount = getTxAmount(tx);
+    const txId = tx.id || String(index);
 
     return (
-      <View key={tx.id || String(index)} style={styles.txRow}>
+      <TouchableOpacity
+        key={txId}
+        style={styles.txRow}
+        activeOpacity={0.86}
+        onPress={() => setTxModal(tx)}
+      >
         <View style={[styles.txIcon, credit ? styles.creditIcon : styles.debitIcon]}>
           <Icon
             name={getTxIcon(tx.type) as any}
@@ -228,29 +331,34 @@ export default function WalletScreen() {
 
         <View style={styles.txContent}>
           <Text style={styles.txTitle} numberOfLines={1}>
-            {txTitle}
+            {getTxTitle(tx)}
           </Text>
           <Text style={styles.txSub} numberOfLines={1}>
-            {txSub}
+            {getTxDescription(tx)}
           </Text>
         </View>
 
-        <Text style={[styles.txAmount, !credit && styles.txDebit]}>
-          {credit ? "+" : "-"}
-          {money(amount)}
-        </Text>
-      </View>
+        <View style={styles.txRight}>
+          <Text style={[styles.txAmount, !credit && styles.txDebit]}>
+            {credit ? "+" : "-"}
+            {money(amount)}
+          </Text>
+          <Text style={styles.txDate}>
+            {getDate(tx.createdAt || (tx as any).created_at)}
+          </Text>
+        </View>
+      </TouchableOpacity>
     );
   };
 
   if (loading) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.loadingText}>Loading wallet...</Text>
       </View>
     );
@@ -259,11 +367,11 @@ export default function WalletScreen() {
   if (isGuest) {
     return (
       <View style={styles.screen}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Icon name="chevron-back" size={24} color={THEME.text} />
+            <Icon name="chevron-back" size={24} color={THEME.blue} />
           </TouchableOpacity>
 
           <View style={styles.headerText}>
@@ -274,7 +382,7 @@ export default function WalletScreen() {
 
         <View style={styles.guestBox}>
           <View style={styles.guestIcon}>
-            <Icon name="wallet-outline" size={44} color={THEME.yellow} />
+            <Icon name="wallet-outline" size={48} color={THEME.orange} />
           </View>
 
           <Text style={styles.guestTitle}>Login required</Text>
@@ -284,7 +392,7 @@ export default function WalletScreen() {
 
           <TouchableOpacity style={styles.loginBtn} onPress={goToLogin} activeOpacity={0.9}>
             <Text style={styles.loginText}>Login / Sign up</Text>
-            <Icon name="arrow-forward" size={19} color={THEME.black} />
+            <Icon name="arrow-forward" size={19} color={THEME.white} />
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.browseBtn} onPress={() => navigation.goBack()}>
@@ -297,7 +405,7 @@ export default function WalletScreen() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -306,14 +414,14 @@ export default function WalletScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => loadWallet(true)}
-            tintColor={THEME.green}
-            colors={[THEME.green]}
+            tintColor={THEME.orange}
+            colors={[THEME.orange]}
           />
         }
       >
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-            <Icon name="chevron-back" size={24} color={THEME.text} />
+            <Icon name="chevron-back" size={24} color={THEME.blue} />
           </TouchableOpacity>
 
           <View style={styles.headerText}>
@@ -328,15 +436,16 @@ export default function WalletScreen() {
             activeOpacity={0.85}
           >
             {refreshing ? (
-              <ActivityIndicator size="small" color={THEME.black} />
+              <ActivityIndicator size="small" color={THEME.white} />
             ) : (
-              <Icon name="refresh" size={20} color={THEME.black} />
+              <Icon name="refresh" size={20} color={THEME.white} />
             )}
           </TouchableOpacity>
         </View>
 
         <View style={styles.balanceCard}>
-          <View style={styles.balanceGlow} />
+          <View style={styles.balanceGlowOne} />
+          <View style={styles.balanceGlowTwo} />
 
           <View style={styles.balanceTop}>
             <View style={{ flex: 1 }}>
@@ -348,36 +457,62 @@ export default function WalletScreen() {
               </Text>
             </View>
 
-            <View style={styles.walletIcon}>
-              <Icon name="wallet" size={35} color={THEME.black} />
-            </View>
+            <TouchableOpacity
+              style={styles.walletIcon}
+              activeOpacity={0.86}
+              onPress={() => setInfoModalVisible(true)}
+            >
+              <Icon name="wallet" size={35} color={THEME.white} />
+            </TouchableOpacity>
           </View>
 
           <View style={styles.balanceFooter}>
-            <View style={styles.smallStat}>
-              <View style={[styles.statIcon, { backgroundColor: "#102116" }]}>
-                <Icon name="add-circle-outline" size={18} color={THEME.green} />
-              </View>
-              <Text style={styles.smallLabel}>Credits</Text>
-              <Text style={styles.smallValue}>{money(credits)}</Text>
-            </View>
-
-            <View style={styles.smallStat}>
-              <View style={[styles.statIcon, { backgroundColor: "#252109" }]}>
-                <Icon name="return-down-back-outline" size={18} color={THEME.yellow} />
-              </View>
-              <Text style={styles.smallLabel}>Refunds</Text>
-              <Text style={styles.smallValue}>{money(refunds)}</Text>
-            </View>
-
-            <View style={styles.smallStat}>
-              <View style={[styles.statIcon, { backgroundColor: "#111827" }]}>
-                <Icon name="gift-outline" size={18} color={THEME.blue} />
-              </View>
-              <Text style={styles.smallLabel}>Rewards</Text>
-              <Text style={styles.smallValue}>{rewards.toFixed(0)}</Text>
-            </View>
+            <SmallStat
+              icon="add-circle-outline"
+              label="Credits"
+              value={money(credits)}
+              color={THEME.green}
+            />
+            <SmallStat
+              icon="remove-circle-outline"
+              label="Debits"
+              value={money(debits)}
+              color={THEME.danger}
+            />
+            <SmallStat
+              icon="return-down-back-outline"
+              label="Refunds"
+              value={money(refunds)}
+              color={THEME.yellow}
+            />
           </View>
+        </View>
+
+        <View style={styles.quickRow}>
+          <QuickAction icon="receipt-outline" label="Orders" color={THEME.orange} onPress={goToOrders} />
+          <QuickAction icon="pricetag-outline" label="Coupons" color={THEME.yellow} onPress={goToCoupons} />
+          <QuickAction icon="headset-outline" label="Support" color={THEME.green} onPress={goToSupport} />
+        </View>
+
+        <View style={styles.summaryGrid}>
+          <SummaryCard
+            icon="arrow-down-circle-outline"
+            label="Credit Txn"
+            value={String(creditTxCount)}
+            color={THEME.green}
+          />
+          <SummaryCard
+            icon="arrow-up-circle-outline"
+            label="Debit Txn"
+            value={String(debitTxCount)}
+            color={THEME.danger}
+          />
+          <SummaryCard
+            icon="gift-outline"
+            label="Rewards"
+            value={String(rewards.toFixed(0))}
+            color={THEME.purple}
+          />
         </View>
 
         <View style={styles.actionCard}>
@@ -385,7 +520,7 @@ export default function WalletScreen() {
 
           <TouchableOpacity style={styles.row} onPress={goToOrders} activeOpacity={0.85}>
             <View style={styles.iconBox}>
-              <Icon name="receipt-outline" size={21} color={THEME.green} />
+              <Icon name="receipt-outline" size={21} color={THEME.orange} />
             </View>
 
             <View style={styles.rowContent}>
@@ -403,18 +538,35 @@ export default function WalletScreen() {
 
             <View style={styles.rowContent}>
               <Text style={styles.rowTitle}>Online Payment</Text>
-              <Text style={styles.rowSub}>Pay securely using UPI, cards or COD at checkout</Text>
+              <Text style={styles.rowSub}>UPI, cards, wallets and COD are handled at checkout</Text>
             </View>
 
             <View style={styles.activePill}>
               <Text style={styles.activeText}>Checkout</Text>
             </View>
           </View>
+
+          <TouchableOpacity style={styles.rowLast} onPress={() => setInfoModalVisible(true)}>
+            <View style={styles.iconBoxBlue}>
+              <Icon name="information-circle-outline" size={21} color={THEME.blue} />
+            </View>
+
+            <View style={styles.rowContent}>
+              <Text style={styles.rowTitle}>Wallet Rules</Text>
+              <Text style={styles.rowSub}>How credits, refunds and rewards work</Text>
+            </View>
+
+            <Icon name="chevron-forward" size={20} color={THEME.muted} />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.infoCard}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Activity</Text>
+            <View>
+              <Text style={styles.sectionTitleNoMargin}>Recent Activity</Text>
+              <Text style={styles.updatedText}>Updated {lastUpdated}</Text>
+            </View>
+
             <Text style={styles.txCount}>
               {transactions.length} txn{transactions.length === 1 ? "" : "s"}
             </Text>
@@ -423,22 +575,149 @@ export default function WalletScreen() {
           {transactions.length === 0 ? (
             <View style={styles.emptyBox}>
               <View style={styles.emptyIcon}>
-                <Icon name="receipt-outline" size={42} color={THEME.yellow} />
+                <Icon name="receipt-outline" size={42} color={THEME.orange} />
               </View>
 
               <Text style={styles.emptyTitle}>No transactions yet</Text>
               <Text style={styles.emptyText}>
                 Refunds, wallet credits and reward activity will appear here.
               </Text>
+
+              <TouchableOpacity style={styles.emptyBtn} onPress={goToOrders} activeOpacity={0.9}>
+                <Text style={styles.emptyBtnText}>View Orders</Text>
+                <Icon name="arrow-forward" size={17} color={THEME.white} />
+              </TouchableOpacity>
             </View>
           ) : (
             transactions.map(renderTransaction)
           )}
         </View>
       </ScrollView>
+
+      <WalletInfoModal
+        visible={infoModalVisible}
+        onClose={() => setInfoModalVisible(false)}
+      />
+
+      <TransactionModal tx={txModal} onClose={() => setTxModal(null)} />
     </View>
   );
 }
+
+const SmallStat = ({ icon, label, value, color }: any) => (
+  <View style={styles.smallStat}>
+    <View style={[styles.statIcon, { backgroundColor: `${color}16` }]}>
+      <Icon name={icon} size={18} color={color} />
+    </View>
+    <Text style={styles.smallLabel}>{label}</Text>
+    <Text style={styles.smallValue}>{value}</Text>
+  </View>
+);
+
+const QuickAction = ({ icon, label, color, onPress }: any) => (
+  <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.86}>
+    <View style={[styles.quickIcon, { backgroundColor: `${color}16` }]}>
+      <Icon name={icon} size={22} color={color} />
+    </View>
+    <Text style={styles.quickText}>{label}</Text>
+  </TouchableOpacity>
+);
+
+const SummaryCard = ({ icon, label, value, color }: any) => (
+  <View style={styles.summaryCard}>
+    <View style={[styles.summaryIcon, { backgroundColor: `${color}16` }]}>
+      <Icon name={icon} size={20} color={color} />
+    </View>
+    <Text style={styles.summaryValue}>{value}</Text>
+    <Text style={styles.summaryLabel}>{label}</Text>
+  </View>
+);
+
+const WalletInfoModal = ({ visible, onClose }: any) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalBox}>
+        <View style={styles.modalIcon}>
+          <Icon name="wallet-outline" size={32} color={THEME.orange} />
+        </View>
+
+        <Text style={styles.modalTitle}>Wallet Rules</Text>
+        <Text style={styles.modalSub}>
+          Karto wallet keeps your refunds, credits and rewards safely in one place.
+        </Text>
+
+        <View style={styles.rulesBox}>
+          <InfoLine icon="return-down-back-outline" text="Refunds from eligible cancelled orders are credited here." />
+          <InfoLine icon="gift-outline" text="Rewards and cashback may be added as wallet credits." />
+          <InfoLine icon="cart-outline" text="Wallet balance can be used in checkout when wallet payment is enabled." />
+        </View>
+
+        <TouchableOpacity style={styles.modalBtn} onPress={onClose}>
+          <Text style={styles.modalBtnText}>Got it</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+);
+
+const TransactionModal = ({ tx, onClose }: any) => {
+  if (!tx) return null;
+
+  const credit = isCreditType(tx.type);
+  const amount = Number(tx.amount ?? tx.value ?? 0);
+
+  return (
+    <Modal visible={!!tx} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalBox}>
+          <View style={[styles.modalIcon, { backgroundColor: credit ? "#EAFBF1" : "#FFF1F1" }]}>
+            <Icon
+              name={getTxIcon(tx.type) as any}
+              size={32}
+              color={credit ? THEME.green : THEME.danger}
+            />
+          </View>
+
+          <Text style={styles.modalTitle}>
+            {String(tx.title || tx.type || "Wallet Transaction").replaceAll("_", " ")}
+          </Text>
+
+          <Text style={[styles.txModalAmount, !credit && { color: THEME.danger }]}>
+            {credit ? "+" : "-"}
+            {money(amount)}
+          </Text>
+
+          <View style={styles.rulesBox}>
+            <InfoLine icon="calendar-outline" text={getDate(tx.createdAt || tx.created_at)} />
+            <InfoLine icon="reader-outline" text={tx.description || tx.note || "Wallet activity"} />
+            <InfoLine icon="shield-checkmark-outline" text={`Type: ${String(tx.type || "CREDIT").replaceAll("_", " ")}`} />
+          </View>
+
+          <TouchableOpacity style={styles.modalBtn} onPress={onClose}>
+            <Text style={styles.modalBtnText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+const InfoLine = ({ icon, text }: any) => (
+  <View style={styles.infoLine}>
+    <View style={styles.infoLineIcon}>
+      <Icon name={icon} size={18} color={THEME.orange} />
+    </View>
+    <Text style={styles.infoLineText}>{text}</Text>
+  </View>
+);
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   screen: {
@@ -456,14 +735,13 @@ const styles = StyleSheet.create({
     height: 74,
     borderRadius: 25,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 18,
+    ...shadow,
   },
   loadingLogoText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 38,
     fontWeight: "900",
   },
@@ -489,26 +767,26 @@ const styles = StyleSheet.create({
   backBtn: {
     width: 44,
     height: 44,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   refreshBtn: {
     width: 42,
     height: 42,
-    borderRadius: 17,
-    backgroundColor: THEME.green,
+    borderRadius: 16,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   disabled: {
     opacity: 0.65,
   },
   title: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 29,
     fontWeight: "900",
   },
@@ -523,25 +801,33 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderRadius: 30,
     padding: 20,
-    borderWidth: 1,
-    borderColor: THEME.border,
     overflow: "hidden",
+    ...shadow,
   },
-  balanceGlow: {
+  balanceGlowOne: {
     position: "absolute",
     right: -56,
     top: -56,
     width: 170,
     height: 170,
     borderRadius: 85,
-    backgroundColor: "rgba(250,204,21,0.18)",
+    backgroundColor: "rgba(255,77,24,0.12)",
+  },
+  balanceGlowTwo: {
+    position: "absolute",
+    left: -60,
+    bottom: -65,
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: "rgba(34,197,94,0.10)",
   },
   balanceTop: {
     flexDirection: "row",
     alignItems: "center",
   },
   walletTag: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1,
@@ -552,7 +838,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   balance: {
-    color: THEME.green,
+    color: THEME.blue,
     fontSize: 42,
     fontWeight: "900",
     marginTop: 7,
@@ -568,7 +854,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 26,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 14,
@@ -580,9 +866,7 @@ const styles = StyleSheet.create({
   },
   smallStat: {
     flex: 1,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
     padding: 11,
   },
@@ -593,8 +877,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: THEME.border,
   },
   smallLabel: {
     color: THEME.muted,
@@ -602,10 +884,71 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   smallValue: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     marginTop: 4,
     fontSize: 13,
+  },
+  quickRow: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 10,
+  },
+  quickAction: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderRadius: 18,
+    paddingVertical: 14,
+    alignItems: "center",
+    ...shadow,
+  },
+  quickIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quickText: {
+    color: THEME.blue,
+    marginTop: 7,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  summaryGrid: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 10,
+  },
+  summaryCard: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderRadius: 18,
+    padding: 12,
+    alignItems: "center",
+    ...shadow,
+  },
+  summaryIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  summaryValue: {
+    color: THEME.blue,
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 7,
+  },
+  summaryLabel: {
+    color: THEME.muted,
+    fontSize: 11,
+    marginTop: 2,
+    fontWeight: "700",
+    textAlign: "center",
   },
   actionCard: {
     marginHorizontal: 20,
@@ -613,8 +956,7 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderRadius: 24,
     padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    ...shadow,
   },
   infoCard: {
     marginHorizontal: 20,
@@ -622,27 +964,44 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderRadius: 24,
     padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    ...shadow,
   },
   sectionHeader: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
+    marginBottom: 8,
   },
   sectionTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
     marginBottom: 10,
   },
-  txCount: {
+  sectionTitleNoMargin: {
+    color: THEME.blue,
+    fontSize: 17,
+    fontWeight: "900",
+  },
+  updatedText: {
     color: THEME.muted,
+    marginTop: 3,
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  txCount: {
+    color: THEME.orange,
     fontSize: 12,
-    fontWeight: "800",
-    marginBottom: 10,
+    fontWeight: "900",
   },
   row: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: THEME.border,
+  },
+  rowLast: {
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: 14,
@@ -653,9 +1012,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 15,
-    backgroundColor: "#102116",
-    borderWidth: 1,
-    borderColor: "#20462C",
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -664,9 +1021,16 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 15,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
+    backgroundColor: "#FFF7E8",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  iconBoxBlue: {
+    width: 44,
+    height: 44,
+    borderRadius: 15,
+    backgroundColor: "#E9F5FF",
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
@@ -675,7 +1039,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   rowTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 15,
     fontWeight: "900",
   },
@@ -687,15 +1051,13 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   activePill: {
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
+    backgroundColor: THEME.orangeSoft,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 99,
   },
   activeText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
   },
@@ -708,14 +1070,12 @@ const styles = StyleSheet.create({
     width: 88,
     height: 88,
     borderRadius: 32,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   emptyTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 18,
     fontWeight: "900",
     marginTop: 13,
@@ -726,6 +1086,20 @@ const styles = StyleSheet.create({
     marginTop: 6,
     lineHeight: 19,
     fontWeight: "700",
+  },
+  emptyBtn: {
+    marginTop: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  emptyBtnText: {
+    color: THEME.white,
+    fontWeight: "900",
   },
   txRow: {
     flexDirection: "row",
@@ -738,26 +1112,24 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 15,
-    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
   },
   creditIcon: {
-    backgroundColor: "#102116",
-    borderColor: "#20462C",
+    backgroundColor: "#EAFBF1",
   },
   debitIcon: {
-    backgroundColor: "#1B0E0E",
-    borderColor: "#3F1717",
+    backgroundColor: "#FFF1F1",
   },
   txContent: {
     flex: 1,
   },
   txTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 14,
+    textTransform: "capitalize",
   },
   txSub: {
     color: THEME.muted,
@@ -765,14 +1137,23 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontWeight: "700",
   },
+  txRight: {
+    alignItems: "flex-end",
+    marginLeft: 10,
+  },
   txAmount: {
     color: THEME.green,
     fontWeight: "900",
     fontSize: 14,
-    marginLeft: 10,
   },
   txDebit: {
     color: THEME.danger,
+  },
+  txDate: {
+    color: THEME.muted,
+    fontSize: 10,
+    marginTop: 3,
+    fontWeight: "700",
   },
   guestBox: {
     flex: 1,
@@ -785,13 +1166,12 @@ const styles = StyleSheet.create({
     height: 106,
     borderRadius: 38,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   guestTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 23,
     fontWeight: "900",
     marginTop: 18,
@@ -805,16 +1185,17 @@ const styles = StyleSheet.create({
   },
   loginBtn: {
     marginTop: 24,
-    backgroundColor: THEME.green,
-    borderRadius: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 22,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    ...shadow,
   },
   loginText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -824,7 +1205,86 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   browseText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontWeight: "900",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    padding: 22,
+  },
+  modalBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 20,
+    alignItems: "center",
+  },
+  modalIcon: {
+    width: 70,
+    height: 70,
+    borderRadius: 25,
+    backgroundColor: THEME.orangeSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    color: THEME.blue,
+    fontSize: 22,
+    fontWeight: "900",
+    textAlign: "center",
+    textTransform: "capitalize",
+  },
+  modalSub: {
+    color: THEME.muted,
+    textAlign: "center",
+    marginTop: 7,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  rulesBox: {
+    alignSelf: "stretch",
+    backgroundColor: THEME.surface,
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 18,
+    gap: 12,
+  },
+  infoLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  infoLineIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: THEME.orangeSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  infoLineText: {
+    flex: 1,
+    color: THEME.blue,
+    fontWeight: "800",
+    lineHeight: 18,
+  },
+  modalBtn: {
+    marginTop: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 24,
+  },
+  modalBtnText: {
+    color: THEME.white,
+    fontWeight: "900",
+  },
+  txModalAmount: {
+    color: THEME.green,
+    fontSize: 30,
+    fontWeight: "900",
+    marginTop: 10,
   },
 });

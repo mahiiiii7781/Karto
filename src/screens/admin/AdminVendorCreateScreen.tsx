@@ -9,10 +9,13 @@ import {
   Image,
   ActivityIndicator,
   StatusBar,
+  PermissionsAndroid,
+  Platform,
 } from "react-native";
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 import Icon from "react-native-vector-icons/Ionicons";
 import { adminVendorService, City } from "@/services/api/adminVendorService";
+import { adminService } from "@/services/api/adminService";
 import KartoMessageModal, {
   KartoMessageType,
 } from "@/components/common/KartoMessageModal";
@@ -30,8 +33,6 @@ const THEME = {
   danger: "#FF4D4D",
 };
 
-const VENDOR_TYPES = ["RESTAURANT", "GROCERY", "MEDICINE", "BAKERY"];
-
 type MessageState = {
   visible: boolean;
   type: KartoMessageType;
@@ -41,16 +42,25 @@ type MessageState = {
   onPrimary?: () => void;
 };
 
-export default function AdminVendorCreateScreen({ navigation }: any) {
+export default function AdminVendorCreateScreen({ route, navigation }: any) {
+  const editingVendor = route?.params?.vendor || null;
+  const isEditMode = route?.params?.mode === "edit" || !!editingVendor;
+
   const [cities, setCities] = useState<City[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
   const [loadingCities, setLoadingCities] = useState(true);
+  const [loadingCategories, setLoadingCategories] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const [image, setImage] = useState<any>(null);
+  const [existingImageUrl, setExistingImageUrl] = useState("");
 
   const [message, setMessage] = useState<MessageState>({
     visible: false,
     type: "info",
     title: "",
     message: "",
+    primaryText: "Done",
   });
 
   const [form, setForm] = useState<any>({
@@ -61,16 +71,58 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
     email: "",
     password: "123456",
     address: "",
-    type: "RESTAURANT",
+    latitude: "",
+    longitude: "",
+    type: "",
     commission: "10",
     cityId: "",
+    categoryId: "",
+    isOpen: true,
+    isActive: true,
   });
 
-  const [image, setImage] = useState<any>(null);
+  useEffect(() => {
+    loadInitialData();
+  }, []);
 
   useEffect(() => {
-    loadCities();
-  }, []);
+    if (editingVendor) {
+      const vendorCategoryId =
+        editingVendor.categoryId || editingVendor.category?.id || "";
+
+      const vendorType =
+        editingVendor.type ||
+        editingVendor.category?.name?.toUpperCase?.() ||
+        "";
+
+      setForm({
+        name: editingVendor.name || "",
+        ownerName: editingVendor.ownerName || editingVendor.vendor?.fullName || "",
+        ownerMobileNo:
+          editingVendor.ownerMobileNo || editingVendor.vendor?.phone || "",
+        phone: editingVendor.phone || "",
+        email: editingVendor.email || editingVendor.vendor?.email || "",
+        password: "",
+        address: editingVendor.address || "",
+        latitude:
+          editingVendor.latitude !== undefined && editingVendor.latitude !== null
+            ? String(editingVendor.latitude)
+            : "",
+        longitude:
+          editingVendor.longitude !== undefined && editingVendor.longitude !== null
+            ? String(editingVendor.longitude)
+            : "",
+        type: vendorType,
+        commission: String(editingVendor.commission ?? 10),
+        cityId: editingVendor.cityId || editingVendor.city?.id || "",
+        categoryId: vendorCategoryId,
+        isOpen: editingVendor.isOpen !== false,
+        isActive: editingVendor.vendor?.isActive !== false,
+      });
+
+      setExistingImageUrl(editingVendor.imageUrl || editingVendor.image_url || "");
+    }
+  }, [editingVendor]);
 
   const showMessage = (
     type: KartoMessageType,
@@ -93,6 +145,15 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
     setMessage((prev) => ({ ...prev, visible: false }));
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminVendors");
+  };
+
+  const loadInitialData = async () => {
+    await Promise.all([loadCities(), loadCategories()]);
+  };
+
   const loadCities = async () => {
     setLoadingCities(true);
 
@@ -111,13 +172,57 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
 
     setCities(data || []);
 
-    if (data?.length) {
-      setForm((prev: any) => ({ ...prev, cityId: data[0].id }));
+    if (!editingVendor && data?.length) {
+      setForm((prev: any) => ({
+        ...prev,
+        cityId: prev.cityId || data[0].id,
+      }));
     }
   };
 
-  const update = (key: string, value: string) => {
+  const loadCategories = async () => {
+    setLoadingCategories(true);
+
+    const { data, error } = await adminService.categories();
+
+    setLoadingCategories(false);
+
+    if (error) {
+      showMessage(
+        "error",
+        "Unable to Load Categories",
+        error.message || "Business categories load nahi hui."
+      );
+      return;
+    }
+
+    const activeCategories = (data || []).filter(
+      (cat: any) => cat.isActive !== false
+    );
+
+    setCategories(activeCategories);
+
+    if (!editingVendor && activeCategories.length > 0) {
+      const first = activeCategories[0];
+
+      setForm((prev: any) => ({
+        ...prev,
+        categoryId: prev.categoryId || first.id,
+        type: prev.type || normalizeType(first.name),
+      }));
+    }
+  };
+
+  const update = (key: string, value: any) => {
     setForm((prev: any) => ({ ...prev, [key]: value }));
+  };
+
+  const updateCategory = (category: any) => {
+    setForm((prev: any) => ({
+      ...prev,
+      categoryId: category.id,
+      type: normalizeType(category.name),
+    }));
   };
 
   const selectedCity = useMemo(
@@ -125,54 +230,139 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
     [cities, form.cityId]
   );
 
+  const selectedCategory = useMemo(
+    () => categories.find((cat) => cat.id === form.categoryId),
+    [categories, form.categoryId]
+  );
+
+  const requestCameraPermission = async () => {
+    if (Platform.OS !== "android") return true;
+
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.CAMERA,
+      {
+        title: "Camera Permission",
+        message: "Karto needs camera access to capture vendor image.",
+        buttonPositive: "Allow",
+        buttonNegative: "Cancel",
+      }
+    );
+
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
   const pickImage = async (fromCamera = false) => {
-    const fn = fromCamera ? launchCamera : launchImageLibrary;
+    try {
+      if (fromCamera) {
+        const granted = await requestCameraPermission();
 
-    const result = await fn({
-      mediaType: "photo",
-      quality: 0.8,
-      selectionLimit: 1,
-    });
+        if (!granted) {
+          showMessage(
+            "warning",
+            "Camera Permission Required",
+            "Camera permission allow karo, tabhi camera open hoga."
+          );
+          return;
+        }
+      }
 
-    if (result.didCancel) return;
+      const fn = fromCamera ? launchCamera : launchImageLibrary;
 
-    if (result.errorCode) {
+      const result = await fn({
+        mediaType: "photo",
+        quality: 0.8,
+        selectionLimit: 1,
+        includeBase64: false,
+        saveToPhotos: fromCamera,
+        cameraType: "back",
+      });
+
+      if (result.didCancel) return;
+
+      if (result.errorCode) {
+        showMessage(
+          "error",
+          "Image Selection Failed",
+          result.errorMessage || "Unable to select image. Please try again."
+        );
+        return;
+      }
+
+      const asset = result.assets?.[0];
+
+      if (!asset?.uri) {
+        showMessage("warning", "No Image Found", "Please select a valid vendor image.");
+        return;
+      }
+
+      setImage({
+        uri: asset.uri,
+        type: asset.type || "image/jpeg",
+        fileName: asset.fileName || `vendor-${Date.now()}.jpg`,
+        name: asset.fileName || `vendor-${Date.now()}.jpg`,
+      });
+    } catch (error: any) {
       showMessage(
         "error",
-        "Image Selection Failed",
-        result.errorMessage || "Unable to select image. Please try again."
+        "Image Error",
+        error?.message || "Camera/gallery open nahi ho paya."
       );
-      return;
     }
+  };
 
-    const asset = result.assets?.[0];
+  const validateCoordinate = (value: string, type: "lat" | "lng") => {
+    if (!String(value || "").trim()) return true;
 
-    if (!asset?.uri) {
-      showMessage("warning", "No Image Found", "Please select a valid vendor image.");
-      return;
-    }
+    const n = Number(value);
 
-    setImage(asset);
+    if (Number.isNaN(n)) return false;
+
+    if (type === "lat") return n >= -90 && n <= 90;
+
+    return n >= -180 && n <= 180;
   };
 
   const validate = () => {
     if (!form.cityId) return "Please select a service city.";
+    if (!form.categoryId) return "Please select dynamic business category.";
     if (!form.name.trim()) return "Vendor name is required.";
     if (!form.ownerName.trim()) return "Owner name is required.";
+
     if (!/^[6-9]\d{9}$/.test(form.ownerMobileNo.trim())) {
       return "Enter a valid 10 digit owner mobile number.";
     }
+
     if (!/^[6-9]\d{9}$/.test(form.phone.trim())) {
       return "Enter a valid 10 digit vendor phone number.";
     }
+
     if (!/^\S+@\S+\.\S+$/.test(form.email.trim())) {
       return "Enter a valid email address.";
     }
-    if (form.password.length < 6) {
+
+    if (!isEditMode && form.password.length < 6) {
       return "Password must be at least 6 characters.";
     }
-    if (!form.address.trim()) {
-      return "Vendor address is required.";
+
+    if (isEditMode && form.password && form.password.length < 6) {
+      return "Password must be at least 6 characters.";
+    }
+
+    if (!form.address.trim()) return "Vendor address is required.";
+
+    if (!validateCoordinate(form.latitude, "lat")) {
+      return "Latitude must be a valid number between -90 and 90.";
+    }
+
+    if (!validateCoordinate(form.longitude, "lng")) {
+      return "Longitude must be a valid number between -180 and 180.";
+    }
+
+    if (
+      (String(form.latitude || "").trim() && !String(form.longitude || "").trim()) ||
+      (!String(form.latitude || "").trim() && String(form.longitude || "").trim())
+    ) {
+      return "Latitude and longitude dono enter karo ya dono blank rakho.";
     }
 
     const commission = Number(form.commission);
@@ -194,40 +384,54 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
 
     setSaving(true);
 
-    const payload = {
-      ...form,
+    const payload: any = {
+      cityId: form.cityId,
+      categoryId: form.categoryId,
       name: form.name.trim(),
       ownerName: form.ownerName.trim(),
       ownerMobileNo: form.ownerMobileNo.trim(),
       phone: form.phone.trim(),
       email: form.email.trim().toLowerCase(),
+      password: form.password?.trim() || undefined,
       address: form.address.trim(),
+      type: normalizeType(selectedCategory?.name || form.type),
       commission: Number(form.commission),
       role: "VENDOR",
       image,
+      isOpen: form.isOpen,
+      isActive: form.isActive,
     };
 
-    const res = await adminVendorService.createVendor(payload);
+    if (String(form.latitude || "").trim() && String(form.longitude || "").trim()) {
+      payload.latitude = Number(form.latitude);
+      payload.longitude = Number(form.longitude);
+    }
+
+    const res = isEditMode
+      ? await adminVendorService.updateVendor(editingVendor.id, payload)
+      : await adminVendorService.createVendor(payload);
 
     setSaving(false);
 
     if (res.error) {
       showMessage(
         "error",
-        "Vendor Creation Failed",
-        res.error.message || "Unable to create vendor. Please try again."
+        isEditMode ? "Vendor Update Failed" : "Vendor Creation Failed",
+        res.error.message || "Unable to save vendor. Please try again."
       );
       return;
     }
 
     showMessage(
       "success",
-      "Vendor Created Successfully",
-      "Vendor profile, login access and commission setup are ready.",
+      isEditMode ? "Vendor Updated Successfully" : "Vendor Created Successfully",
+      isEditMode
+        ? "Vendor profile, location, category, login and commission updated."
+        : "Vendor profile, location, dynamic category, login access and commission setup are ready.",
       "Back to Vendors",
       () => {
         closeMessage();
-        navigation.goBack();
+        goBack();
       }
     );
   };
@@ -242,38 +446,56 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <TouchableOpacity onPress={goBack} style={styles.backBtn}>
             <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.smallLabel}>VENDOR ONBOARDING</Text>
-            <Text style={styles.title}>Add New Vendor</Text>
-            <Text style={styles.subtitle}>Create vendor profile, login and commission</Text>
+            <Text style={styles.smallLabel}>
+              {isEditMode ? "VENDOR PROFILE" : "VENDOR ONBOARDING"}
+            </Text>
+            <Text style={styles.title}>
+              {isEditMode ? "Edit Vendor" : "Add New Vendor"}
+            </Text>
+            <Text style={styles.subtitle}>
+              {isEditMode
+                ? "Update vendor profile, image, login, category, location and commission"
+                : "Create vendor with dynamic business category and location"}
+            </Text>
           </View>
+
+          <TouchableOpacity
+            style={styles.homeBtn}
+            onPress={() => navigation.navigate("AdminDashboard")}
+          >
+            <Icon name="home-outline" size={21} color="#000" />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.heroCard}>
-          <View>
-            <Text style={styles.heroLabel}>Selected City</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroLabel}>Selected Setup</Text>
             <Text style={styles.heroTitle}>
               {selectedCity ? `${selectedCity.name} (${selectedCity.code})` : "No city selected"}
+            </Text>
+            <Text style={styles.heroSub}>
+              {selectedCategory?.name || "No business category"}
             </Text>
           </View>
 
           <View style={styles.heroIcon}>
-            <Icon name="storefront-outline" size={34} color={THEME.yellow} />
+            <Icon name={getCategoryIcon(selectedCategory?.name)} size={34} color={THEME.yellow} />
           </View>
         </View>
 
         <TouchableOpacity style={styles.imageBox} activeOpacity={0.9}>
-          {image?.uri ? (
-            <Image source={{ uri: image.uri }} style={styles.imagePreview} />
+          {image?.uri || existingImageUrl ? (
+            <Image source={{ uri: image?.uri || existingImageUrl }} style={styles.imagePreview} />
           ) : (
             <View style={styles.imagePlaceholder}>
               <Icon name="image-outline" size={38} color={THEME.yellow} />
               <Text style={styles.imageTitle}>Vendor Display Image</Text>
-              <Text style={styles.imageSub}>Add a clean store or restaurant photo</Text>
+              <Text style={styles.imageSub}>Add clean store or restaurant photo</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -281,25 +503,20 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
         <View style={styles.imageActions}>
           <TouchableOpacity style={styles.greenImageBtn} onPress={() => pickImage(true)}>
             <Icon name="camera-outline" size={20} color="#000" />
-            <Text style={styles.imageBtnText}>Camera</Text>
+            <Text style={styles.imageBtnText}>Open Camera</Text>
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.yellowImageBtn} onPress={() => pickImage(false)}>
             <Icon name="images-outline" size={20} color="#000" />
-            <Text style={styles.imageBtnText}>Gallery</Text>
+            <Text style={styles.imageBtnText}>Upload File</Text>
           </TouchableOpacity>
         </View>
 
         <Section title="Service City" icon="business-outline">
           {loadingCities ? (
-            <View style={styles.loadingCityBox}>
-              <ActivityIndicator color={THEME.yellow} />
-              <Text style={styles.loadingCityText}>Loading cities...</Text>
-            </View>
+            <LoadingBox text="Loading cities..." />
           ) : cities.length === 0 ? (
-            <View style={styles.emptyCityBox}>
-              <Text style={styles.emptyCityText}>No cities found. Create city first.</Text>
-            </View>
+            <EmptyBox text="No cities found. Create city first." />
           ) : (
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               {cities.map((city) => (
@@ -308,12 +525,7 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
                   style={[styles.chip, form.cityId === city.id && styles.chipActive]}
                   onPress={() => update("cityId", city.id)}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      form.cityId === city.id && styles.chipTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.chipText, form.cityId === city.id && styles.chipTextActive]}>
                     {city.name} ({city.code})
                   </Text>
                 </TouchableOpacity>
@@ -322,30 +534,39 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
           )}
         </Section>
 
-        <Section title="Vendor Type" icon="apps-outline">
-          <View style={styles.typeGrid}>
-            {VENDOR_TYPES.map((type) => (
-              <TouchableOpacity
-                key={type}
-                style={[styles.typeBtn, form.type === type && styles.typeBtnActive]}
-                onPress={() => update("type", type)}
-              >
-                <Icon
-                  name={getVendorTypeIcon(type)}
-                  size={20}
-                  color={form.type === type ? "#000" : THEME.yellow}
-                />
-                <Text
+        <Section title="Business Category" icon="grid-outline">
+          {loadingCategories ? (
+            <LoadingBox text="Loading categories..." />
+          ) : categories.length === 0 ? (
+            <EmptyBox text="No business categories found. Add category first from Admin Categories." />
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {categories.map((category) => (
+                <TouchableOpacity
+                  key={category.id}
                   style={[
-                    styles.typeText,
-                    form.type === type && styles.typeTextActive,
+                    styles.categoryChip,
+                    form.categoryId === category.id && styles.categoryChipActive,
                   ]}
+                  onPress={() => updateCategory(category)}
                 >
-                  {type}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                  <Icon
+                    name={getCategoryIcon(category.name)}
+                    size={18}
+                    color={form.categoryId === category.id ? "#000" : THEME.yellow}
+                  />
+                  <Text
+                    style={[
+                      styles.categoryChipText,
+                      form.categoryId === category.id && styles.categoryChipTextActive,
+                    ]}
+                  >
+                    {category.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
         </Section>
 
         <Section title="Vendor Details" icon="storefront-outline">
@@ -396,6 +617,39 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
           />
         </Section>
 
+        <Section title="Vendor Location For Delivery Fee" icon="navigate-circle-outline">
+          <View style={styles.locationNote}>
+            <Icon name="information-circle-outline" size={18} color={THEME.yellow} />
+            <Text style={styles.locationNoteText}>
+              Latitude/Longitude se customer distance calculate hoga. Blank rakhoge to distance 0 maanega.
+            </Text>
+          </View>
+
+          <View style={styles.rowInputs}>
+            <View style={styles.halfInput}>
+              <Input
+                label="Latitude"
+                icon="map-outline"
+                value={form.latitude}
+                onChangeText={(v: string) => update("latitude", v)}
+                keyboardType="decimal-pad"
+                placeholder="27.9124"
+              />
+            </View>
+
+            <View style={styles.halfInput}>
+              <Input
+                label="Longitude"
+                icon="navigate-outline"
+                value={form.longitude}
+                onChangeText={(v: string) => update("longitude", v)}
+                keyboardType="decimal-pad"
+                placeholder="79.9097"
+              />
+            </View>
+          </View>
+        </Section>
+
         <Section title="Owner Login Details" icon="person-circle-outline">
           <Input
             label="Owner Name"
@@ -416,14 +670,33 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
           />
 
           <Input
-            label="Password"
+            label={isEditMode ? "New Password Optional" : "Password"}
             icon="lock-closed-outline"
             value={form.password}
             onChangeText={(v: string) => update("password", v)}
             secureTextEntry
-            placeholder="Minimum 6 characters"
+            placeholder={isEditMode ? "Leave blank to keep old password" : "Minimum 6 characters"}
           />
         </Section>
+
+        {isEditMode ? (
+          <Section title="Vendor Status" icon="checkmark-circle-outline">
+            <TouchableOpacity
+              style={[styles.statusToggle, form.isOpen && styles.statusToggleActive]}
+              onPress={() => update("isOpen", !form.isOpen)}
+              activeOpacity={0.86}
+            >
+              <Icon
+                name={form.isOpen ? "checkmark-circle-outline" : "ban-outline"}
+                size={22}
+                color={form.isOpen ? "#000" : THEME.danger}
+              />
+              <Text style={[styles.statusToggleText, form.isOpen && styles.statusToggleTextActive]}>
+                {form.isOpen ? "Vendor Open / Active" : "Vendor Blocked / Closed"}
+              </Text>
+            </TouchableOpacity>
+          </Section>
+        ) : null}
 
         <TouchableOpacity
           style={[styles.createBtn, saving && { opacity: 0.7 }]}
@@ -436,7 +709,9 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
           ) : (
             <>
               <Icon name="checkmark-circle-outline" size={22} color="#000" />
-              <Text style={styles.createText}>Create Vendor</Text>
+              <Text style={styles.createText}>
+                {isEditMode ? "Update Vendor" : "Create Vendor"}
+              </Text>
             </>
           )}
         </TouchableOpacity>
@@ -457,17 +732,29 @@ export default function AdminVendorCreateScreen({ navigation }: any) {
   );
 }
 
-function getVendorTypeIcon(type: string) {
-  switch (type) {
-    case "GROCERY":
-      return "basket-outline";
-    case "MEDICINE":
-      return "medkit-outline";
-    case "BAKERY":
-      return "cafe-outline";
-    default:
-      return "restaurant-outline";
-  }
+function normalizeType(value?: string) {
+  if (!value) return "";
+  return value
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "_")
+    .replace(/[^A-Z0-9_]/g, "");
+}
+
+function getCategoryIcon(name?: string) {
+  const value = String(name || "").toLowerCase();
+
+  if (value.includes("grocery") || value.includes("kirana")) return "basket-outline";
+  if (value.includes("medicine") || value.includes("medical") || value.includes("pharmacy")) return "medkit-outline";
+  if (value.includes("bakery") || value.includes("cafe")) return "cafe-outline";
+  if (value.includes("sweet") || value.includes("mithai")) return "ice-cream-outline";
+  if (value.includes("fruit")) return "nutrition-outline";
+  if (value.includes("vegetable")) return "leaf-outline";
+  if (value.includes("electronic")) return "phone-portrait-outline";
+  if (value.includes("beauty")) return "sparkles-outline";
+  if (value.includes("restaurant") || value.includes("food")) return "restaurant-outline";
+
+  return "grid-outline";
 }
 
 function Section({ title, icon, children }: any) {
@@ -481,6 +768,24 @@ function Section({ title, icon, children }: any) {
       </View>
 
       {children}
+    </View>
+  );
+}
+
+function LoadingBox({ text }: any) {
+  return (
+    <View style={styles.loadingBox}>
+      <ActivityIndicator color={THEME.yellow} />
+      <Text style={styles.loadingBoxText}>{text}</Text>
+    </View>
+  );
+}
+
+function EmptyBox({ text }: any) {
+  return (
+    <View style={styles.emptyBox}>
+      <Icon name="alert-circle-outline" size={20} color={THEME.danger} />
+      <Text style={styles.emptyBoxText}>{text}</Text>
     </View>
   );
 }
@@ -534,6 +839,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   smallLabel: {
     color: THEME.green,
     fontWeight: "900",
@@ -577,6 +891,13 @@ const styles = StyleSheet.create({
     color: THEME.yellow,
     fontSize: 19,
     fontWeight: "900",
+    marginTop: 5,
+  },
+
+  heroSub: {
+    color: THEME.green,
+    fontSize: 12,
+    fontWeight: "800",
     marginTop: 5,
   },
 
@@ -633,7 +954,7 @@ const styles = StyleSheet.create({
 
   greenImageBtn: {
     flex: 1,
-    height: 50,
+    minHeight: 50,
     borderRadius: 18,
     backgroundColor: THEME.green,
     alignItems: "center",
@@ -644,7 +965,7 @@ const styles = StyleSheet.create({
 
   yellowImageBtn: {
     flex: 1,
-    height: 50,
+    minHeight: 50,
     borderRadius: 18,
     backgroundColor: THEME.yellow,
     alignItems: "center",
@@ -691,8 +1012,39 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
-  loadingCityBox: {
-    height: 48,
+  locationNote: {
+    minHeight: 46,
+    backgroundColor: "#1C190D",
+    borderWidth: 1,
+    borderColor: "#5D4D0B",
+    borderRadius: 17,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginBottom: 13,
+  },
+
+  locationNoteText: {
+    flex: 1,
+    color: THEME.muted,
+    fontWeight: "800",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+
+  rowInputs: {
+    flexDirection: "row",
+    gap: 10,
+  },
+
+  halfInput: {
+    flex: 1,
+  },
+
+  loadingBox: {
+    minHeight: 48,
     borderRadius: 17,
     backgroundColor: THEME.input,
     borderWidth: 1,
@@ -703,22 +1055,29 @@ const styles = StyleSheet.create({
     gap: 9,
   },
 
-  loadingCityText: {
+  loadingBoxText: {
     color: THEME.muted,
     fontWeight: "800",
   },
 
-  emptyCityBox: {
-    padding: 14,
+  emptyBox: {
+    minHeight: 50,
     borderRadius: 17,
-    backgroundColor: THEME.input,
+    backgroundColor: "#251010",
     borderWidth: 1,
-    borderColor: THEME.border,
+    borderColor: "#6B1F1F",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
   },
 
-  emptyCityText: {
-    color: THEME.muted,
+  emptyBoxText: {
+    flex: 1,
+    color: THEME.danger,
     fontWeight: "800",
+    fontSize: 12,
   },
 
   chip: {
@@ -745,36 +1104,31 @@ const styles = StyleSheet.create({
     color: "#000",
   },
 
-  typeGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 9,
-  },
-
-  typeBtn: {
-    width: "48%",
+  categoryChip: {
+    minHeight: 44,
     borderWidth: 1,
     borderColor: THEME.border,
-    padding: 13,
-    borderRadius: 17,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    marginRight: 8,
     backgroundColor: THEME.input,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
     gap: 7,
   },
 
-  typeBtnActive: {
+  categoryChipActive: {
     backgroundColor: THEME.yellow,
     borderColor: THEME.yellow,
   },
 
-  typeText: {
-    color: THEME.text,
+  categoryChipText: {
+    color: THEME.muted,
     fontWeight: "900",
-    fontSize: 12,
   },
 
-  typeTextActive: {
+  categoryChipTextActive: {
     color: "#000",
   },
 
@@ -816,6 +1170,32 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 76,
     textAlignVertical: "top",
+  },
+
+  statusToggle: {
+    minHeight: 54,
+    borderRadius: 19,
+    backgroundColor: "#251010",
+    borderWidth: 1,
+    borderColor: "#6B1F1F",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+
+  statusToggleActive: {
+    backgroundColor: THEME.green,
+    borderColor: THEME.green,
+  },
+
+  statusToggleText: {
+    color: THEME.danger,
+    fontWeight: "900",
+  },
+
+  statusToggleTextActive: {
+    color: "#000",
   },
 
   createBtn: {

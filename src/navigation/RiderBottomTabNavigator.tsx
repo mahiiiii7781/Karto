@@ -7,7 +7,6 @@ import RiderActiveOrdersScreen from "@/screens/rider/RiderActiveOrdersScreen";
 import RiderEarningsScreen from "@/screens/rider/RiderEarningsScreen";
 import RiderLeaderboardScreen from "@/screens/rider/RiderLeaderboardScreen";
 import RiderProfileScreen from "@/screens/rider/RiderProfileScreen";
-
 import RiderOrderAssignmentPopup from "@/screens/rider/RiderOrderAssignmentPopup";
 
 const Tab = createBottomTabNavigator();
@@ -46,29 +45,34 @@ export default function RiderBottomTabNavigator() {
             elevation: 0,
           },
           tabBarLabelStyle: {
-            fontWeight: "800",
+            fontWeight: "900",
             fontSize: 11,
             marginBottom: 8,
           },
+          tabBarIconStyle: {
+            marginTop: 8,
+          },
           tabBarIcon: ({ color, focused }) => {
-            let icon = "home-outline";
+            let icon = "grid-outline";
 
-            switch (route.name) {
-              case "Dashboard":
-                icon = focused ? "grid" : "grid-outline";
-                break;
-              case "Orders":
-                icon = focused ? "bicycle" : "bicycle-outline";
-                break;
-              case "Earnings":
-                icon = focused ? "wallet" : "wallet-outline";
-                break;
-              case "Leaderboard":
-                icon = focused ? "trophy" : "trophy-outline";
-                break;
-              case "Profile":
-                icon = focused ? "person" : "person-outline";
-                break;
+            if (route.name === "Dashboard") {
+              icon = focused ? "grid" : "grid-outline";
+            }
+
+            if (route.name === "Orders") {
+              icon = focused ? "bicycle" : "bicycle-outline";
+            }
+
+            if (route.name === "Earnings") {
+              icon = focused ? "cash" : "cash-outline";
+            }
+
+            if (route.name === "Leaderboard") {
+              icon = focused ? "trophy" : "trophy-outline";
+            }
+
+            if (route.name === "Profile") {
+              icon = focused ? "person" : "person-outline";
             }
 
             return <Icon name={icon} size={22} color={color} />;

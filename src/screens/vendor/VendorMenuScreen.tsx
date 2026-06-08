@@ -21,8 +21,11 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { launchCamera, launchImageLibrary } from "react-native-image-picker";
+import apiClient from "@/api/apiClient";
 import {
   vendorService,
   VendorCategory,
@@ -51,6 +54,8 @@ type MenuForm = {
   prepTimeMin: string;
   categoryId: string;
   restaurantId: string;
+  imageUrl: string | null;
+  localImageUri: string | null;
   isVeg: boolean;
   isPopular: boolean;
   isBestSeller: boolean;
@@ -60,6 +65,18 @@ type MenuForm = {
 const STOCK_FILTERS: StockFilter[] = ["ALL", "LIVE", "OUT"];
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
+
+const getImageUrlFromUpload = (res: any) =>
+  res?.data?.imageUrl ||
+  res?.data?.url ||
+  res?.data?.secure_url ||
+  res?.data?.data?.imageUrl ||
+  res?.data?.data?.url ||
+  res?.data?.data?.secure_url ||
+  res?.data?.file?.url ||
+  res?.data?.result?.secure_url ||
+  null;
+
 
 const getImageUrl = (item: VendorMenuItem) => {
   return item.imageUrl || (item as any).image_url || null;
@@ -142,6 +159,8 @@ const createInitialForm = (): MenuForm => ({
   prepTimeMin: "20",
   categoryId: "",
   restaurantId: "",
+  imageUrl: null,
+  localImageUri: null,
   isVeg: true,
   isPopular: false,
   isBestSeller: false,
@@ -169,6 +188,7 @@ export default function VendorMenuScreen() {
   const [categoryFilter, setCategoryFilter] = useState("All");
 
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [toggleLoadingId, setToggleLoadingId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
 
@@ -303,6 +323,8 @@ export default function VendorMenuScreen() {
       prepTimeMin: String((item as any).prepTimeMin || (item as any).prep_time_min || 20),
       categoryId: getItemCategoryId(item) || categories?.[0]?.id || "",
       restaurantId: getItemRestaurantId(item) || defaultRestaurantId,
+      imageUrl: getImageUrl(item),
+      localImageUri: null,
       isVeg: isItemVeg(item),
       isPopular: isItemPopular(item),
       isBestSeller: isItemBestSeller(item),
@@ -310,6 +332,103 @@ export default function VendorMenuScreen() {
     });
 
     setModalVisible(true);
+  };
+
+  const uploadSelectedImage = async (asset: any) => {
+    if (!asset?.uri) return;
+
+    patchForm({ localImageUri: asset.uri });
+    setUploading(true);
+
+    try {
+      const file: any = {
+        uri: asset.uri,
+        name: asset.fileName || `vendor-menu-${Date.now()}.jpg`,
+        type: asset.type || "image/jpeg",
+      };
+
+      const formData = new FormData();
+      formData.append("image", file);
+      formData.append("folder", "menu");
+
+      let res: any;
+
+      try {
+        res = await apiClient.post("/upload/image", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      } catch {
+        res = await apiClient.post("/upload", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
+
+      const uploadedUrl = getImageUrlFromUpload(res);
+
+      if (!uploadedUrl) {
+        showToast("Image uploaded but URL not found");
+        return;
+      }
+
+      patchForm({ imageUrl: uploadedUrl });
+      showToast("Image selected");
+    } catch (error: any) {
+      showToast(
+        error?.response?.data?.message ||
+          error?.message ||
+          "Image upload failed"
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const pickFromGallery = async () => {
+    const result = await launchImageLibrary({
+      mediaType: "photo",
+      quality: 0.8,
+      selectionLimit: 1,
+      includeBase64: false,
+    });
+
+    if (result.didCancel) return;
+    if (result.errorCode) {
+      showToast(result.errorMessage || "Gallery error");
+      return;
+    }
+
+    await uploadSelectedImage(result.assets?.[0]);
+  };
+
+  const openCamera = async () => {
+    const result = await launchCamera({
+      mediaType: "photo",
+      quality: 0.8,
+      includeBase64: false,
+      saveToPhotos: false,
+      cameraType: "back",
+    });
+
+    if (result.didCancel) return;
+    if (result.errorCode) {
+      showToast(result.errorMessage || "Camera error");
+      return;
+    }
+
+    await uploadSelectedImage(result.assets?.[0]);
+  };
+
+  const showImageOptions = () => {
+    Alert.alert("Item Photo", "Choose image source", [
+      { text: "Camera", onPress: openCamera },
+      { text: "Gallery", onPress: pickFromGallery },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => patchForm({ imageUrl: null, localImageUri: null }),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
   const validateForm = () => {
@@ -361,6 +480,8 @@ export default function VendorMenuScreen() {
       category_id: form.categoryId || undefined,
       restaurantId: form.restaurantId || defaultRestaurantId || undefined,
       restaurant_id: form.restaurantId || defaultRestaurantId || undefined,
+      imageUrl: form.imageUrl || undefined,
+      image_url: form.imageUrl || undefined,
       isVeg: form.isVeg,
       is_veg: form.isVeg,
       isVegetarian: form.isVeg,
@@ -658,7 +779,11 @@ export default function VendorMenuScreen() {
         categories={categories}
         restaurants={restaurants}
         saving={saving}
+        uploading={uploading}
         onPatch={patchForm}
+        onPickImage={showImageOptions}
+        onGallery={pickFromGallery}
+        onCamera={openCamera}
         onSave={saveItem}
         onClose={() => {
           if (!saving) {
@@ -689,7 +814,11 @@ function MenuItemModal({
   categories,
   restaurants,
   saving,
+  uploading,
   onPatch,
+  onPickImage,
+  onGallery,
+  onCamera,
   onSave,
   onClose,
 }: {
@@ -699,7 +828,11 @@ function MenuItemModal({
   categories: VendorCategory[];
   restaurants: VendorRestaurant[];
   saving: boolean;
+  uploading: boolean;
   onPatch: (next: Partial<MenuForm>) => void;
+  onPickImage: () => void;
+  onGallery: () => void;
+  onCamera: () => void;
   onSave: () => void;
   onClose: () => void;
 }) {
@@ -721,12 +854,61 @@ function MenuItemModal({
                 {selectedItem ? "Edit Menu Item" : "Add Menu Item"}
               </Text>
 
-              <View style={styles.imagePickerBox}>
-                <Icon name="camera-outline" size={26} color={THEME.yellow} />
-                <Text style={styles.imagePickerTitle}>Item Photo</Text>
-                <Text style={styles.imagePickerText}>
-                  Gallery / Camera upload only. No URL input.
-                </Text>
+              <TouchableOpacity
+                style={styles.imagePickerBox}
+                activeOpacity={0.85}
+                onPress={onPickImage}
+                disabled={uploading}
+              >
+                {form.localImageUri || form.imageUrl ? (
+                  <Image
+                    source={{ uri: form.localImageUri || form.imageUrl || "" }}
+                    style={styles.previewImage}
+                  />
+                ) : (
+                  <View style={styles.imagePickerInner}>
+                    <Icon name="camera-outline" size={28} color={THEME.yellow} />
+                    <Text style={styles.imagePickerTitle}>Item Photo</Text>
+                    <Text style={styles.imagePickerText}>
+                      Gallery / Camera upload only. No URL input.
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.imageOverlay}>
+                  {uploading ? (
+                    <ActivityIndicator color={THEME.bg} />
+                  ) : (
+                    <>
+                      <Icon name="image-outline" size={16} color={THEME.bg} />
+                      <Text style={styles.imageOverlayText}>
+                        {form.localImageUri || form.imageUrl ? "Change" : "Select"}
+                      </Text>
+                    </>
+                  )}
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.imageActionRow}>
+                <TouchableOpacity
+                  style={styles.imageActionBtn}
+                  activeOpacity={0.85}
+                  disabled={uploading}
+                  onPress={onGallery}
+                >
+                  <Icon name="images-outline" size={18} color={THEME.green} />
+                  <Text style={styles.imageActionText}>Gallery</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.imageActionBtn}
+                  activeOpacity={0.85}
+                  disabled={uploading}
+                  onPress={onCamera}
+                >
+                  <Icon name="camera-outline" size={18} color={THEME.yellow} />
+                  <Text style={styles.imageActionText}>Camera</Text>
+                </TouchableOpacity>
               </View>
 
               <TextInput
@@ -857,9 +1039,9 @@ function MenuItemModal({
               />
 
               <TouchableOpacity
-                style={[styles.saveBtn, saving && styles.disabledBtn]}
+                style={[styles.saveBtn, (saving || uploading) && styles.disabledBtn]}
                 activeOpacity={0.85}
-                disabled={saving}
+                disabled={saving || uploading}
                 onPress={onSave}
               >
                 {saving ? (
@@ -1554,14 +1736,63 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   imagePickerBox: {
+    height: 170,
     borderWidth: 1,
     borderColor: THEME.border,
     borderStyle: "dashed",
     backgroundColor: "#0B100B",
     borderRadius: 20,
-    padding: 16,
     alignItems: "center",
-    marginBottom: 12,
+    justifyContent: "center",
+    marginBottom: 10,
+    overflow: "hidden",
+  },
+  imagePickerInner: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+  previewImage: {
+    width: "100%",
+    height: "100%",
+  },
+  imageOverlay: {
+    position: "absolute",
+    right: 10,
+    bottom: 10,
+    backgroundColor: THEME.yellow,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  imageOverlayText: {
+    color: THEME.bg,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  imageActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 10,
+  },
+  imageActionBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  imageActionText: {
+    color: THEME.text,
+    fontWeight: "900",
   },
   imagePickerTitle: {
     color: THEME.text,

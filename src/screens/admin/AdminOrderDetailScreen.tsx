@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   FlatList,
   StatusBar,
+  RefreshControl,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { adminService } from "@/services/api/adminService";
@@ -19,7 +20,6 @@ const THEME = {
   bg: "#080A08",
   card: "#121512",
   card2: "#181C18",
-  input: "#0E100E",
   yellow: "#FFD21F",
   green: "#20D65A",
   text: "#FFFFFF",
@@ -32,9 +32,11 @@ const THEME = {
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
 
 const NEXT_ACTIONS: Record<string, string[]> = {
-  PLACED: ["ACCEPTED_BY_VENDOR", "CANCELLED"],
+  PLACED: ["ACCEPTED", "CANCELLED"],
+  ACCEPTED: ["PREPARING", "CANCELLED"],
   ACCEPTED_BY_VENDOR: ["PREPARING", "CANCELLED"],
-  PREPARING: ["READY_FOR_PICKUP", "CANCELLED"],
+  PREPARING: ["READY", "READY_FOR_PICKUP", "CANCELLED"],
+  READY: ["ASSIGNED_TO_RIDER"],
   READY_FOR_PICKUP: ["ASSIGNED_TO_RIDER"],
   ASSIGNED_TO_RIDER: ["PICKED_UP"],
   PICKED_UP: ["OUT_FOR_DELIVERY"],
@@ -54,11 +56,12 @@ type MessageState = {
 };
 
 export default function AdminOrderDetailScreen({ route, navigation }: any) {
-  const { orderId } = route.params;
+  const orderId = route?.params?.orderId || route?.params?.id;
 
   const [order, setOrder] = useState<any>(null);
   const [riders, setRiders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [message, setMessage] = useState<MessageState>({
     visible: false,
@@ -92,7 +95,18 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
     });
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminOrders");
+  };
+
   const loadData = useCallback(async () => {
+    if (!orderId) {
+      setLoading(false);
+      showMessage("error", "Order Missing", "Order id not found.", "Go Back", goBack);
+      return;
+    }
+
     const [orderRes, riderRes] = await Promise.all([
       adminService.getOrderById(orderId),
       adminService.riders(),
@@ -100,6 +114,7 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
 
     if (orderRes.error) {
       setLoading(false);
+      setRefreshing(false);
       showMessage(
         "error",
         "Unable to Load Order",
@@ -107,7 +122,7 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
         "Go Back",
         () => {
           closeMessage();
-          navigation.goBack();
+          goBack();
         }
       );
       return;
@@ -116,37 +131,40 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
     setOrder(orderRes.data);
     setRiders((riderRes.data || []).filter((r: any) => r.isActive !== false));
     setLoading(false);
-  }, [orderId, navigation]);
+    setRefreshing(false);
+  }, [orderId]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  const totals = useMemo(() => {
-    if (!order) {
-      return {
-        total: 0,
-        commission: 0,
-        kartoIncome: 0,
-        vendorIncome: 0,
-      };
-    }
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
 
-    const total = Number(order.totalAmount || 0);
-    const commission = Number(order.restaurant?.commission || 0);
+  const totals = useMemo(() => {
+    const total = Number(order?.totalAmount || 0);
+    const commission = Number(order?.restaurant?.commission || 0);
+    const deliveryFee = Number(order?.deliveryFee || 0);
+    const discount = Number(order?.discountAmount || 0);
+    const tax = Number(order?.taxAmount || 0);
     const kartoIncome = (total * commission) / 100;
     const vendorIncome = total - kartoIncome;
 
     return {
       total,
       commission,
+      deliveryFee,
+      discount,
+      tax,
       kartoIncome,
       vendorIncome,
     };
   }, [order]);
 
   const nextActions = useMemo(() => {
-    if (!order) return [];
+    if (!order?.status) return [];
     return NEXT_ACTIONS[order.status] || [];
   }, [order]);
 
@@ -156,7 +174,9 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
     showMessage(
       status === "CANCELLED" ? "warning" : "info",
       "Update Order Status?",
-      `Order #${order.orderNumber || order.id.slice(0, 8)} will be moved to ${formatStatus(status)}.`,
+      `Order #${order.orderNumber || order.id.slice(0, 8)} ko ${formatStatus(
+        status
+      )} mark karna hai?`,
       "Update",
       () => updateStatus(status),
       "Cancel",
@@ -192,8 +212,9 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
       visible: true,
       type: "success",
       title: "Order Updated",
-      message: `Order status changed to ${formatStatus(status)} successfully.`,
+      message: `Order status ${formatStatus(status)} ho gaya.`,
       primaryText: "Done",
+      onPrimary: closeMessage,
     });
   };
 
@@ -203,9 +224,9 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
     showMessage(
       "info",
       "Assign Rider?",
-      `${rider.fullName || "This rider"} will be assigned to order #${
+      `${rider.fullName || "This rider"} ko order #${
         order.orderNumber || order.id.slice(0, 8)
-      }.`,
+      } assign karna hai?`,
       "Assign",
       () => assignRider(rider.id),
       "Cancel",
@@ -237,8 +258,9 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
       visible: true,
       type: "success",
       title: "Rider Assigned",
-      message: "Rider has been assigned successfully.",
+      message: "Rider assigned successfully.",
       primaryText: "Done",
+      onPrimary: closeMessage,
     });
   };
 
@@ -270,9 +292,17 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
         style={styles.container}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 38 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={THEME.yellow}
+            colors={[THEME.yellow, THEME.green]}
+          />
+        }
       >
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <TouchableOpacity onPress={goBack} style={styles.backBtn}>
             <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
@@ -283,14 +313,22 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
               #{order.orderNumber || order.id.slice(0, 8)}
             </Text>
           </View>
+
+          <TouchableOpacity
+            style={styles.homeBtn}
+            onPress={() => navigation.navigate("AdminDashboard")}
+          >
+            <Icon name="home-outline" size={21} color="#000" />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.statusCard}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.statusLabel}>Current Status</Text>
             <Text style={styles.statusText}>{formatStatus(order.status)}</Text>
             <Text style={styles.statusSmall}>
-              Payment: {order.paymentStatus || "PENDING"} • {order.paymentMethod || "N/A"}
+              Payment: {order.paymentStatus || "PENDING"} •{" "}
+              {order.paymentMethod || "N/A"}
             </Text>
           </View>
 
@@ -301,8 +339,14 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
 
         <View style={styles.incomeGrid}>
           <IncomeBox label="Total" value={money(totals.total)} />
-          <IncomeBox label="Karto Income" value={money(totals.kartoIncome)} green />
-          <IncomeBox label="Vendor Income" value={money(totals.vendorIncome)} />
+          <IncomeBox label="Karto" value={money(totals.kartoIncome)} green />
+          <IncomeBox label="Vendor" value={money(totals.vendorIncome)} />
+        </View>
+
+        <View style={styles.incomeGrid}>
+          <IncomeBox label="Delivery" value={money(totals.deliveryFee)} />
+          <IncomeBox label="Discount" value={money(totals.discount)} danger />
+          <IncomeBox label="Tax" value={money(totals.tax)} />
         </View>
 
         <InfoCard title="Customer" icon="person-outline">
@@ -315,7 +359,24 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
           <Text style={styles.mainText}>{order.restaurant?.name || "Vendor"}</Text>
           <Text style={styles.meta}>City: {order.restaurant?.city?.name || "-"}</Text>
           <Text style={styles.meta}>Commission: {totals.commission}%</Text>
+          <Text style={styles.meta}>Phone: {order.restaurant?.phone || "-"}</Text>
           <Text style={styles.meta}>Address: {order.restaurant?.address || "-"}</Text>
+        </InfoCard>
+
+        <InfoCard title="Delivery Address" icon="location-outline">
+          <Text style={styles.mainText}>
+            {order.address?.label || order.deliveryAddress?.label || "Address"}
+          </Text>
+          <Text style={styles.meta}>
+            {order.address?.fullAddress ||
+              order.deliveryAddress?.fullAddress ||
+              order.addressText ||
+              order.deliveryAddress ||
+              "-"}
+          </Text>
+          <Text style={styles.meta}>
+            {order.address?.phone || order.deliveryAddress?.phone || order.user?.phone || ""}
+          </Text>
         </InfoCard>
 
         <InfoCard title="Delivery Partner" icon="bicycle-outline">
@@ -324,7 +385,8 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
               <Text style={styles.mainText}>{order.rider.fullName || "Rider"}</Text>
               <Text style={styles.meta}>{order.rider.phone || order.rider.email || "-"}</Text>
               <Text style={styles.meta}>
-                Vehicle: {order.rider.vehicleNo || "-"} • {order.rider.vehicleType || "-"}
+                Vehicle: {order.rider.vehicleNo || "-"} •{" "}
+                {order.rider.vehicleType || "-"}
               </Text>
             </>
           ) : (
@@ -377,7 +439,11 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
                   activeOpacity={0.86}
                 >
                   <Icon
-                    name={status === "CANCELLED" ? "close-circle-outline" : "checkmark-circle-outline"}
+                    name={
+                      status === "CANCELLED"
+                        ? "close-circle-outline"
+                        : "checkmark-circle-outline"
+                    }
                     size={17}
                     color={status === "CANCELLED" ? THEME.danger : "#000"}
                   />
@@ -420,7 +486,12 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
                     </Text>
                   </View>
 
-                  <View style={styles.assignPill}>
+                  <View
+                    style={[
+                      styles.assignPill,
+                      order.rider?.id === item.id && styles.assignedPill,
+                    ]}
+                  >
                     <Text style={styles.assignText}>
                       {order.rider?.id === item.id ? "Assigned" : "Assign"}
                     </Text>
@@ -432,10 +503,10 @@ export default function AdminOrderDetailScreen({ route, navigation }: any) {
         </InfoCard>
 
         <InfoCard title="Timeline" icon="time-outline">
-          {(order.history || []).length === 0 ? (
+          {(order.history || order.statusHistory || []).length === 0 ? (
             <Text style={styles.meta}>No timeline found</Text>
           ) : (
-            (order.history || []).map((history: any) => (
+            (order.history || order.statusHistory || []).map((history: any) => (
               <View key={history.id} style={styles.timelineRow}>
                 <View style={styles.timelineDot} />
                 <View style={{ flex: 1 }}>
@@ -484,11 +555,18 @@ function InfoCard({ title, icon, children }: any) {
   );
 }
 
-function IncomeBox({ label, value, green }: any) {
+function IncomeBox({ label, value, green, danger }: any) {
   return (
     <View style={styles.incomeBox}>
       <Text style={styles.incomeLabel}>{label}</Text>
-      <Text style={[styles.incomeValue, green && { color: THEME.green }]} numberOfLines={1}>
+      <Text
+        style={[
+          styles.incomeValue,
+          green && { color: THEME.green },
+          danger && { color: THEME.danger },
+        ]}
+        numberOfLines={1}
+      >
         {value}
       </Text>
     </View>
@@ -516,10 +594,14 @@ function getStatusIcon(status: string) {
       return "bag-check-outline";
     case "ASSIGNED_TO_RIDER":
       return "bicycle-outline";
+    case "READY":
     case "READY_FOR_PICKUP":
       return "cube-outline";
     case "PREPARING":
       return "flame-outline";
+    case "ACCEPTED":
+    case "ACCEPTED_BY_VENDOR":
+      return "checkmark-circle-outline";
     default:
       return "receipt-outline";
   }
@@ -527,26 +609,22 @@ function getStatusIcon(status: string) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: THEME.bg },
-
   container: {
     flex: 1,
     backgroundColor: THEME.bg,
     paddingHorizontal: 16,
   },
-
   center: {
     flex: 1,
     backgroundColor: THEME.bg,
     justifyContent: "center",
     alignItems: "center",
   },
-
   loadingText: {
     color: THEME.muted,
     marginTop: 12,
     fontWeight: "800",
   },
-
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -554,7 +632,6 @@ const styles = StyleSheet.create({
     paddingTop: 22,
     paddingBottom: 16,
   },
-
   backBtn: {
     width: 46,
     height: 46,
@@ -565,27 +642,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   smallLabel: {
     color: THEME.green,
     fontWeight: "900",
     fontSize: 11,
     letterSpacing: 1.1,
   },
-
   title: {
     fontSize: 26,
     fontWeight: "900",
     color: THEME.text,
     marginTop: 2,
   },
-
   subTitle: {
     color: THEME.yellow,
     marginTop: 3,
     fontWeight: "900",
   },
-
   statusCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -601,26 +682,22 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 7,
   },
-
   statusLabel: {
     color: THEME.muted,
     fontSize: 13,
     fontWeight: "800",
   },
-
   statusText: {
     color: THEME.yellow,
     fontSize: 27,
     fontWeight: "900",
     marginTop: 4,
   },
-
   statusSmall: {
     color: THEME.muted,
     marginTop: 6,
     fontWeight: "800",
   },
-
   statusIcon: {
     width: 64,
     height: 64,
@@ -631,13 +708,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   incomeGrid: {
     flexDirection: "row",
     gap: 8,
     marginBottom: 14,
   },
-
   incomeBox: {
     flex: 1,
     backgroundColor: THEME.card,
@@ -646,20 +721,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   incomeLabel: {
     color: THEME.muted,
     fontSize: 10.5,
     fontWeight: "800",
   },
-
   incomeValue: {
     color: THEME.yellow,
     marginTop: 6,
     fontWeight: "900",
     fontSize: 12.5,
   },
-
   card: {
     backgroundColor: THEME.card,
     padding: 15,
@@ -668,14 +740,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   cardHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
     marginBottom: 13,
   },
-
   cardIcon: {
     width: 35,
     height: 35,
@@ -686,43 +756,36 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   cardTitle: {
     color: THEME.text,
     fontSize: 17,
     fontWeight: "900",
   },
-
   mainText: {
     color: THEME.text,
     fontWeight: "900",
   },
-
   meta: {
     color: THEME.muted,
     marginTop: 4,
     fontSize: 12,
     fontWeight: "700",
   },
-
   amount: {
     color: THEME.yellow,
     fontWeight: "900",
   },
-
   itemRow: {
     flexDirection: "row",
     paddingVertical: 11,
     borderBottomWidth: 1,
     borderBottomColor: THEME.border,
   },
-
   actionRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
   },
-
   actionBtn: {
     backgroundColor: THEME.yellow,
     paddingHorizontal: 12,
@@ -735,22 +798,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.yellow,
   },
-
   dangerBtn: {
     backgroundColor: "#251010",
     borderColor: "#6B1F1F",
   },
-
   actionText: {
     color: "#000",
     fontWeight: "900",
     fontSize: 12,
   },
-
   dangerText: {
     color: THEME.danger,
   },
-
   emptyInline: {
     backgroundColor: THEME.card2,
     borderRadius: 16,
@@ -761,12 +820,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-
   emptyInlineText: {
     color: THEME.muted,
     fontWeight: "800",
   },
-
   riderRow: {
     backgroundColor: THEME.card2,
     padding: 13,
@@ -778,31 +835,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   riderRowActive: {
     backgroundColor: "#102517",
     borderColor: "#1F6B35",
   },
-
   assignPill: {
     backgroundColor: THEME.yellow,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
-
+  assignedPill: {
+    backgroundColor: THEME.green,
+  },
   assignText: {
     color: "#000",
     fontWeight: "900",
     fontSize: 11,
   },
-
   timelineRow: {
     flexDirection: "row",
     gap: 10,
     marginBottom: 13,
   },
-
   timelineDot: {
     width: 11,
     height: 11,

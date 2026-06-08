@@ -12,6 +12,8 @@ import {
   StatusBar,
   RefreshControl,
   Image,
+  PermissionsAndroid,
+  Platform,
 } from "react-native";
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 import Icon from "react-native-vector-icons/Ionicons";
@@ -48,13 +50,37 @@ type MessageState = {
   onSecondary?: () => void;
 };
 
+const defaultForm = {
+  restaurantId: "",
+  categoryId: "",
+  subCategoryId: "",
+  name: "",
+  description: "",
+  price: "",
+  image: null,
+  existingImageUrl: "",
+  isAvailable: true,
+  isVegetarian: false,
+  isVeg: false,
+  isPopular: false,
+  isBestSeller: false,
+  calories: "",
+  servingInfo: "",
+  prepTimeMin: "20",
+  spiceLevel: "0",
+  addonsText: "",
+  customizationsText: "",
+};
+
 export default function AdminMenuScreen({ navigation }: any) {
   const [vendors, setVendors] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [subCategories, setSubCategories] = useState<any[]>([]);
   const [menuItems, setMenuItems] = useState<any[]>([]);
 
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState("ALL");
+  const [selectedSubCategoryId, setSelectedSubCategoryId] = useState("ALL");
   const [search, setSearch] = useState("");
 
   const [loading, setLoading] = useState(true);
@@ -64,17 +90,7 @@ export default function AdminMenuScreen({ navigation }: any) {
   const [editing, setEditing] = useState<any>(null);
   const [saving, setSaving] = useState(false);
 
-  const [form, setForm] = useState<any>({
-    restaurantId: "",
-    categoryId: "",
-    name: "",
-    description: "",
-    price: "",
-    image: null,
-    isAvailable: true,
-    isVegetarian: false,
-    isPopular: false,
-  });
+  const [form, setForm] = useState<any>(defaultForm);
 
   const [message, setMessage] = useState<MessageState>({
     visible: false,
@@ -113,16 +129,16 @@ export default function AdminMenuScreen({ navigation }: any) {
     [vendors, selectedVendorId]
   );
 
+  const selectedCategorySubCategories = useMemo(() => {
+    if (!form.categoryId) return subCategories;
+    return subCategories.filter((s) => s.categoryId === form.categoryId);
+  }, [subCategories, form.categoryId]);
+
   const loadData = async () => {
-    const [vendorRes, catRes, itemRes] = await Promise.all([
+    const [vendorRes, catRes, subCatRes] = await Promise.all([
       adminService.vendors(),
       adminService.categories(),
-      selectedVendorId
-        ? adminService.getMenuItems({
-            restaurantId: selectedVendorId,
-            categoryId: selectedCategoryId,
-          })
-        : Promise.resolve({ data: [], error: null }),
+      adminService.subCategories(),
     ]);
 
     if (vendorRes.error) {
@@ -150,14 +166,14 @@ export default function AdminMenuScreen({ navigation }: any) {
       setCategories(catRes.data || []);
     }
 
-    if (itemRes.error) {
+    if (subCatRes.error) {
       showMessage(
         "error",
-        "Unable to Load Menu",
-        itemRes.error.message || "Failed to load menu items."
+        "Unable to Load Subcategories",
+        subCatRes.error.message || "Failed to load subcategories."
       );
-    } else if (selectedVendorId) {
-      setMenuItems(itemRes.data || []);
+    } else {
+      setSubCategories(subCatRes.data || []);
     }
 
     setLoading(false);
@@ -172,12 +188,13 @@ export default function AdminMenuScreen({ navigation }: any) {
     if (selectedVendorId) {
       loadMenuItems();
     }
-  }, [selectedVendorId, selectedCategoryId]);
+  }, [selectedVendorId, selectedCategoryId, selectedSubCategoryId]);
 
   const loadMenuItems = async () => {
     const res = await adminService.getMenuItems({
       restaurantId: selectedVendorId,
       categoryId: selectedCategoryId,
+      subCategoryId: selectedSubCategoryId,
     });
 
     if (res.error) {
@@ -195,7 +212,9 @@ export default function AdminMenuScreen({ navigation }: any) {
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadMenuItems();
+    Promise.all([loadData(), loadMenuItems()]).finally(() => {
+      setRefreshing(false);
+    });
   };
 
   const filteredItems = useMemo(() => {
@@ -207,7 +226,9 @@ export default function AdminMenuScreen({ navigation }: any) {
       return (
         item.name?.toLowerCase().includes(q) ||
         item.description?.toLowerCase().includes(q) ||
-        item.category?.name?.toLowerCase().includes(q)
+        item.category?.name?.toLowerCase().includes(q) ||
+        item.subCategory?.name?.toLowerCase().includes(q) ||
+        item.restaurant?.name?.toLowerCase().includes(q)
       );
     });
   }, [menuItems, search]);
@@ -223,42 +244,146 @@ export default function AdminMenuScreen({ navigation }: any) {
       available: filteredItems.filter((item) => item.isAvailable !== false).length,
       unavailable: filteredItems.filter((item) => item.isAvailable === false).length,
       popular: filteredItems.filter((item) => item.isPopular === true).length,
+      bestSeller: filteredItems.filter((item) => item.isBestSeller === true).length,
       avgPrice: filteredItems.length ? totalValue / filteredItems.length : 0,
     };
   }, [filteredItems]);
 
   const updateForm = (key: string, value: any) => {
-    setForm((prev: any) => ({ ...prev, [key]: value }));
+    setForm((prev: any) => {
+      const next = { ...prev, [key]: value };
+
+      if (key === "categoryId") {
+        next.subCategoryId = "";
+      }
+
+      if (key === "isVegetarian") {
+        next.isVeg = value;
+      }
+
+      if (key === "isVeg") {
+        next.isVegetarian = value;
+      }
+
+      return next;
+    });
+  };
+
+  const requestCameraPermission = async () => {
+    if (Platform.OS !== "android") return true;
+
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.CAMERA,
+      {
+        title: "Camera Permission",
+        message: "Karto needs camera access to capture menu item images.",
+        buttonPositive: "Allow",
+        buttonNegative: "Cancel",
+      }
+    );
+
+    return result === PermissionsAndroid.RESULTS.GRANTED;
   };
 
   const pickImage = async (fromCamera = false) => {
-    const fn = fromCamera ? launchCamera : launchImageLibrary;
+    try {
+      if (fromCamera) {
+        const granted = await requestCameraPermission();
 
-    const result = await fn({
-      mediaType: "photo",
-      quality: 0.8,
-      selectionLimit: 1,
-    });
+        if (!granted) {
+          showMessage(
+            "warning",
+            "Camera Permission Required",
+            "Camera permission allow karo, tabhi camera open hoga."
+          );
+          return;
+        }
+      }
 
-    if (result.didCancel) return;
+      const fn = fromCamera ? launchCamera : launchImageLibrary;
 
-    if (result.errorCode) {
+      const result = await fn({
+        mediaType: "photo",
+        quality: 0.8,
+        selectionLimit: 1,
+        includeBase64: false,
+        saveToPhotos: fromCamera,
+        cameraType: "back",
+      });
+
+      if (result.didCancel) return;
+
+      if (result.errorCode) {
+        showMessage(
+          "error",
+          "Image Selection Failed",
+          result.errorMessage || "Unable to select image. Please try again."
+        );
+        return;
+      }
+
+      const asset = result.assets?.[0];
+
+      if (!asset?.uri) {
+        showMessage("warning", "No Image Found", "Please select a valid item image.");
+        return;
+      }
+
+      updateForm("image", {
+        uri: asset.uri,
+        type: asset.type || "image/jpeg",
+        fileName: asset.fileName || `menu-${Date.now()}.jpg`,
+        name: asset.fileName || `menu-${Date.now()}.jpg`,
+      });
+    } catch (error: any) {
       showMessage(
         "error",
-        "Image Selection Failed",
-        result.errorMessage || "Unable to select image. Please try again."
+        "Image Error",
+        error?.message || "Camera/gallery open nahi ho paya."
       );
-      return;
     }
+  };
 
-    const asset = result.assets?.[0];
+  const parseOptions = (text: string, type: "addon" | "customization") => {
+    if (!text?.trim()) return [];
 
-    if (!asset?.uri) {
-      showMessage("warning", "No Image Found", "Please select a valid item image.");
-      return;
-    }
+    return text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const parts = line.split("|").map((p) => p.trim());
 
-    updateForm("image", asset);
+        if (type === "addon") {
+          return {
+            title: parts[0],
+            price: Number(parts[1] || 0),
+            isActive: true,
+          };
+        }
+
+        return {
+          title: parts[0],
+          price: Number(parts[1] || 0),
+          isRequired: String(parts[2] || "").toLowerCase() === "required",
+          isActive: true,
+        };
+      })
+      .filter((item) => item.title);
+  };
+
+  const stringifyOptions = (items: any[] = [], type: "addon" | "customization") => {
+    return (items || [])
+      .map((item) => {
+        if (type === "addon") {
+          return `${item.title || ""}|${Number(item.price || 0)}`;
+        }
+
+        return `${item.title || ""}|${Number(item.price || 0)}|${
+          item.isRequired ? "required" : "optional"
+        }`;
+      })
+      .join("\n");
   };
 
   const openCreate = () => {
@@ -269,15 +394,11 @@ export default function AdminMenuScreen({ navigation }: any) {
 
     setEditing(null);
     setForm({
+      ...defaultForm,
       restaurantId: selectedVendorId,
-      categoryId: categories[0]?.id || "",
-      name: "",
-      description: "",
-      price: "",
-      image: null,
-      isAvailable: true,
-      isVegetarian: false,
-      isPopular: false,
+      categoryId: selectedCategoryId !== "ALL" ? selectedCategoryId : categories[0]?.id || "",
+      subCategoryId:
+        selectedSubCategoryId !== "ALL" ? selectedSubCategoryId : "",
     });
     setModalVisible(true);
   };
@@ -285,16 +406,29 @@ export default function AdminMenuScreen({ navigation }: any) {
   const openEdit = (item: any) => {
     setEditing(item);
     setForm({
+      ...defaultForm,
       restaurantId: item.restaurantId || selectedVendorId,
       categoryId: item.categoryId || item.category?.id || "",
+      subCategoryId: item.subCategoryId || item.subCategory?.id || "",
       name: item.name || "",
       description: item.description || "",
       price: String(item.price || ""),
       image: null,
       existingImageUrl: item.imageUrl || item.image_url || "",
       isAvailable: item.isAvailable ?? true,
-      isVegetarian: item.isVegetarian ?? false,
+      isVegetarian: item.isVegetarian ?? item.isVeg ?? false,
+      isVeg: item.isVeg ?? item.isVegetarian ?? false,
       isPopular: item.isPopular ?? false,
+      isBestSeller: item.isBestSeller ?? false,
+      calories: item.calories ? String(item.calories) : "",
+      servingInfo: item.servingInfo || "",
+      prepTimeMin: item.prepTimeMin ? String(item.prepTimeMin) : "20",
+      spiceLevel: item.spiceLevel ? String(item.spiceLevel) : "0",
+      addonsText: stringifyOptions(item.addons || [], "addon"),
+      customizationsText: stringifyOptions(
+        item.customizations || [],
+        "customization"
+      ),
     });
     setModalVisible(true);
   };
@@ -308,12 +442,24 @@ export default function AdminMenuScreen({ navigation }: any) {
   const validate = () => {
     if (!form.restaurantId) return "Please select a vendor.";
     if (!form.name.trim()) return "Menu item name is required.";
-    if (!form.price.trim()) return "Menu item price is required.";
+    if (!String(form.price).trim()) return "Menu item price is required.";
 
     const price = Number(form.price);
 
     if (Number.isNaN(price) || price <= 0) {
       return "Price should be greater than 0.";
+    }
+
+    if (form.calories && Number.isNaN(Number(form.calories))) {
+      return "Calories should be a valid number.";
+    }
+
+    if (form.prepTimeMin && Number.isNaN(Number(form.prepTimeMin))) {
+      return "Prep time should be a valid number.";
+    }
+
+    if (form.spiceLevel && Number.isNaN(Number(form.spiceLevel))) {
+      return "Spice level should be a valid number.";
     }
 
     return null;
@@ -330,15 +476,24 @@ export default function AdminMenuScreen({ navigation }: any) {
     setSaving(true);
 
     const payload = {
-      ...form,
+      restaurantId: form.restaurantId,
+      categoryId: form.categoryId || undefined,
+      subCategoryId: form.subCategoryId || undefined,
       name: form.name.trim(),
       description: form.description.trim(),
       price: Number(form.price),
-      categoryId: form.categoryId || undefined,
       image: form.image,
       isAvailable: form.isAvailable,
       isVegetarian: form.isVegetarian,
+      isVeg: form.isVeg,
       isPopular: form.isPopular,
+      isBestSeller: form.isBestSeller,
+      calories: form.calories ? Number(form.calories) : undefined,
+      servingInfo: form.servingInfo?.trim(),
+      prepTimeMin: form.prepTimeMin ? Number(form.prepTimeMin) : 20,
+      spiceLevel: form.spiceLevel ? Number(form.spiceLevel) : 0,
+      addons: parseOptions(form.addonsText, "addon"),
+      customizations: parseOptions(form.customizationsText, "customization"),
     };
 
     const res = editing
@@ -426,6 +581,11 @@ export default function AdminMenuScreen({ navigation }: any) {
     loadMenuItems();
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -456,7 +616,7 @@ export default function AdminMenuScreen({ navigation }: any) {
         ListHeaderComponent={
           <>
             <View style={styles.header}>
-              <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack?.()}>
+              <TouchableOpacity style={styles.backBtn} onPress={goBack}>
                 <Icon name="chevron-back" size={24} color={THEME.text} />
               </TouchableOpacity>
 
@@ -491,10 +651,11 @@ export default function AdminMenuScreen({ navigation }: any) {
               <MiniStat label="Items" value={stats.total} />
               <MiniStat label="Available" value={stats.available} />
               <MiniStat label="Out Stock" value={stats.unavailable} />
+              <MiniStat label="Best Seller" value={stats.bestSeller} />
+              <MiniStat label="Popular" value={stats.popular} />
               <MiniStat label="Avg Price" value={money(stats.avgPrice)} />
             </View>
-
-            <Text style={styles.sectionTitle}>Vendors</Text>
+                        <Text style={styles.sectionTitle}>Vendors</Text>
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
               {vendors.map((vendor) => (
@@ -523,7 +684,10 @@ export default function AdminMenuScreen({ navigation }: any) {
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
               <TouchableOpacity
                 style={[styles.chip, selectedCategoryId === "ALL" && styles.chipActive]}
-                onPress={() => setSelectedCategoryId("ALL")}
+                onPress={() => {
+                  setSelectedCategoryId("ALL");
+                  setSelectedSubCategoryId("ALL");
+                }}
               >
                 <Text
                   style={[
@@ -542,7 +706,10 @@ export default function AdminMenuScreen({ navigation }: any) {
                     styles.chip,
                     selectedCategoryId === cat.id && styles.chipActive,
                   ]}
-                  onPress={() => setSelectedCategoryId(cat.id)}
+                  onPress={() => {
+                    setSelectedCategoryId(cat.id);
+                    setSelectedSubCategoryId("ALL");
+                  }}
                 >
                   <Text
                     style={[
@@ -556,12 +723,59 @@ export default function AdminMenuScreen({ navigation }: any) {
               ))}
             </ScrollView>
 
+            <Text style={styles.sectionTitle}>Subcategories</Text>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+              <TouchableOpacity
+                style={[
+                  styles.chip,
+                  selectedSubCategoryId === "ALL" && styles.chipActive,
+                ]}
+                onPress={() => setSelectedSubCategoryId("ALL")}
+              >
+                <Text
+                  style={[
+                    styles.chipText,
+                    selectedSubCategoryId === "ALL" && styles.chipTextActive,
+                  ]}
+                >
+                  All
+                </Text>
+              </TouchableOpacity>
+
+              {subCategories
+                .filter((sub) =>
+                  selectedCategoryId === "ALL"
+                    ? true
+                    : sub.categoryId === selectedCategoryId
+                )
+                .map((sub) => (
+                  <TouchableOpacity
+                    key={sub.id}
+                    style={[
+                      styles.chip,
+                      selectedSubCategoryId === sub.id && styles.chipActive,
+                    ]}
+                    onPress={() => setSelectedSubCategoryId(sub.id)}
+                  >
+                    <Text
+                      style={[
+                        styles.chipText,
+                        selectedSubCategoryId === sub.id && styles.chipTextActive,
+                      ]}
+                    >
+                      {sub.name || sub.subCategoryName}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+            </ScrollView>
+
             <View style={styles.searchBox}>
               <Icon name="search-outline" size={20} color={THEME.muted} />
               <TextInput
                 value={search}
                 onChangeText={setSearch}
-                placeholder="Search item, category, description..."
+                placeholder="Search item, category, subcategory..."
                 placeholderTextColor={THEME.muted}
                 style={styles.searchInput}
               />
@@ -608,6 +822,7 @@ export default function AdminMenuScreen({ navigation }: any) {
         editing={editing}
         form={form}
         categories={categories}
+        subCategories={selectedCategorySubCategories}
         saving={saving}
         updateForm={updateForm}
         onCamera={() => pickImage(true)}
@@ -670,7 +885,7 @@ function MenuItemCard({ item, onEdit, onDelete, onToggleStock }: any) {
           </View>
 
           <Text style={styles.meta} numberOfLines={1}>
-            {item.category?.name || "No category"} • {money(item.price)}
+            {item.category?.name || "No category"} • {item.subCategory?.name || "No subcategory"} • {money(item.price)}
           </Text>
 
           <Text style={styles.meta} numberOfLines={2}>
@@ -680,8 +895,10 @@ function MenuItemCard({ item, onEdit, onDelete, onToggleStock }: any) {
       </View>
 
       <View style={styles.tagRow}>
-        {item.isVegetarian ? <Tag text="Veg" green /> : null}
+        {item.isVegetarian || item.isVeg ? <Tag text="Veg" green /> : null}
         {item.isPopular ? <Tag text="Popular" yellow /> : null}
+        {item.isBestSeller ? <Tag text="Best Seller" yellow /> : null}
+        {item.prepTimeMin ? <Tag text={`${item.prepTimeMin} min`} /> : null}
       </View>
 
       <View style={styles.actionRow}>
@@ -726,6 +943,7 @@ function Tag({ text, green, yellow }: any) {
           styles.tagText,
           green && { color: THEME.green },
           yellow && { color: THEME.yellow },
+          !green && !yellow && { color: THEME.muted },
         ]}
       >
         {text}
@@ -739,6 +957,7 @@ function MenuItemModal({
   editing,
   form,
   categories,
+  subCategories,
   saving,
   updateForm,
   onCamera,
@@ -843,6 +1062,94 @@ function MenuItemModal({
               ))}
             </ScrollView>
 
+            <Text style={styles.inputLabel}>Subcategory</Text>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.formChipScroll}>
+              <TouchableOpacity
+                style={[
+                  styles.formChip,
+                  !form.subCategoryId && styles.formChipActive,
+                ]}
+                onPress={() => updateForm("subCategoryId", "")}
+              >
+                <Text
+                  style={[
+                    styles.formChipText,
+                    !form.subCategoryId && styles.formChipTextActive,
+                  ]}
+                >
+                  None
+                </Text>
+              </TouchableOpacity>
+
+              {subCategories.map((sub: any) => (
+                <TouchableOpacity
+                  key={sub.id}
+                  style={[
+                    styles.formChip,
+                    form.subCategoryId === sub.id && styles.formChipActive,
+                  ]}
+                  onPress={() => updateForm("subCategoryId", sub.id)}
+                >
+                  <Text
+                    style={[
+                      styles.formChipText,
+                      form.subCategoryId === sub.id && styles.formChipTextActive,
+                    ]}
+                  >
+                    {sub.name || sub.subCategoryName}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.inlineInputs}>
+              <SmallInput
+                label="Calories"
+                value={form.calories}
+                onChangeText={(v: string) => updateForm("calories", v)}
+                keyboardType="numeric"
+              />
+              <SmallInput
+                label="Prep Min"
+                value={form.prepTimeMin}
+                onChangeText={(v: string) => updateForm("prepTimeMin", v)}
+                keyboardType="numeric"
+              />
+              <SmallInput
+                label="Spice"
+                value={form.spiceLevel}
+                onChangeText={(v: string) => updateForm("spiceLevel", v)}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <FormInput
+              label="Serving Info"
+              icon="restaurant-outline"
+              value={form.servingInfo}
+              onChangeText={(v: string) => updateForm("servingInfo", v)}
+              placeholder="Example: Serves 1"
+            />
+
+            <FormInput
+              label="Addons"
+              icon="add-circle-outline"
+              value={form.addonsText}
+              onChangeText={(v: string) => updateForm("addonsText", v)}
+              placeholder={"One per line: Cheese|30\nExtra Mayo|20"}
+              multiline
+            />
+
+            <FormInput
+              label="Customizations"
+              icon="options-outline"
+              value={form.customizationsText}
+              onChangeText={(v: string) => updateForm("customizationsText", v)}
+              placeholder={"One per line: Size Large|50|required\nLess Spicy|0|optional"}
+              multiline
+            />
+
             <View style={styles.switchGrid}>
               <ToggleCard
                 title="Available"
@@ -863,6 +1170,15 @@ function MenuItemModal({
                 icon="flame-outline"
                 active={form.isPopular}
                 onPress={() => updateForm("isPopular", !form.isPopular)}
+              />
+            </View>
+
+            <View style={styles.switchGrid}>
+              <ToggleCard
+                title="Best Seller"
+                icon="ribbon-outline"
+                active={form.isBestSeller}
+                onPress={() => updateForm("isBestSeller", !form.isBestSeller)}
               />
             </View>
 
@@ -910,6 +1226,19 @@ function FormInput({ label, icon, multiline, ...props }: any) {
   );
 }
 
+function SmallInput({ label, ...props }: any) {
+  return (
+    <View style={styles.smallInputWrap}>
+      <Text style={styles.inputLabel}>{label}</Text>
+      <TextInput
+        {...props}
+        placeholderTextColor={THEME.muted}
+        style={styles.smallInput}
+      />
+    </View>
+  );
+}
+
 function ToggleCard({ title, icon, active, onPress }: any) {
   return (
     <TouchableOpacity
@@ -940,7 +1269,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 38,
   },
-
   header: {
     paddingTop: 22,
     paddingBottom: 16,
@@ -984,7 +1312,6 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontSize: 12,
   },
-
   heroCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -1026,7 +1353,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   statGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -1034,7 +1360,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   miniStat: {
-    width: "48.5%",
+    width: "31.5%",
     backgroundColor: THEME.card,
     borderRadius: 20,
     padding: 14,
@@ -1043,16 +1369,15 @@ const styles = StyleSheet.create({
   },
   miniValue: {
     color: THEME.text,
-    fontSize: 21,
+    fontSize: 18,
     fontWeight: "900",
   },
   miniLabel: {
     color: THEME.muted,
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: "800",
     marginTop: 4,
   },
-
   sectionTitle: {
     color: THEME.text,
     fontSize: 19,
@@ -1076,7 +1401,6 @@ const styles = StyleSheet.create({
     color: THEME.yellow,
     fontWeight: "900",
   },
-
   chipScroll: {
     maxHeight: 48,
   },
@@ -1102,7 +1426,6 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: "#000",
   },
-
   searchBox: {
     marginTop: 17,
     height: 54,
@@ -1121,7 +1444,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     fontSize: 14,
   },
-
   emptyBox: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -1158,7 +1480,6 @@ const styles = StyleSheet.create({
     color: "#000",
     fontWeight: "900",
   },
-
   card: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -1230,6 +1551,7 @@ const styles = StyleSheet.create({
   },
   tagRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     marginTop: 12,
   },
@@ -1238,6 +1560,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderWidth: 1,
+    backgroundColor: THEME.card2,
+    borderColor: THEME.border,
   },
   greenTag: {
     backgroundColor: "#102517",
@@ -1308,7 +1632,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     fontSize: 12,
   },
-
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.76)",
@@ -1359,7 +1682,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   inputGroup: {
     marginBottom: 14,
   },
@@ -1394,7 +1716,24 @@ const styles = StyleSheet.create({
     minHeight: 75,
     textAlignVertical: "top",
   },
-
+  inlineInputs: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 14,
+  },
+  smallInputWrap: {
+    flex: 1,
+  },
+  smallInput: {
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: THEME.input,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    paddingHorizontal: 12,
+    color: THEME.text,
+    fontWeight: "900",
+  },
   previewBox: {
     height: 152,
     borderRadius: 22,
@@ -1447,7 +1786,6 @@ const styles = StyleSheet.create({
     color: "#000",
     fontWeight: "900",
   },
-
   formChipScroll: {
     maxHeight: 47,
     marginBottom: 16,
@@ -1472,7 +1810,6 @@ const styles = StyleSheet.create({
   formChipTextActive: {
     color: "#000",
   },
-
   switchGrid: {
     flexDirection: "row",
     gap: 8,
@@ -1501,7 +1838,6 @@ const styles = StyleSheet.create({
   toggleTextActive: {
     color: "#000",
   },
-
   saveBtn: {
     height: 56,
     borderRadius: 20,

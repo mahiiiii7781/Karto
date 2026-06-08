@@ -20,21 +20,53 @@ import { cartService, CartItem } from "@/services/api/cartService";
 import { useAuth } from "@/context/AuthContext";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
   green: "#22C55E",
-  yellow: "#FACC15",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   black: "#050807",
   danger: "#EF4444",
+  white: "#FFFFFF",
 };
 
 const DELIVERY_FEE = 25;
 const PLATFORM_FEE = 5;
 const FREE_DELIVERY_ABOVE = 299;
+
+const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
+
+const getCustomizationText = (item: any) => {
+  const raw = item?.customizationJson || item?.customization_json;
+  if (!raw) return "Regular";
+
+  try {
+    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
+
+    if (Array.isArray(value)) {
+      const names = value
+        .map((x: any) => x?.name || x?.title || x?.label || x)
+        .filter(Boolean);
+      return names.length ? names.join(", ") : "Custom";
+    }
+
+    if (typeof value === "object") {
+      const names = Object.values(value)
+        .map((x: any) => (typeof x === "object" ? x?.name || x?.title || x?.label : x))
+        .filter(Boolean);
+      return names.length ? names.join(", ") : "Custom";
+    }
+
+    return String(value);
+  } catch {
+    return "Custom";
+  }
+};
 
 export default function CartScreen() {
   const navigation = useNavigation<any>();
@@ -87,7 +119,7 @@ export default function CartScreen() {
 
         if (error) {
           setItems([]);
-          showToast("error", "Unable to load cart", "Please try again.");
+          showToast("error", "Unable to load cart", error?.message || "Please try again.");
           return;
         }
 
@@ -142,7 +174,7 @@ export default function CartScreen() {
       const { error } = await cartService.clearCart();
 
       if (error) {
-        showToast("error", "Unable to clear cart", "Please try again.");
+        showToast("error", "Unable to clear cart", error?.message || "Please try again.");
         return;
       }
 
@@ -166,7 +198,7 @@ export default function CartScreen() {
       const { error } = await cartService.removeFromCart(itemId);
 
       if (error) {
-        showToast("error", "Unable to remove item", "Please try again.");
+        showToast("error", "Unable to remove item", error?.message || "Please try again.");
         return;
       }
 
@@ -194,7 +226,7 @@ export default function CartScreen() {
       const { error } = await cartService.updateCartItem(item.id, nextQty);
 
       if (error) {
-        showToast("error", "Unable to update quantity", "Please try again.");
+        showToast("error", "Unable to update quantity", error?.message || "Please try again.");
         return;
       }
 
@@ -227,7 +259,10 @@ export default function CartScreen() {
     "";
 
   const getItemName = (item: CartItem) =>
-    item.menu_item?.name || item.menuItem?.name || "Cart Item";
+    item.itemName ||
+    item.menu_item?.name ||
+    item.menuItem?.name ||
+    "Cart Item";
 
   const getRestaurantName = (item: CartItem) =>
     item.restaurant?.restaurant_name || item.restaurant?.name || "Karto Store";
@@ -262,78 +297,83 @@ export default function CartScreen() {
 
     return (
       <View style={styles.cartBox}>
-        {imageUri ? (
-          <Image source={{ uri: imageUri }} style={styles.image} />
-        ) : (
-          <View style={styles.imageFallback}>
-            <Icon name="fast-food" size={28} color={THEME.yellow} />
-          </View>
-        )}
-
-        <View style={styles.cardContent}>
-          <View style={styles.titleRowInside}>
+        <View style={styles.itemMain}>
+          <View style={styles.itemInfo}>
             <Text style={styles.title} numberOfLines={1}>
               {getItemName(item)}
             </Text>
-
-            <TouchableOpacity
-              disabled={disabled}
-              onPress={() => removeItem(item.id)}
-              style={styles.trashBtn}
-              activeOpacity={0.85}
-            >
-              {disabled ? (
-                <ActivityIndicator size="small" color={THEME.green} />
-              ) : (
-                <Icon name="trash-outline" size={18} color={THEME.danger} />
-              )}
-            </TouchableOpacity>
+            <Text style={styles.storeText} numberOfLines={1}>
+              {getRestaurantName(item)}
+            </Text>
           </View>
 
-          <Text style={styles.storeText} numberOfLines={1}>
-            {getRestaurantName(item)}
-          </Text>
-
-          {!!item.note && (
-            <View style={styles.noteBox}>
-              <Icon name="reader-outline" size={13} color={THEME.yellow} />
-              <Text style={styles.noteText} numberOfLines={1}>
-                {item.note}
-              </Text>
+          {imageUri ? (
+            <Image source={{ uri: imageUri }} style={styles.image} />
+          ) : (
+            <View style={styles.imageFallback}>
+              <Icon name="fast-food" size={28} color={THEME.orange} />
             </View>
           )}
+        </View>
 
-          <View style={styles.bottomRow}>
-            <View style={styles.qtyRow}>
-              <TouchableOpacity
-                style={[styles.qtyBtn, disabled && styles.disabledBtn]}
-                disabled={disabled}
-                onPress={() => updateQuantity(item, Number(item.quantity) - 1)}
-                activeOpacity={0.85}
-              >
-                <Icon name="remove" size={16} color={THEME.green} />
-              </TouchableOpacity>
+        <View style={styles.optionRow}>
+          <View style={styles.optionLeft}>
+            <Text style={styles.optionLabel}>Size</Text>
+            <Text style={styles.optionValue} numberOfLines={1}>
+              {getCustomizationText(item)}
+            </Text>
+            <Icon name="chevron-down" size={14} color={THEME.orange} />
+          </View>
 
-              <Text style={styles.qtyText}>{Number(item.quantity || 0)}</Text>
+          <Text style={styles.priceText}>{money(lineTotal)}</Text>
 
-              <TouchableOpacity
-                style={[styles.qtyBtn, disabled && styles.disabledBtn]}
-                disabled={disabled}
-                onPress={() => updateQuantity(item, Number(item.quantity) + 1)}
-                activeOpacity={0.85}
-              >
-                <Icon name="add" size={16} color={THEME.green} />
-              </TouchableOpacity>
-            </View>
+          <View style={styles.qtyRow}>
+            <TouchableOpacity
+              style={[styles.qtyBtn, disabled && styles.disabledBtn]}
+              disabled={disabled}
+              onPress={() => updateQuantity(item, Number(item.quantity) - 1)}
+              activeOpacity={0.85}
+            >
+              <Icon name="remove" size={14} color={THEME.white} />
+            </TouchableOpacity>
 
-            <View style={styles.priceBox}>
-              <Text style={styles.itemPrice}>₹{lineTotal.toFixed(2)}</Text>
-              <Text style={styles.singlePrice}>
-                ₹{Number(item.price || 0).toFixed(0)} each
-              </Text>
-            </View>
+            <Text style={styles.qtyText}>{Number(item.quantity || 0)}</Text>
+
+            <TouchableOpacity
+              style={[styles.qtyBtn, disabled && styles.disabledBtn]}
+              disabled={disabled}
+              onPress={() => updateQuantity(item, Number(item.quantity) + 1)}
+              activeOpacity={0.85}
+            >
+              <Icon name="add" size={14} color={THEME.white} />
+            </TouchableOpacity>
           </View>
         </View>
+
+        {!!item.note && (
+          <View style={styles.noteBox}>
+            <Icon name="reader-outline" size={13} color={THEME.orange} />
+            <Text style={styles.noteText} numberOfLines={1}>
+              {item.note}
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity
+          disabled={disabled}
+          onPress={() => removeItem(item.id)}
+          style={styles.removeLine}
+          activeOpacity={0.85}
+        >
+          {disabled ? (
+            <ActivityIndicator size="small" color={THEME.orange} />
+          ) : (
+            <>
+              <Icon name="trash-outline" size={14} color={THEME.danger} />
+              <Text style={styles.removeText}>Remove</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </View>
     );
   };
@@ -341,11 +381,11 @@ export default function CartScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.loadingText}>Preparing your cart...</Text>
       </View>
     );
@@ -353,7 +393,7 @@ export default function CartScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -361,14 +401,14 @@ export default function CartScreen() {
           style={styles.iconBtn}
           activeOpacity={0.85}
         >
-          <Icon name="chevron-back" size={24} color={THEME.text} />
+          <Icon name="chevron-back" size={24} color={THEME.blue} />
         </TouchableOpacity>
 
         <View style={styles.headerTextBox}>
-          <Text style={styles.heading}>Your Cart</Text>
+          <Text style={styles.heading}>My Cart</Text>
           <Text style={styles.subHeading}>
             {itemCount > 0
-              ? `${itemCount} item${itemCount > 1 ? "s" : ""} ready`
+              ? `${itemCount} item${itemCount > 1 ? "s" : ""} added`
               : isGuest
               ? "Login to sync your cart"
               : "Your cart is empty"}
@@ -381,14 +421,14 @@ export default function CartScreen() {
             style={styles.clearBtn}
             activeOpacity={0.85}
           >
-            <Icon name="trash" size={18} color={THEME.black} />
+            <Icon name="trash-outline" size={18} color={THEME.orange} />
           </TouchableOpacity>
         )}
       </View>
 
       {items.length > 0 && (
         <View style={styles.offerStrip}>
-          <Icon name="flash" size={18} color={THEME.yellow} />
+          <Icon name="flash" size={18} color={THEME.orange} />
           <Text style={styles.offerText}>
             {remainingForFreeDelivery > 0
               ? `Add ₹${remainingForFreeDelivery.toFixed(0)} more for free delivery`
@@ -406,8 +446,8 @@ export default function CartScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => loadCartItems(true)}
-            tintColor={THEME.green}
-            colors={[THEME.green]}
+            tintColor={THEME.orange}
+            colors={[THEME.orange]}
           />
         }
         ListEmptyComponent={
@@ -416,7 +456,7 @@ export default function CartScreen() {
               <Icon
                 name={isGuest ? "person-circle-outline" : "cart-outline"}
                 size={54}
-                color={THEME.yellow}
+                color={THEME.orange}
               />
             </View>
 
@@ -438,7 +478,7 @@ export default function CartScreen() {
               <Text style={styles.exploreText}>
                 {isGuest ? "Login / Signup" : "Explore Stores"}
               </Text>
-              <Icon name="arrow-forward" size={18} color={THEME.black} />
+              <Icon name="arrow-forward" size={18} color={THEME.white} />
             </TouchableOpacity>
 
             {isGuest && (
@@ -460,28 +500,35 @@ export default function CartScreen() {
       {items.length > 0 && (
         <View style={styles.footer}>
           <View style={styles.billCard}>
+            <View style={styles.billHeader}>
+              <Text style={styles.billHeaderText}>Bill Details</Text>
+              <Text style={styles.billHeaderAmount}>{money(grandTotal)}</Text>
+            </View>
+
+            <View style={styles.divider} />
+
             <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Subtotal</Text>
-              <Text style={styles.billValue}>₹{subtotal.toFixed(2)}</Text>
+              <Text style={styles.billLabel}>Sub Total</Text>
+              <Text style={styles.billValue}>{money(subtotal)}</Text>
             </View>
 
             <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Delivery Fee</Text>
+              <Text style={styles.billLabel}>Delivery Charge</Text>
               <Text style={deliveryFee === 0 ? styles.freeText : styles.billValue}>
-                {deliveryFee === 0 ? "FREE" : `₹${deliveryFee.toFixed(2)}`}
+                {deliveryFee === 0 ? "FREE" : money(deliveryFee)}
               </Text>
             </View>
 
             <View style={styles.billRow}>
               <Text style={styles.billLabel}>Platform Fee</Text>
-              <Text style={styles.billValue}>₹{PLATFORM_FEE.toFixed(2)}</Text>
+              <Text style={styles.billValue}>{money(PLATFORM_FEE)}</Text>
             </View>
 
             <View style={styles.divider} />
 
             <View style={styles.billRowLast}>
-              <Text style={styles.totalLabel}>Grand Total</Text>
-              <Text style={styles.totalValue}>₹{grandTotal.toFixed(2)}</Text>
+              <Text style={styles.totalLabel}>Amount Payable</Text>
+              <Text style={styles.totalValue}>{money(grandTotal)}</Text>
             </View>
           </View>
 
@@ -490,15 +537,8 @@ export default function CartScreen() {
             style={styles.checkoutBtn}
             onPress={goToCheckout}
           >
-            <View>
-              <Text style={styles.checkoutSmall}>Payable</Text>
-              <Text style={styles.checkoutAmount}>₹{grandTotal.toFixed(2)}</Text>
-            </View>
-
-            <View style={styles.checkoutRight}>
-              <Text style={styles.checkoutText}>Checkout</Text>
-              <Icon name="arrow-forward-circle" size={22} color={THEME.black} />
-            </View>
+            <Text style={styles.checkoutText}>Proceed To Checkout</Text>
+            <Icon name="arrow-forward-circle" size={22} color={THEME.white} />
           </TouchableOpacity>
         </View>
       )}
@@ -537,7 +577,7 @@ export default function CartScreen() {
                 activeOpacity={0.85}
               >
                 {clearing ? (
-                  <ActivityIndicator color={THEME.black} />
+                  <ActivityIndicator color={THEME.white} />
                 ) : (
                   <Text style={styles.confirmBtnText}>Clear Cart</Text>
                 )}
@@ -549,6 +589,14 @@ export default function CartScreen() {
     </View>
   );
 }
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -567,15 +615,14 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 24,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.white,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 18,
+    ...shadow,
   },
   loadingLogoText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 38,
     fontWeight: "900",
   },
@@ -588,25 +635,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   headerTextBox: {
     flex: 1,
   },
   iconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 18,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: THEME.white,
     justifyContent: "center",
     alignItems: "center",
+    ...shadow,
   },
   heading: {
-    fontSize: 25,
+    fontSize: 23,
     fontWeight: "900",
-    color: THEME.text,
+    color: THEME.blue,
   },
   subHeading: {
     color: THEME.muted,
@@ -615,129 +661,113 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   clearBtn: {
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.white,
     width: 42,
     height: 42,
-    borderRadius: 18,
+    borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   offerStrip: {
-    backgroundColor: "#252109",
-    borderColor: "#57470A",
+    backgroundColor: THEME.orangeSoft,
+    borderColor: "#FFD6C8",
     borderWidth: 1,
-    borderRadius: 16,
+    borderRadius: 15,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingVertical: 11,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   offerText: {
     flex: 1,
-    color: THEME.yellow,
+    color: THEME.orange,
     fontWeight: "900",
     fontSize: 13,
   },
   cartBox: {
+    marginBottom: 13,
+    backgroundColor: THEME.white,
+    borderRadius: 17,
+    overflow: "hidden",
+    ...shadow,
+  },
+  itemMain: {
+    minHeight: 94,
     flexDirection: "row",
-    marginBottom: 14,
-    backgroundColor: THEME.card,
-    borderRadius: 22,
     padding: 12,
-    borderWidth: 1,
-    borderColor: THEME.border,
+  },
+  itemInfo: {
+    flex: 1,
+    justifyContent: "center",
+    paddingRight: 10,
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: THEME.blue,
+  },
+  storeText: {
+    fontSize: 12,
+    marginTop: 5,
+    color: THEME.muted,
+    fontWeight: "800",
   },
   image: {
-    width: 92,
-    height: 104,
-    borderRadius: 18,
-    marginRight: 14,
+    width: 112,
+    height: 78,
+    borderRadius: 15,
     backgroundColor: THEME.card2,
   },
   imageFallback: {
-    width: 92,
-    height: 104,
-    borderRadius: 18,
-    marginRight: 14,
+    width: 112,
+    height: 78,
+    borderRadius: 15,
     backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
   },
-  cardContent: {
-    flex: 1,
-  },
-  titleRowInside: {
+  optionRow: {
+    height: 42,
+    backgroundColor: THEME.card2,
+    paddingHorizontal: 13,
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
   },
-  title: {
+  optionLeft: {
     flex: 1,
-    fontSize: 17,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  optionLabel: {
+    color: THEME.blue,
+    fontSize: 11,
     fontWeight: "900",
-    color: THEME.text,
-    marginRight: 8,
   },
-  trashBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 14,
-    backgroundColor: "#1D1111",
-    borderWidth: 1,
-    borderColor: "#3A1919",
-    justifyContent: "center",
-    alignItems: "center",
+  optionValue: {
+    color: THEME.orange,
+    fontSize: 11,
+    fontWeight: "900",
+    maxWidth: 90,
   },
-  storeText: {
+  priceText: {
+    color: THEME.blue,
     fontSize: 13,
-    marginTop: 5,
-    color: THEME.muted,
-    fontWeight: "700",
-  },
-  noteBox: {
-    marginTop: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 10,
-  },
-  noteText: {
-    flex: 1,
-    color: THEME.yellow,
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  bottomRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 14,
+    fontWeight: "900",
+    marginRight: 12,
   },
   qtyRow: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 14,
-    padding: 3,
   },
   qtyBtn: {
-    width: 29,
-    height: 29,
-    borderRadius: 10,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    backgroundColor: THEME.blue,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -745,30 +775,51 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   qtyText: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
-    marginHorizontal: 13,
+    marginHorizontal: 9,
+    fontSize: 13,
   },
-  priceBox: {
-    alignItems: "flex-end",
+  noteBox: {
+    marginHorizontal: 12,
+    marginTop: 9,
+    marginBottom: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: THEME.orangeSoft,
+    borderWidth: 1,
+    borderColor: "#FFD6C8",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 10,
   },
-  itemPrice: {
-    color: THEME.green,
+  noteText: {
+    flex: 1,
+    color: THEME.orange,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  removeLine: {
+    alignSelf: "flex-start",
+    marginHorizontal: 12,
+    marginTop: 4,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  removeText: {
+    color: THEME.danger,
+    fontSize: 12,
     fontWeight: "900",
-    fontSize: 16,
-  },
-  singlePrice: {
-    color: THEME.muted,
-    fontSize: 11,
-    marginTop: 2,
-    fontWeight: "700",
   },
   emptyListContent: {
     flexGrow: 1,
     justifyContent: "center",
   },
   listContent: {
-    paddingBottom: 245,
+    paddingBottom: 230,
   },
   emptyBox: {
     alignItems: "center",
@@ -778,14 +829,13 @@ const styles = StyleSheet.create({
     width: 104,
     height: 104,
     borderRadius: 36,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.white,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   emptyTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 21,
     fontWeight: "900",
     marginTop: 18,
@@ -799,8 +849,8 @@ const styles = StyleSheet.create({
   },
   exploreBtn: {
     marginTop: 22,
-    backgroundColor: THEME.green,
-    borderRadius: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 15,
     paddingVertical: 14,
     paddingHorizontal: 22,
     flexDirection: "row",
@@ -808,7 +858,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   exploreText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -818,7 +868,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   secondaryText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontWeight: "900",
   },
   footer: {
@@ -827,18 +877,29 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: THEME.bg,
-    borderTopWidth: 1,
-    borderTopColor: THEME.border,
     padding: 16,
     paddingBottom: Platform.OS === "ios" ? 28 : 22,
   },
   billCard: {
-    backgroundColor: THEME.card,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.white,
+    borderRadius: 17,
     padding: 14,
     marginBottom: 12,
+    ...shadow,
+  },
+  billHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  billHeaderText: {
+    color: THEME.blue,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  billHeaderAmount: {
+    color: THEME.blue,
+    fontSize: 15,
+    fontWeight: "900",
   },
   billRow: {
     flexDirection: "row",
@@ -851,14 +912,14 @@ const styles = StyleSheet.create({
     marginBottom: 0,
   },
   billLabel: {
-    color: THEME.muted,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  billValue: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 13,
     fontWeight: "800",
+  },
+  billValue: {
+    color: THEME.blue,
+    fontSize: 13,
+    fontWeight: "900",
   },
   freeText: {
     color: THEME.green,
@@ -868,58 +929,43 @@ const styles = StyleSheet.create({
   divider: {
     height: 1,
     backgroundColor: THEME.border,
-    marginVertical: 5,
+    marginVertical: 8,
   },
   totalLabel: {
-    color: THEME.text,
-    fontSize: 16,
+    color: THEME.orange,
+    fontSize: 15,
     fontWeight: "900",
   },
   totalValue: {
-    color: THEME.green,
-    fontSize: 18,
+    color: THEME.orange,
+    fontSize: 16,
     fontWeight: "900",
   },
   checkoutBtn: {
-    backgroundColor: THEME.green,
-    borderRadius: 20,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
+    backgroundColor: THEME.orange,
+    borderRadius: 15,
+    paddingVertical: 15,
+    paddingHorizontal: 18,
     flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  checkoutSmall: {
-    color: THEME.black,
-    fontSize: 11,
-    fontWeight: "800",
-  },
-  checkoutAmount: {
-    color: THEME.black,
-    fontSize: 19,
-    fontWeight: "900",
-  },
-  checkoutRight: {
-    flexDirection: "row",
+    justifyContent: "center",
     alignItems: "center",
     gap: 8,
+    ...shadow,
   },
   checkoutText: {
-    color: THEME.black,
+    color: THEME.white,
     fontSize: 17,
     fontWeight: "900",
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.72)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     padding: 22,
   },
   confirmBox: {
-    backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.white,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
@@ -927,15 +973,13 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 22,
-    backgroundColor: "#1D1111",
-    borderWidth: 1,
-    borderColor: "#3A1919",
+    backgroundColor: "#FFF1F1",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
   confirmTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
   },
@@ -954,25 +998,23 @@ const styles = StyleSheet.create({
   cancelBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
     paddingVertical: 13,
-    borderRadius: 16,
+    borderRadius: 15,
     alignItems: "center",
   },
   cancelText: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
   },
   confirmBtn: {
     flex: 1,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     paddingVertical: 13,
-    borderRadius: 16,
+    borderRadius: 15,
     alignItems: "center",
   },
   confirmBtnText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
   },
 });

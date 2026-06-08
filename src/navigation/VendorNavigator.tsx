@@ -10,9 +10,51 @@ import VendorAnalyticsScreen from "@/screens/vendor/VendorAnalyticsScreen";
 import VendorCategoriesScreen from "@/screens/vendor/VendorCategoriesScreen";
 import VendorSettingsScreen from "@/screens/vendor/VendorSettingsScreen";
 
+/* Real vendor modules */
+import VendorMenuScreen from "@/screens/vendor/VendorMenuScreen";
+import VendorNotificationsScreen from "@/screens/vendor/VendorNotificationsScreen";
+
+/* Keep only non-ready modules as placeholder */
 import VendorPlaceholderScreen from "@/screens/vendor/VendorPlaceholderScreen";
 
-const Stack = createNativeStackNavigator();
+export type VendorStackParamList = {
+  VendorDashboard: undefined;
+  VendorOrders: undefined;
+  VendorOrderDetail: {
+    order?: any;
+    orderId?: string;
+  };
+  VendorPayments: undefined;
+  VendorAnalytics: undefined;
+  VendorCategories: undefined;
+  VendorSettings: undefined;
+  VendorMenu: undefined;
+  VendorNotifications: undefined;
+
+  VendorInventory: {
+    title?: string;
+  };
+  VendorOffers: {
+    title?: string;
+  };
+  VendorReviews: {
+    title?: string;
+  };
+  VendorCustomers: {
+    title?: string;
+  };
+  VendorReports: {
+    title?: string;
+  };
+  VendorSupport: {
+    title?: string;
+  };
+  VendorDelivery: {
+    title?: string;
+  };
+};
+
+const Stack = createNativeStackNavigator<VendorStackParamList>();
 
 export default function VendorNavigator() {
   return (
@@ -26,17 +68,11 @@ export default function VendorNavigator() {
         },
       }}
     >
-      {/* =========================
-          DASHBOARD
-      ========================= */}
       <Stack.Screen
         name="VendorDashboard"
         component={VendorDashboardScreen}
       />
 
-      {/* =========================
-          ORDERS
-      ========================= */}
       <Stack.Screen
         name="VendorOrders"
         component={VendorOrdersScreen}
@@ -47,48 +83,34 @@ export default function VendorNavigator() {
         component={VendorOrderDetailScreen}
       />
 
-      {/* =========================
-          PAYMENTS
-      ========================= */}
       <Stack.Screen
-        name="VendorPayments"
-        component={VendorPaymentsScreen}
+        name="VendorMenu"
+        component={VendorMenuScreen}
       />
 
-      {/* =========================
-          ANALYTICS
-      ========================= */}
-      <Stack.Screen
-        name="VendorAnalytics"
-        component={VendorAnalyticsScreen}
-      />
-
-      {/* =========================
-          CATEGORIES
-      ========================= */}
       <Stack.Screen
         name="VendorCategories"
         component={VendorCategoriesScreen}
       />
 
-      {/* =========================
-          SETTINGS
-      ========================= */}
+      <Stack.Screen
+        name="VendorPayments"
+        component={VendorPaymentsScreen}
+      />
+
+      <Stack.Screen
+        name="VendorAnalytics"
+        component={VendorAnalyticsScreen}
+      />
+
+      <Stack.Screen
+        name="VendorNotifications"
+        component={VendorNotificationsScreen}
+      />
+
       <Stack.Screen
         name="VendorSettings"
         component={VendorSettingsScreen}
-      />
-
-      {/* =========================
-          COMING SOON MODULES
-      ========================= */}
-
-      <Stack.Screen
-        name="VendorMenu"
-        component={VendorPlaceholderScreen}
-        initialParams={{
-          title: "Menu Management",
-        }}
       />
 
       <Stack.Screen

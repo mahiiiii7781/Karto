@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -16,21 +16,40 @@ import { riderService } from "@/services/api/riderApi";
 const T = {
   bg: "#070A08",
   card: "#101713",
+  card2: "#0D120F",
   black: "#030504",
   green: "#22C55E",
   yellow: "#FACC15",
   text: "#F8FAFC",
   muted: "#9CA3AF",
   border: "#1E2A22",
+  danger: "#EF4444",
 };
 
 const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
+
+const medalIcon = (rank: number) => {
+  if (rank === 1) return "trophy";
+  if (rank === 2) return "medal-outline";
+  if (rank === 3) return "ribbon-outline";
+  return "person";
+};
+
+const getRankLabel = (rank: number) => {
+  if (rank === 1) return "Champion";
+  if (rank === 2) return "Runner Up";
+  if (rank === 3) return "Top Performer";
+  return "Delivery Partner";
+};
 
 export default function RiderLeaderboardScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
   const [leaders, setLeaders] = useState<any[]>([]);
+  const [profile, setProfile] = useState<any>(null);
+  const [analytics, setAnalytics] = useState<any>({});
+  const [wallet, setWallet] = useState<any>({});
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -39,8 +58,23 @@ export default function RiderLeaderboardScreen({ navigation }: any) {
 
   const loadData = useCallback(async () => {
     try {
-      const res = await riderService.getLeaderboard();
-      setLeaders(res?.leaderboard || []);
+      const [leaderRes, profileRes, analyticsRes, walletRes] = await Promise.all([
+        riderService.getLeaderboard(),
+        riderService.getProfile(),
+        riderService.getAnalytics(),
+        riderService.getWallet(),
+      ]);
+
+      if (leaderRes?.error) {
+        setLeaders([]);
+        showToast(leaderRes?.error?.message || "Failed to load leaderboard");
+        return;
+      }
+
+      setLeaders(leaderRes?.data || []);
+      setProfile(profileRes?.data || null);
+      setAnalytics(analyticsRes?.data || {});
+      setWallet(walletRes?.data?.wallet || walletRes?.data || {});
     } catch (e: any) {
       showToast(e?.message || "Failed to load leaderboard");
     } finally {
@@ -58,6 +92,23 @@ export default function RiderLeaderboardScreen({ navigation }: any) {
     loadData();
   };
 
+  const topThree = leaders.slice(0, 3);
+  const rest = leaders.slice(3);
+
+  const myRank = useMemo(() => {
+    return leaders.find((x) => x?.rider?.id === profile?.id) || null;
+  }, [leaders, profile]);
+
+  const totalToday = leaders.reduce(
+    (sum, item) => sum + Number(item?.todayEarn || 0),
+    0
+  );
+
+  const totalAllTime = leaders.reduce(
+    (sum, item) => sum + Number(item?.totalEarn || 0),
+    0
+  );
+
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
@@ -67,9 +118,6 @@ export default function RiderLeaderboardScreen({ navigation }: any) {
       </SafeAreaView>
     );
   }
-
-  const topThree = leaders.slice(0, 3);
-  const rest = leaders.slice(3);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -83,13 +131,21 @@ export default function RiderLeaderboardScreen({ navigation }: any) {
       )}
 
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack?.()}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() => navigation?.goBack?.()}
+        >
           <Icon name="arrow-back" size={22} color={T.text} />
         </TouchableOpacity>
-        <View>
+
+        <View style={{ flex: 1 }}>
           <Text style={styles.title}>Leaderboard</Text>
           <Text style={styles.sub}>Top performing Karto riders</Text>
         </View>
+
+        <TouchableOpacity style={styles.refreshBtn} onPress={loadData}>
+          <Icon name="refresh" size={21} color={T.yellow} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -103,45 +159,142 @@ export default function RiderLeaderboardScreen({ navigation }: any) {
           <View style={styles.empty}>
             <Icon name="trophy-outline" size={54} color={T.yellow} />
             <Text style={styles.emptyTitle}>No ranking yet</Text>
-            <Text style={styles.emptyText}>Complete deliveries to enter leaderboard.</Text>
+            <Text style={styles.emptyText}>
+              Complete deliveries to enter leaderboard.
+            </Text>
           </View>
         ) : (
           <>
+            <View style={styles.heroCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.heroLabel}>Your Rank</Text>
+                <Text style={styles.heroRank}>
+                  {myRank ? `#${myRank.rank}` : "#-"}
+                </Text>
+                <Text style={styles.heroSub}>
+                  Today {money(wallet?.todayEarn || analytics?.todayEarnings)} •
+                  Total {money(wallet?.totalEarn || analytics?.totalEarnings)}
+                </Text>
+              </View>
+
+              <View style={styles.heroIcon}>
+                <Icon name="trophy" size={30} color={T.black} />
+              </View>
+            </View>
+
+            <View style={styles.statsRow}>
+              <MiniStat
+                icon="people-outline"
+                title="Riders"
+                value={leaders.length}
+              />
+              <MiniStat
+                icon="cash-outline"
+                title="Today Pool"
+                value={money(totalToday)}
+              />
+              <MiniStat
+                icon="trending-up-outline"
+                title="Total Pool"
+                value={money(totalAllTime)}
+              />
+            </View>
+
+            <Text style={styles.section}>Top 3 Riders</Text>
+
             <View style={styles.podium}>
-              {topThree.map((item) => (
-                <View key={item.rank} style={styles.podiumCard}>
-                  <View style={styles.rankCircle}>
-                    <Text style={styles.rankText}>#{item.rank}</Text>
+              {topThree.map((item) => {
+                const isMe = item?.rider?.id === profile?.id;
+
+                return (
+                  <View
+                    key={item.rank}
+                    style={[
+                      styles.podiumCard,
+                      item.rank === 1 && styles.firstPodium,
+                      isMe && styles.meCard,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.rankCircle,
+                        item.rank === 1 && styles.firstRankCircle,
+                      ]}
+                    >
+                      <Icon
+                        name={medalIcon(item.rank)}
+                        size={21}
+                        color={T.black}
+                      />
+                      <Text style={styles.rankText}>#{item.rank}</Text>
+                    </View>
+
+                    <Text style={styles.podiumName} numberOfLines={1}>
+                      {item.rider?.fullName || "Rider"}
+                    </Text>
+
+                    <Text style={styles.podiumRole}>
+                      {getRankLabel(item.rank)}
+                    </Text>
+
+                    <Text style={styles.podiumEarn}>{money(item.totalEarn)}</Text>
+                    <Text style={styles.podiumToday}>
+                      Today {money(item.todayEarn)}
+                    </Text>
+
+                    {isMe && (
+                      <View style={styles.youBadge}>
+                        <Text style={styles.youText}>YOU</Text>
+                      </View>
+                    )}
                   </View>
-                  <Text style={styles.podiumName} numberOfLines={1}>
-                    {item.rider?.fullName || "Rider"}
-                  </Text>
-                  <Text style={styles.podiumEarn}>{money(item.totalEarn)}</Text>
-                </View>
-              ))}
+                );
+              })}
             </View>
 
             <Text style={styles.section}>All Riders</Text>
 
-            {rest.length === 0 && leaders.length <= 3 ? (
-              leaders.map((item) => <LeaderRow key={item.rank} item={item} />)
-            ) : (
-              rest.map((item) => <LeaderRow key={item.rank} item={item} />)
-            )}
+            {rest.length === 0 && leaders.length <= 3
+              ? leaders.map((item) => (
+                  <LeaderRow
+                    key={item.rank}
+                    item={item}
+                    isMe={item?.rider?.id === profile?.id}
+                  />
+                ))
+              : rest.map((item) => (
+                  <LeaderRow
+                    key={item.rank}
+                    item={item}
+                    isMe={item?.rider?.id === profile?.id}
+                  />
+                ))}
           </>
         )}
 
-        <View style={{ height: 30 }} />
+        <View style={{ height: 34 }} />
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function LeaderRow({ item }: any) {
+function MiniStat({ icon, title, value }: any) {
   return (
-    <View style={styles.row}>
-      <View style={styles.smallRank}>
-        <Text style={styles.smallRankText}>{item.rank}</Text>
+    <View style={styles.miniStat}>
+      <Icon name={icon} size={19} color={T.yellow} />
+      <Text style={styles.miniValue}>{value}</Text>
+      <Text style={styles.miniTitle}>{title}</Text>
+    </View>
+  );
+}
+
+function LeaderRow({ item, isMe }: any) {
+  return (
+    <View style={[styles.row, isMe && styles.meRow]}>
+      <View style={[styles.smallRank, isMe && styles.meRank]}>
+        <Text style={[styles.smallRankText, isMe && styles.meRankText]}>
+          {item.rank}
+        </Text>
       </View>
 
       <View style={styles.avatar}>
@@ -153,7 +306,9 @@ function LeaderRow({ item }: any) {
           {item.rider?.fullName || "Karto Rider"}
         </Text>
         <Text style={styles.vehicle}>
-          {item.rider?.vehicleType || "Delivery Partner"}
+          {item.rider?.vehicleType ||
+            item.rider?.vehicleNo ||
+            "Delivery Partner"}
         </Text>
       </View>
 
@@ -168,7 +323,12 @@ function LeaderRow({ item }: any) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: T.bg },
   container: { flex: 1, padding: 18 },
-  center: { flex: 1, backgroundColor: T.bg, justifyContent: "center", alignItems: "center" },
+  center: {
+    flex: 1,
+    backgroundColor: T.bg,
+    justifyContent: "center",
+    alignItems: "center",
+  },
   loadingText: { color: T.muted, marginTop: 12, fontWeight: "700" },
 
   toast: {
@@ -205,6 +365,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  refreshBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: T.card,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   title: { color: T.text, fontSize: 25, fontWeight: "900" },
   sub: { color: T.muted, marginTop: 3 },
 
@@ -220,6 +390,68 @@ const styles = StyleSheet.create({
   emptyTitle: { color: T.text, fontWeight: "900", fontSize: 18, marginTop: 12 },
   emptyText: { color: T.muted, marginTop: 6, textAlign: "center" },
 
+  heroCard: {
+    backgroundColor: T.card,
+    borderRadius: 28,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: T.border,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  heroLabel: {
+    color: T.muted,
+    fontWeight: "800",
+    fontSize: 13,
+  },
+  heroRank: {
+    color: T.yellow,
+    fontSize: 38,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+  heroSub: {
+    color: T.green,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 5,
+  },
+  heroIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 24,
+    backgroundColor: T.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  statsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 14,
+  },
+  miniStat: {
+    flex: 1,
+    backgroundColor: T.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+  },
+  miniValue: {
+    color: T.text,
+    fontSize: 17,
+    fontWeight: "900",
+    marginTop: 8,
+  },
+  miniTitle: {
+    color: T.muted,
+    fontSize: 11,
+    marginTop: 3,
+    fontWeight: "700",
+  },
+
   podium: { flexDirection: "row", gap: 10 },
   podiumCard: {
     flex: 1,
@@ -229,18 +461,43 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: T.border,
     alignItems: "center",
+    minHeight: 176,
+  },
+  firstPodium: {
+    borderColor: T.yellow,
+    backgroundColor: "#151407",
+  },
+  meCard: {
+    borderColor: T.green,
   },
   rankCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     backgroundColor: T.yellow,
     alignItems: "center",
     justifyContent: "center",
   },
-  rankText: { color: T.black, fontWeight: "900", fontSize: 15 },
-  podiumName: { color: T.text, fontWeight: "900", marginTop: 12, maxWidth: 90 },
-  podiumEarn: { color: T.green, fontWeight: "900", marginTop: 5 },
+  firstRankCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+  rankText: { color: T.black, fontWeight: "900", fontSize: 12, marginTop: 1 },
+  podiumName: {
+    color: T.text,
+    fontWeight: "900",
+    marginTop: 12,
+    maxWidth: 90,
+  },
+  podiumRole: {
+    color: T.muted,
+    fontSize: 10,
+    marginTop: 3,
+    textAlign: "center",
+  },
+  podiumEarn: { color: T.green, fontWeight: "900", marginTop: 7 },
+  podiumToday: { color: T.muted, fontSize: 10, marginTop: 3 },
 
   section: {
     color: T.text,
@@ -261,6 +518,10 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 12,
   },
+  meRow: {
+    borderColor: T.green,
+    backgroundColor: "#0C1510",
+  },
   smallRank: {
     width: 32,
     height: 32,
@@ -271,7 +532,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  meRank: {
+    backgroundColor: T.yellow,
+    borderColor: T.yellow,
+  },
   smallRankText: { color: T.yellow, fontWeight: "900" },
+  meRankText: { color: T.black },
   avatar: {
     width: 44,
     height: 44,
@@ -286,4 +552,12 @@ const styles = StyleSheet.create({
   vehicle: { color: T.muted, fontSize: 12, marginTop: 4 },
   earn: { color: T.yellow, fontWeight: "900" },
   today: { color: T.muted, fontSize: 11, marginTop: 3 },
+  youBadge: {
+    backgroundColor: T.green,
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    marginTop: 8,
+  },
+  youText: { color: T.black, fontSize: 10, fontWeight: "900" },
 });

@@ -16,6 +16,27 @@ import Geolocation from "react-native-geolocation-service";
 import NetInfo from "@react-native-community/netinfo";
 import Toast from "react-native-toast-message";
 
+type PermissionSetupScreenProps = {
+  route?: {
+    params?: {
+      onDone?: () => void;
+    };
+  };
+  onDone?: () => void;
+};
+
+type PermissionRowProps = {
+  icon: string;
+  title: string;
+  subtitle: string;
+  status: boolean;
+  buttonText: string;
+  onPress: () => void;
+  last?: boolean;
+  color: string;
+  loading?: boolean;
+};
+
 const THEME = {
   bg: "#070A08",
   card: "#101713",
@@ -45,13 +66,19 @@ const showToast = (
   });
 };
 
-export default function PermissionSetupScreen({ route }: any) {
-  const onDone = route?.params?.onDone;
+export default function PermissionSetupScreen({
+  route,
+  onDone,
+}: PermissionSetupScreenProps) {
+  const finalOnDone = onDone || route?.params?.onDone;
 
   const [checking, setChecking] = useState(true);
   const [netOk, setNetOk] = useState(false);
   const [locationOk, setLocationOk] = useState(false);
-  const [notificationOk, setNotificationOk] = useState(Platform.OS !== "android");
+  const [notificationOk, setNotificationOk] = useState(
+    Platform.OS !== "android"
+  );
+
   const [processing, setProcessing] = useState(false);
   const [locationLoading, setLocationLoading] = useState(false);
   const [notificationLoading, setNotificationLoading] = useState(false);
@@ -104,6 +131,7 @@ export default function PermissionSetupScreen({ route }: any) {
         );
 
         const allowed = granted === PermissionsAndroid.RESULTS.GRANTED;
+
         setNotificationOk(allowed);
 
         showToast(
@@ -113,11 +141,16 @@ export default function PermissionSetupScreen({ route }: any) {
             ? "You will receive order updates."
             : "You can enable it later from settings."
         );
+
         return;
       }
 
       setNotificationOk(true);
-      showToast("success", "Notifications ready", "You will receive order updates.");
+      showToast(
+        "success",
+        "Notifications ready",
+        "You will receive order updates."
+      );
     } catch {
       setNotificationOk(false);
       showToast("error", "Notification permission failed", "Please try again.");
@@ -146,6 +179,7 @@ export default function PermissionSetupScreen({ route }: any) {
 
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
           setLocationOk(false);
+          setLocationLoading(false);
           showToast(
             "info",
             "Location skipped",
@@ -159,11 +193,17 @@ export default function PermissionSetupScreen({ route }: any) {
         () => {
           setLocationOk(true);
           setLocationLoading(false);
-          showToast("success", "Location enabled", "Nearby stores will be more accurate.");
+
+          showToast(
+            "success",
+            "Location enabled",
+            "Nearby stores will be more accurate."
+          );
         },
         error => {
           setLocationOk(false);
           setLocationLoading(false);
+
           showToast(
             "info",
             "Location unavailable",
@@ -187,6 +227,8 @@ export default function PermissionSetupScreen({ route }: any) {
     if (processing) return;
 
     try {
+      setProcessing(true);
+
       const netState = await NetInfo.fetch();
       const hasInternet = Boolean(
         netState.isConnected && netState.isInternetReachable !== false
@@ -194,17 +236,23 @@ export default function PermissionSetupScreen({ route }: any) {
 
       if (!hasInternet) {
         setNetOk(false);
-        showToast("error", "No internet", "Please check your connection before continuing.");
+        showToast(
+          "error",
+          "No internet",
+          "Please check your connection before continuing."
+        );
         return;
       }
 
-      setProcessing(true);
+      await AsyncStorage.multiSet([
+        ["hasLaunched", "true"],
+        ["permissionSetupDone", "true"],
+      ]);
 
-      await AsyncStorage.multiSet([["permissionSetupDone", "true"]]);
       await AsyncStorage.removeItem("permissionSetupPending");
 
-      if (typeof onDone === "function") {
-        onDone();
+      if (typeof finalOnDone === "function") {
+        finalOnDone();
       }
     } catch {
       showToast("error", "Unable to continue", "Please try again.");
@@ -217,7 +265,11 @@ export default function PermissionSetupScreen({ route }: any) {
     try {
       await Linking.openSettings();
     } catch {
-      showToast("error", "Unable to open settings", "Please open settings manually.");
+      showToast(
+        "error",
+        "Unable to open settings",
+        "Please open settings manually."
+      );
     }
   };
 
@@ -225,9 +277,11 @@ export default function PermissionSetupScreen({ route }: any) {
     return (
       <View style={styles.center}>
         <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
+
         <ActivityIndicator size="large" color={THEME.green} />
         <Text style={styles.loadingText}>Checking setup...</Text>
       </View>
@@ -293,7 +347,11 @@ export default function PermissionSetupScreen({ route }: any) {
 
       <View style={styles.noteCard}>
         <View style={styles.noteIcon}>
-          <Icon name="information-circle-outline" size={22} color={THEME.yellow} />
+          <Icon
+            name="information-circle-outline"
+            size={22}
+            color={THEME.yellow}
+          />
         </View>
 
         <Text style={styles.noteText}>
@@ -318,7 +376,11 @@ export default function PermissionSetupScreen({ route }: any) {
         )}
       </TouchableOpacity>
 
-      <TouchableOpacity style={styles.settingsBtn} onPress={openSettings} activeOpacity={0.85}>
+      <TouchableOpacity
+        style={styles.settingsBtn}
+        onPress={openSettings}
+        activeOpacity={0.85}
+      >
         <Icon name="settings-outline" size={17} color={THEME.yellow} />
         <Text style={styles.settingsText}>Open App Settings</Text>
       </TouchableOpacity>
@@ -336,10 +398,18 @@ const PermissionRow = ({
   last,
   color,
   loading,
-}: any) => (
+}: PermissionRowProps) => (
   <View style={[styles.permissionRow, last && { borderBottomWidth: 0 }]}>
-    <View style={[styles.permissionIcon, { backgroundColor: `${color}18`, borderColor: `${color}44` }]}>
-      <Icon name={icon} size={23} color={color} />
+    <View
+      style={[
+        styles.permissionIcon,
+        {
+          backgroundColor: `${color}18`,
+          borderColor: `${color}44`,
+        },
+      ]}
+    >
+      <Icon name={icon as any} size={23} color={color} />
     </View>
 
     <View style={{ flex: 1 }}>

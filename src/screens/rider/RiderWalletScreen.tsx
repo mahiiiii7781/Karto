@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -16,22 +16,46 @@ import { riderService } from "@/services/api/riderApi";
 const T = {
   bg: "#070A08",
   card: "#101713",
+  card2: "#0D120F",
   black: "#030504",
   green: "#22C55E",
   yellow: "#FACC15",
   text: "#F8FAFC",
   muted: "#9CA3AF",
   border: "#1E2A22",
+  danger: "#EF4444",
 };
 
 const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
+
+const safeDate = (value?: string) => {
+  if (!value) return "-";
+
+  try {
+    return new Date(value).toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "-";
+  }
+};
+
+const isExpired = (value?: string) => {
+  if (!value) return false;
+  return new Date(value).getTime() < Date.now();
+};
 
 export default function RiderWalletScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
   const [wallet, setWallet] = useState<any>({});
+  const [settlements, setSettlements] = useState<any[]>([]);
   const [coupons, setCoupons] = useState<any[]>([]);
+  const [analytics, setAnalytics] = useState<any>({});
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -40,13 +64,28 @@ export default function RiderWalletScreen({ navigation }: any) {
 
   const loadData = useCallback(async () => {
     try {
-      const [walletRes, couponsRes] = await Promise.all([
+      const [walletRes, couponsRes, analyticsRes] = await Promise.all([
         riderService.getWallet(),
         riderService.getCoupons(),
+        riderService.getAnalytics(),
       ]);
 
-      setWallet(walletRes?.wallet || {});
-      setCoupons(couponsRes?.coupons || []);
+      if (walletRes?.error) {
+        showToast(walletRes?.error?.message || "Failed to load wallet");
+        setWallet({});
+        setSettlements([]);
+      } else {
+        setWallet(walletRes?.data?.wallet || walletRes?.data || {});
+        setSettlements(walletRes?.data?.settlements || []);
+      }
+
+      if (couponsRes?.error) {
+        setCoupons([]);
+      } else {
+        setCoupons(couponsRes?.data || []);
+      }
+
+      setAnalytics(analyticsRes?.data || {});
     } catch (e: any) {
       showToast(e?.message || "Failed to load wallet");
     } finally {
@@ -63,6 +102,36 @@ export default function RiderWalletScreen({ navigation }: any) {
     setRefreshing(true);
     loadData();
   };
+
+  const activeCoupons = useMemo(
+    () => coupons.filter((x) => !x?.isUsed && !isExpired(x?.expiresAt)),
+    [coupons]
+  );
+
+  const usedCoupons = useMemo(
+    () => coupons.filter((x) => x?.isUsed || isExpired(x?.expiresAt)),
+    [coupons]
+  );
+
+  const paidSettlements = useMemo(
+    () => settlements.filter((x) => x?.status === "PAID"),
+    [settlements]
+  );
+
+  const pendingSettlements = useMemo(
+    () => settlements.filter((x) => x?.status !== "PAID"),
+    [settlements]
+  );
+
+  const totalPaid = paidSettlements.reduce(
+    (sum, item) => sum + Number(item?.amount || 0),
+    0
+  );
+
+  const totalPending = pendingSettlements.reduce(
+    (sum, item) => sum + Number(item?.amount || 0),
+    0
+  );
 
   if (loading) {
     return (
@@ -89,10 +158,15 @@ export default function RiderWalletScreen({ navigation }: any) {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack?.()}>
           <Icon name="arrow-back" size={22} color={T.text} />
         </TouchableOpacity>
-        <View>
+
+        <View style={{ flex: 1 }}>
           <Text style={styles.title}>Wallet</Text>
-          <Text style={styles.sub}>Earnings, balance and rewards</Text>
+          <Text style={styles.sub}>Earnings, balance, settlements and rewards</Text>
         </View>
+
+        <TouchableOpacity style={styles.refreshBtn} onPress={loadData}>
+          <Icon name="refresh" size={21} color={T.yellow} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -104,31 +178,102 @@ export default function RiderWalletScreen({ navigation }: any) {
       >
         <View style={styles.walletCard}>
           <View style={styles.walletTop}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.walletLabel}>Available Balance</Text>
               <Text style={styles.balance}>{money(wallet?.balance)}</Text>
+              <Text style={styles.walletHint}>
+                Today {money(wallet?.todayEarn || analytics?.todayEarnings)} •
+                Total {money(wallet?.totalEarn || analytics?.totalEarnings)}
+              </Text>
             </View>
+
             <View style={styles.walletIcon}>
               <Icon name="wallet" size={30} color={T.black} />
             </View>
           </View>
 
           <View style={styles.walletStats}>
-            <WalletStat label="Today Earn" value={money(wallet?.todayEarn)} />
-            <WalletStat label="Total Earn" value={money(wallet?.totalEarn)} />
+            <WalletStat label="Today Earn" value={money(wallet?.todayEarn || analytics?.todayEarnings)} />
+            <WalletStat label="Total Earn" value={money(wallet?.totalEarn || analytics?.totalEarnings)} />
           </View>
         </View>
 
-        <Text style={styles.section}>Reward Coupons</Text>
+        <View style={styles.statsRow}>
+          <MiniStat icon="receipt-outline" title="Paid" value={money(totalPaid)} />
+          <MiniStat icon="time-outline" title="Pending" value={money(totalPending)} />
+          <MiniStat icon="gift-outline" title="Coupons" value={activeCoupons.length} />
+        </View>
 
-        {coupons.length === 0 ? (
+        <View style={styles.quickActions}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.quickBtn}
+            onPress={() => navigation?.navigate?.("RiderEarnings")}
+          >
+            <Icon name="cash-outline" size={20} color={T.yellow} />
+            <Text style={styles.quickText}>Earnings</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.quickBtn}
+            onPress={() => navigation?.navigate?.("RiderIncentives")}
+          >
+            <Icon name="ribbon-outline" size={20} color={T.yellow} />
+            <Text style={styles.quickText}>Incentives</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.quickBtn}
+            onPress={() => navigation?.navigate?.("RiderAnalytics")}
+          >
+            <Icon name="analytics-outline" size={20} color={T.yellow} />
+            <Text style={styles.quickText}>Analytics</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.section}>Settlement History</Text>
+
+        {settlements.length === 0 ? (
+          <View style={styles.empty}>
+            <Icon name="receipt-outline" size={50} color={T.yellow} />
+            <Text style={styles.emptyTitle}>No settlements yet</Text>
+            <Text style={styles.emptyText}>Payout and settlement records will appear here.</Text>
+          </View>
+        ) : (
+          settlements.map((item) => (
+            <View key={item.id} style={styles.settlementCard}>
+              <View style={styles.settlementIcon}>
+                <Icon
+                  name={item.status === "PAID" ? "checkmark-done" : "time-outline"}
+                  size={20}
+                  color={item.status === "PAID" ? T.green : T.yellow}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.settlementTitle}>
+                  {item.status || "PENDING"} Settlement
+                </Text>
+                <Text style={styles.settlementSub}>{safeDate(item.createdAt)}</Text>
+              </View>
+
+              <Text style={styles.settlementAmount}>{money(item.amount)}</Text>
+            </View>
+          ))
+        )}
+
+        <Text style={styles.section}>Active Reward Coupons</Text>
+
+        {activeCoupons.length === 0 ? (
           <View style={styles.empty}>
             <Icon name="gift-outline" size={50} color={T.yellow} />
-            <Text style={styles.emptyTitle}>No coupons yet</Text>
+            <Text style={styles.emptyTitle}>No active coupons</Text>
             <Text style={styles.emptyText}>Complete deliveries to unlock rider coupons.</Text>
           </View>
         ) : (
-          coupons.map((coupon) => (
+          activeCoupons.map((coupon) => (
             <View key={coupon.id} style={styles.couponCard}>
               <View style={styles.couponLeft}>
                 <Icon name="ticket-outline" size={28} color={T.yellow} />
@@ -136,10 +281,17 @@ export default function RiderWalletScreen({ navigation }: any) {
 
               <View style={{ flex: 1 }}>
                 <Text style={styles.couponTitle}>{coupon.title || "Rider Reward"}</Text>
-                <Text style={styles.couponMsg}>{coupon.message || "Delivery reward unlocked"}</Text>
+                <Text style={styles.couponMsg}>
+                  {coupon.message || coupon.description || "Delivery reward unlocked"}
+                </Text>
+
                 <View style={styles.codeBox}>
-                  <Text style={styles.codeText}>{coupon.code}</Text>
+                  <Text style={styles.codeText}>{coupon.code || "REWARD"}</Text>
                 </View>
+
+                {!!coupon.expiresAt && (
+                  <Text style={styles.expiryText}>Expires {safeDate(coupon.expiresAt)}</Text>
+                )}
               </View>
 
               <Text style={styles.couponAmount}>{money(coupon.amount)}</Text>
@@ -147,7 +299,26 @@ export default function RiderWalletScreen({ navigation }: any) {
           ))
         )}
 
-        <View style={{ height: 30 }} />
+        {usedCoupons.length > 0 && (
+          <>
+            <Text style={styles.section}>Used / Expired Coupons</Text>
+
+            {usedCoupons.map((coupon) => (
+              <View key={coupon.id} style={styles.usedCoupon}>
+                <View>
+                  <Text style={styles.usedTitle}>{coupon.title || "Rider Reward"}</Text>
+                  <Text style={styles.usedSub}>
+                    {coupon.isUsed ? "Used" : "Expired"} • {coupon.code || "REWARD"}
+                  </Text>
+                </View>
+
+                <Text style={styles.usedAmount}>{money(coupon.amount)}</Text>
+              </View>
+            ))}
+          </>
+        )}
+
+        <View style={{ height: 34 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -158,6 +329,16 @@ function WalletStat({ label, value }: any) {
     <View style={styles.walletStat}>
       <Text style={styles.walletStatLabel}>{label}</Text>
       <Text style={styles.walletStatValue}>{value}</Text>
+    </View>
+  );
+}
+
+function MiniStat({ icon, title, value }: any) {
+  return (
+    <View style={styles.miniStat}>
+      <Icon name={icon} size={19} color={T.yellow} />
+      <Text style={styles.miniValue}>{value}</Text>
+      <Text style={styles.miniTitle}>{title}</Text>
     </View>
   );
 }
@@ -207,8 +388,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  refreshBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: T.card,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   title: { color: T.text, fontSize: 25, fontWeight: "900" },
-  sub: { color: T.muted, marginTop: 3 },
+  sub: { color: T.muted, marginTop: 3, fontSize: 12 },
 
   walletCard: {
     backgroundColor: T.yellow,
@@ -222,6 +413,13 @@ const styles = StyleSheet.create({
   },
   walletLabel: { color: T.black, fontWeight: "900", opacity: 0.72 },
   balance: { color: T.black, fontSize: 44, fontWeight: "900", marginTop: 8 },
+  walletHint: {
+    color: T.black,
+    fontSize: 12,
+    fontWeight: "900",
+    opacity: 0.75,
+    marginTop: 4,
+  },
   walletIcon: {
     width: 58,
     height: 58,
@@ -239,6 +437,39 @@ const styles = StyleSheet.create({
   },
   walletStatLabel: { color: T.black, fontSize: 12, fontWeight: "800", opacity: 0.72 },
   walletStatValue: { color: T.black, fontSize: 18, fontWeight: "900", marginTop: 5 },
+
+  statsRow: { flexDirection: "row", gap: 10, marginTop: 14 },
+  miniStat: {
+    flex: 1,
+    backgroundColor: T.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+  },
+  miniValue: { color: T.text, fontWeight: "900", fontSize: 16, marginTop: 8 },
+  miniTitle: { color: T.muted, fontSize: 11, fontWeight: "700", marginTop: 3 },
+
+  quickActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  quickBtn: {
+    flex: 1,
+    backgroundColor: T.card,
+    borderWidth: 1,
+    borderColor: T.border,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  quickText: {
+    color: T.text,
+    fontSize: 11,
+    fontWeight: "900",
+    marginTop: 7,
+  },
 
   section: {
     color: T.text,
@@ -258,6 +489,31 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: T.text, fontWeight: "900", fontSize: 18, marginTop: 12 },
   emptyText: { color: T.muted, marginTop: 6, textAlign: "center" },
+
+  settlementCard: {
+    backgroundColor: T.card,
+    borderRadius: 22,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: T.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 12,
+  },
+  settlementIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: T.black,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settlementTitle: { color: T.text, fontWeight: "900" },
+  settlementSub: { color: T.muted, fontSize: 12, marginTop: 4 },
+  settlementAmount: { color: T.yellow, fontWeight: "900", fontSize: 16 },
 
   couponCard: {
     backgroundColor: T.card,
@@ -293,5 +549,21 @@ const styles = StyleSheet.create({
     borderColor: T.border,
   },
   codeText: { color: T.yellow, fontSize: 11, fontWeight: "900" },
+  expiryText: { color: T.muted, fontSize: 11, marginTop: 6 },
   couponAmount: { color: T.green, fontWeight: "900", fontSize: 16 },
+
+  usedCoupon: {
+    backgroundColor: T.card2,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  usedTitle: { color: T.text, fontWeight: "900" },
+  usedSub: { color: T.muted, fontSize: 12, marginTop: 4 },
+  usedAmount: { color: T.muted, fontWeight: "900" },
 });

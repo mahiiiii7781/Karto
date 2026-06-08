@@ -13,9 +13,13 @@ import {
   Switch,
   KeyboardAvoidingView,
   Platform,
+  Image,
+  Alert,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 import apiClient from "@/api/apiClient";
+import { vendorService, VendorCategory } from "@/services/api/vendorService";
 
 const THEME = {
   bg: "#070A07",
@@ -29,41 +33,17 @@ const THEME = {
   danger: "#EF4444",
 };
 
-type VendorCategory = {
-  id: string;
-  name: string;
-  description?: string | null;
-  imageUrl?: string | null;
-  image_url?: string | null;
-  isActive?: boolean;
-  is_active?: boolean;
-  menuItems?: any[];
-  menu_items?: any[];
-  subCategories?: any[];
-  sub_categories?: any[];
-};
-
 type ApiState = {
   loading: boolean;
   refreshing: boolean;
   saving: boolean;
   togglingId: string | null;
-};
-
-const unwrapList = (res: any): any[] => {
-  const raw =
-    res?.data?.data ??
-    res?.data?.categories ??
-    res?.data?.vendorCategories ??
-    res?.data?.items ??
-    res?.data ??
-    [];
-
-  return Array.isArray(raw) ? raw : [];
+  uploading: boolean;
 };
 
 const normalizeCategory = (item: any): VendorCategory => ({
   id: String(item?.id ?? ""),
+  restaurantId: item?.restaurantId ?? item?.restaurant_id,
   name: item?.name ?? item?.category_name ?? item?.title ?? "Untitled",
   description: item?.description ?? item?.category_description ?? null,
   imageUrl: item?.imageUrl ?? item?.image_url ?? null,
@@ -72,16 +52,23 @@ const normalizeCategory = (item: any): VendorCategory => ({
   is_active: item?.is_active ?? item?.isActive ?? true,
   menuItems: Array.isArray(item?.menuItems) ? item.menuItems : item?.menu_items || [],
   menu_items: Array.isArray(item?.menu_items) ? item.menu_items : item?.menuItems || [],
-  subCategories: Array.isArray(item?.subCategories)
-    ? item.subCategories
-    : item?.sub_categories || [],
-  sub_categories: Array.isArray(item?.sub_categories)
-    ? item.sub_categories
-    : item?.subCategories || [],
+  subCategories: Array.isArray(item?.subCategories) ? item.subCategories : item?.sub_categories || [],
+  sub_categories: Array.isArray(item?.sub_categories) ? item.sub_categories : item?.subCategories || [],
 });
 
 const getErrorMessage = (error: any, fallback: string) =>
   error?.response?.data?.message || error?.message || fallback;
+
+const getImageUrlFromUpload = (res: any) =>
+  res?.data?.imageUrl ||
+  res?.data?.url ||
+  res?.data?.secure_url ||
+  res?.data?.data?.imageUrl ||
+  res?.data?.data?.url ||
+  res?.data?.data?.secure_url ||
+  res?.data?.file?.url ||
+  res?.data?.result?.secure_url ||
+  null;
 
 export default function VendorCategoriesScreen() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -92,6 +79,7 @@ export default function VendorCategoriesScreen() {
     refreshing: false,
     saving: false,
     togglingId: null,
+    uploading: false,
   });
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -100,6 +88,8 @@ export default function VendorCategoriesScreen() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [localImageUri, setLocalImageUri] = useState<string | null>(null);
   const [isActive, setIsActive] = useState(true);
   const [toast, setToast] = useState("");
 
@@ -117,9 +107,16 @@ export default function VendorCategoriesScreen() {
     async (silent = false) => {
       try {
         if (!silent) setPartialApiState({ loading: true });
-        const res = await apiClient.get("/vendors/categories");
-        const list = unwrapList(res).map(normalizeCategory).filter((x) => x.id);
-        setCategories(list);
+
+        const { data, error } = await vendorService.getCategories();
+
+        if (error) {
+          setCategories([]);
+          showToast(error.message || "Failed to load categories");
+          return;
+        }
+
+        setCategories((data || []).map(normalizeCategory).filter((x) => x.id));
       } catch (error: any) {
         setCategories([]);
         showToast(getErrorMessage(error, "Failed to load categories"));
@@ -154,6 +151,8 @@ export default function VendorCategoriesScreen() {
     setSelected(null);
     setName("");
     setDescription("");
+    setImageUrl(null);
+    setLocalImageUri(null);
     setIsActive(true);
   };
 
@@ -166,14 +165,116 @@ export default function VendorCategoriesScreen() {
     setSelected(category);
     setName(category.name || "");
     setDescription(category.description || "");
+    setImageUrl(category.imageUrl || category.image_url || null);
+    setLocalImageUri(null);
     setIsActive(category.isActive !== false);
     setModalVisible(true);
   };
 
   const closeForm = () => {
-    if (apiState.saving) return;
+    if (apiState.saving || apiState.uploading) return;
     setModalVisible(false);
     resetForm();
+  };
+
+  const uploadSelectedImage = async (asset: any) => {
+    if (!asset?.uri) return null;
+
+    setLocalImageUri(asset.uri);
+    setPartialApiState({ uploading: true });
+
+    try {
+      const file: any = {
+        uri: asset.uri,
+        name: asset.fileName || `vendor-category-${Date.now()}.jpg`,
+        type: asset.type || "image/jpeg",
+      };
+
+      const formData = new FormData();
+      formData.append("image", file);
+      formData.append("folder", "vendor");
+
+      let res: any;
+
+      try {
+        res = await apiClient.post("/upload/image", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      } catch {
+        res = await apiClient.post("/upload", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
+
+      const uploadedUrl = getImageUrlFromUpload(res);
+
+      if (!uploadedUrl) {
+        showToast("Image uploaded but URL not found");
+        return null;
+      }
+
+      setImageUrl(uploadedUrl);
+      showToast("Image selected");
+      return uploadedUrl;
+    } catch (error: any) {
+      showToast(getErrorMessage(error, "Image upload failed"));
+      return null;
+    } finally {
+      setPartialApiState({ uploading: false });
+    }
+  };
+
+  const pickFromGallery = async () => {
+    const result = await launchImageLibrary({
+      mediaType: "photo",
+      quality: 0.8,
+      selectionLimit: 1,
+      includeBase64: false,
+    });
+
+    if (result.didCancel) return;
+    if (result.errorCode) {
+      showToast(result.errorMessage || "Gallery error");
+      return;
+    }
+
+    const asset = result.assets?.[0];
+    await uploadSelectedImage(asset);
+  };
+
+  const openCamera = async () => {
+    const result = await launchCamera({
+      mediaType: "photo",
+      quality: 0.8,
+      includeBase64: false,
+      saveToPhotos: false,
+      cameraType: "back",
+    });
+
+    if (result.didCancel) return;
+    if (result.errorCode) {
+      showToast(result.errorMessage || "Camera error");
+      return;
+    }
+
+    const asset = result.assets?.[0];
+    await uploadSelectedImage(asset);
+  };
+
+  const showImageOptions = () => {
+    Alert.alert("Category Image", "Choose image source", [
+      { text: "Camera", onPress: openCamera },
+      { text: "Gallery", onPress: pickFromGallery },
+      {
+        text: "Remove",
+        style: "destructive",
+        onPress: () => {
+          setImageUrl(null);
+          setLocalImageUri(null);
+        },
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
   const saveCategory = async () => {
@@ -196,9 +297,10 @@ export default function VendorCategoriesScreen() {
       return;
     }
 
-    const payload = {
+    const payload: Partial<VendorCategory> = {
       name: cleanName,
       description: cleanDescription || null,
+      imageUrl,
       isActive,
     };
 
@@ -206,21 +308,32 @@ export default function VendorCategoriesScreen() {
 
     try {
       if (selected?.id) {
-        const res = await apiClient.patch(`/vendors/categories/${selected.id}`, payload);
-        const updated = normalizeCategory(res?.data?.data ?? res?.data?.category ?? {
-          ...selected,
-          ...payload,
-        });
+        const { data, error } = await vendorService.updateCategory(selected.id, payload);
+
+        if (error) {
+          showToast(error.message || "Failed to update category");
+          return;
+        }
+
+        const updated = normalizeCategory(data || { ...selected, ...payload });
         setCategories((prev) => prev.map((c) => (c.id === selected.id ? updated : c)));
         showToast("Category updated");
       } else {
-        const res = await apiClient.post("/vendors/categories", payload);
-        const created = normalizeCategory(res?.data?.data ?? res?.data?.category ?? payload);
+        const { data, error } = await vendorService.createCategory(payload);
+
+        if (error) {
+          showToast(error.message || "Failed to create category");
+          return;
+        }
+
+        const created = normalizeCategory(data || payload);
+
         if (created.id) {
           setCategories((prev) => [created, ...prev]);
         } else {
           await loadCategories(true);
         }
+
         showToast("Category created");
       }
 
@@ -240,17 +353,35 @@ export default function VendorCategoriesScreen() {
     const previous = category.isActive !== false;
 
     setPartialApiState({ togglingId: category.id });
+
     setCategories((prev) =>
-      prev.map((c) => (c.id === category.id ? { ...c, isActive: next, is_active: next } : c))
+      prev.map((c) =>
+        c.id === category.id ? { ...c, isActive: next, is_active: next } : c
+      )
     );
 
     try {
-      await apiClient.patch(`/vendors/categories/${category.id}`, { isActive: next });
+      const { error } = await vendorService.toggleCategoryStatus(category.id, next);
+
+      if (error) {
+        setCategories((prev) =>
+          prev.map((c) =>
+            c.id === category.id
+              ? { ...c, isActive: previous, is_active: previous }
+              : c
+          )
+        );
+        showToast(error.message || "Failed to update category");
+        return;
+      }
+
       showToast(next ? "Category activated" : "Category paused");
     } catch (error: any) {
       setCategories((prev) =>
         prev.map((c) =>
-          c.id === category.id ? { ...c, isActive: previous, is_active: previous } : c
+          c.id === category.id
+            ? { ...c, isActive: previous, is_active: previous }
+            : c
         )
       );
       showToast(getErrorMessage(error, "Failed to update category"));
@@ -270,7 +401,13 @@ export default function VendorCategoriesScreen() {
     setPartialApiState({ saving: true });
 
     try {
-      await apiClient.delete(`/vendors/categories/${selected.id}`);
+      const { error } = await vendorService.deleteCategory(selected.id);
+
+      if (error) {
+        showToast(error.message || "Failed to delete category");
+        return;
+      }
+
       setCategories((prev) => prev.filter((c) => c.id !== selected.id));
       setDeleteModal(false);
       setSelected(null);
@@ -290,6 +427,8 @@ export default function VendorCategoriesScreen() {
       </View>
     );
   }
+
+  const previewImage = localImageUri || imageUrl;
 
   return (
     <View style={styles.root}>
@@ -347,7 +486,9 @@ export default function VendorCategoriesScreen() {
               <Icon name="albums-outline" size={34} color={THEME.yellow} />
             </View>
             <Text style={styles.emptyTitle}>No categories yet</Text>
-            <Text style={styles.emptyText}>Create categories like Meals, Snacks, Drinks and Combos.</Text>
+            <Text style={styles.emptyText}>
+              Create categories like Meals, Snacks, Drinks and Combos.
+            </Text>
             <TouchableOpacity style={styles.emptyBtn} activeOpacity={0.85} onPress={openAdd}>
               <Text style={styles.emptyBtnText}>Create Category</Text>
             </TouchableOpacity>
@@ -379,13 +520,63 @@ export default function VendorCategoriesScreen() {
             <Pressable style={styles.modalCard}>
               <View style={styles.modalHandle} />
 
-              <Text style={styles.modalTitle}>{selected ? "Edit Category" : "Create Category"}</Text>
-              <Text style={styles.modalSub}>Keep category names simple and customer friendly.</Text>
+              <Text style={styles.modalTitle}>
+                {selected ? "Edit Category" : "Create Category"}
+              </Text>
+              <Text style={styles.modalSub}>
+                Select image from gallery or camera. No URL input.
+              </Text>
 
-              <View style={styles.imagePlaceholder}>
-                <Icon name="image-outline" size={26} color={THEME.yellow} />
-                <Text style={styles.imageTitle}>Category Image</Text>
-                <Text style={styles.imageText}>Generic screen keeps URL inputs removed. Connect gallery upload later.</Text>
+              <TouchableOpacity
+                style={styles.imagePickerBox}
+                activeOpacity={0.85}
+                onPress={showImageOptions}
+                disabled={apiState.uploading}
+              >
+                {previewImage ? (
+                  <Image source={{ uri: previewImage }} style={styles.previewImage} />
+                ) : (
+                  <View style={styles.imagePlaceholderContent}>
+                    <Icon name="camera-outline" size={30} color={THEME.yellow} />
+                    <Text style={styles.imageTitle}>Add Category Image</Text>
+                    <Text style={styles.imageText}>Camera or Gallery</Text>
+                  </View>
+                )}
+
+                <View style={styles.imageOverlay}>
+                  {apiState.uploading ? (
+                    <ActivityIndicator color={THEME.bg} />
+                  ) : (
+                    <>
+                      <Icon name="image-outline" size={16} color={THEME.bg} />
+                      <Text style={styles.imageOverlayText}>
+                        {previewImage ? "Change Image" : "Select Image"}
+                      </Text>
+                    </>
+                  )}
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.imageActionRow}>
+                <TouchableOpacity
+                  style={styles.imageActionBtn}
+                  activeOpacity={0.85}
+                  onPress={pickFromGallery}
+                  disabled={apiState.uploading}
+                >
+                  <Icon name="images-outline" size={18} color={THEME.green} />
+                  <Text style={styles.imageActionText}>Gallery</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.imageActionBtn}
+                  activeOpacity={0.85}
+                  onPress={openCamera}
+                  disabled={apiState.uploading}
+                >
+                  <Icon name="camera-outline" size={18} color={THEME.yellow} />
+                  <Text style={styles.imageActionText}>Camera</Text>
+                </TouchableOpacity>
               </View>
 
               <TextInput
@@ -410,34 +601,44 @@ export default function VendorCategoriesScreen() {
               <View style={styles.toggleRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.toggleTitle}>Active Category</Text>
-                  <Text style={styles.toggleSub}>Paused categories can be hidden from customers.</Text>
+                  <Text style={styles.toggleSub}>
+                    Paused categories can be hidden from customers.
+                  </Text>
                 </View>
 
                 <Switch
                   value={isActive}
                   onValueChange={setIsActive}
                   thumbColor={isActive ? THEME.green : THEME.muted}
-                  trackColor={{ false: "#293029", true: "rgba(34,197,94,0.35)" }}
+                  trackColor={{
+                    false: "#293029",
+                    true: "rgba(34,197,94,0.35)",
+                  }}
                 />
               </View>
 
               <TouchableOpacity
-                style={[styles.saveBtn, apiState.saving && styles.disabled]}
+                style={[
+                  styles.saveBtn,
+                  (apiState.saving || apiState.uploading) && styles.disabled,
+                ]}
                 activeOpacity={0.85}
-                disabled={apiState.saving}
+                disabled={apiState.saving || apiState.uploading}
                 onPress={saveCategory}
               >
                 {apiState.saving ? (
                   <ActivityIndicator color={THEME.bg} />
                 ) : (
-                  <Text style={styles.saveText}>{selected ? "Update Category" : "Save Category"}</Text>
+                  <Text style={styles.saveText}>
+                    {selected ? "Update Category" : "Save Category"}
+                  </Text>
                 )}
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.cancelBtn}
                 activeOpacity={0.85}
-                disabled={apiState.saving}
+                disabled={apiState.saving || apiState.uploading}
                 onPress={closeForm}
               >
                 <Text style={styles.cancelText}>Cancel</Text>
@@ -447,7 +648,12 @@ export default function VendorCategoriesScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={deleteModal} transparent animationType="fade" onRequestClose={() => setDeleteModal(false)}>
+      <Modal
+        visible={deleteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteModal(false)}
+      >
         <Pressable style={styles.modalOverlay} onPress={() => setDeleteModal(false)}>
           <Pressable style={styles.confirmCard}>
             <View style={styles.confirmIcon}>
@@ -456,7 +662,10 @@ export default function VendorCategoriesScreen() {
 
             <Text style={styles.confirmTitle}>Delete category?</Text>
             <Text style={styles.confirmText}>
-              {selected?.name ? `"${selected.name}" will be removed.` : "This category will be removed."} Menu items may become uncategorized.
+              {selected?.name
+                ? `"${selected.name}" will be removed.`
+                : "This category will be removed."}{" "}
+              Menu items may become uncategorized.
             </Text>
 
             <View style={styles.confirmActions}>
@@ -493,16 +702,23 @@ function CategoryCard({ item, index, onEdit, onDelete, onToggle, toggling }: any
   const active = item.isActive !== false;
   const itemCount = item.menuItems?.length || item.menu_items?.length || 0;
   const subCount = item.subCategories?.length || item.sub_categories?.length || 0;
+  const image = item.imageUrl || item.image_url;
 
   return (
     <View style={styles.card}>
-      <View style={styles.rankBox}>
-        <Text style={styles.rankText}>{String(index + 1).padStart(2, "0")}</Text>
-      </View>
+      {image ? (
+        <Image source={{ uri: image }} style={styles.categoryThumb} />
+      ) : (
+        <View style={styles.rankBox}>
+          <Text style={styles.rankText}>{String(index + 1).padStart(2, "0")}</Text>
+        </View>
+      )}
 
       <View style={{ flex: 1 }}>
         <View style={styles.cardTop}>
-          <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.name} numberOfLines={1}>
+            {item.name}
+          </Text>
 
           <View style={[styles.statusBadge, !active && styles.pausedBadge]}>
             <Text style={[styles.statusText, !active && styles.pausedText]}>
@@ -511,7 +727,11 @@ function CategoryCard({ item, index, onEdit, onDelete, onToggle, toggling }: any
           </View>
         </View>
 
-        {!!item.description && <Text style={styles.desc} numberOfLines={2}>{item.description}</Text>}
+        {!!item.description && (
+          <Text style={styles.desc} numberOfLines={2}>
+            {item.description}
+          </Text>
+        )}
 
         <View style={styles.metaRow}>
           <View style={styles.metaPill}>
@@ -600,6 +820,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     gap: 12,
   },
+  categoryThumb: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: THEME.card2,
+  },
   rankBox: { width: 42, height: 42, borderRadius: 16, backgroundColor: THEME.card2, alignItems: "center", justifyContent: "center" },
   rankText: { color: THEME.yellow, fontWeight: "900" },
   cardTop: { flexDirection: "row", alignItems: "center", gap: 8 },
@@ -634,9 +860,51 @@ const styles = StyleSheet.create({
   modalHandle: { width: 48, height: 5, borderRadius: 99, backgroundColor: THEME.border, alignSelf: "center", marginBottom: 18 },
   modalTitle: { color: THEME.text, fontSize: 23, fontWeight: "900" },
   modalSub: { color: THEME.muted, marginTop: 6, marginBottom: 14, fontWeight: "700" },
-  imagePlaceholder: { borderWidth: 1, borderColor: THEME.border, borderStyle: "dashed", backgroundColor: "#0B100B", borderRadius: 20, padding: 16, alignItems: "center", marginBottom: 12 },
+
+  imagePickerBox: {
+    height: 155,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderStyle: "dashed",
+    backgroundColor: "#0B100B",
+    borderRadius: 22,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  previewImage: { width: "100%", height: "100%" },
+  imagePlaceholderContent: { alignItems: "center" },
   imageTitle: { color: THEME.text, fontWeight: "900", marginTop: 8 },
   imageText: { color: THEME.muted, fontWeight: "700", marginTop: 3, fontSize: 12, textAlign: "center" },
+  imageOverlay: {
+    position: "absolute",
+    right: 10,
+    bottom: 10,
+    backgroundColor: THEME.yellow,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  imageOverlayText: { color: THEME.bg, fontWeight: "900", fontSize: 12 },
+  imageActionRow: { flexDirection: "row", gap: 10, marginBottom: 10 },
+  imageActionBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  imageActionText: { color: THEME.text, fontWeight: "900" },
+
   input: { backgroundColor: "#0B100B", borderWidth: 1, borderColor: THEME.border, color: THEME.text, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 13, fontWeight: "800", marginBottom: 10 },
   textArea: { minHeight: 86, textAlignVertical: "top" },
   toggleRow: { backgroundColor: "#0B100B", borderWidth: 1, borderColor: THEME.border, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 10 },

@@ -28,16 +28,13 @@ const THEME = {
   card2: "#151F19",
   green: "#22C55E",
   yellow: "#FACC15",
-  blue: "#38BDF8",
-  orange: "#FB923C",
   text: "#F8FAFC",
   muted: "#8A94A6",
   border: "#1E2A22",
   black: "#050807",
-  danger: "#EF4444",
 };
 
-type LoginType = "email" | "phone";
+type LoginType = "emailPassword" | "emailOtp" | "phone";
 
 const showToast = (
   type: "success" | "error" | "info",
@@ -64,13 +61,11 @@ const normalizeAuthData = (raw: any) => {
       data?.access_token ||
       data?.token ||
       data?.data?.accessToken ||
-      data?.data?.access_token ||
       "",
     refreshToken:
       data?.refreshToken ||
       data?.refresh_token ||
       data?.data?.refreshToken ||
-      data?.data?.refresh_token ||
       "",
     user: data?.user || data?.data?.user || null,
   };
@@ -90,12 +85,19 @@ export default function LoginScreen() {
   const navigation = useNavigation<any>();
   const { signInFromStorage } = useAuth();
 
-  const [loginType, setLoginType] = useState<LoginType>("phone");
+  const [loginType, setLoginType] = useState<LoginType>("emailPassword");
+
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
-  const [loadingAction, setLoadingAction] = useState<"send" | "verify" | null>(null);
+
+  const [securePassword, setSecurePassword] = useState(true);
+  const [loadingAction, setLoadingAction] = useState<
+    "login" | "send" | "verify" | null
+  >(null);
 
   const fade = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(24)).current;
@@ -145,6 +147,20 @@ export default function LoginScreen() {
     );
   };
 
+  const saveAuthAndContinue = async (authData: any) => {
+    await AsyncStorage.multiSet([
+      ["accessToken", authData.accessToken],
+      ["refreshToken", authData.refreshToken || ""],
+      ["user", JSON.stringify(authData.user)],
+      ["hasLaunched", "true"],
+      ["guestMode", "false"],
+    ]);
+
+    await signInFromStorage?.();
+
+    resetToRoute(getRoleRoute(authData.user?.role));
+  };
+
   const continueBrowsing = async () => {
     try {
       await AsyncStorage.multiSet([
@@ -164,38 +180,86 @@ export default function LoginScreen() {
     }
   };
 
-  const validateBeforeOtp = () => {
-    if (loginType === "email") {
-      const cleanEmail = email.trim().toLowerCase();
+  const validateEmail = () => {
+    const cleanEmail = email.trim().toLowerCase();
 
-      if (!cleanEmail) {
-        showToast("info", "Email required", "Please enter your email address.");
-        return false;
-      }
-
-      if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) {
-        showToast("info", "Invalid email", "Please enter a valid email address.");
-        return false;
-      }
+    if (!cleanEmail) {
+      showToast("info", "Email required", "Please enter your email address.");
+      return false;
     }
 
-    if (loginType === "phone") {
-      if (!cleanPhone) {
-        showToast("info", "Phone required", "Please enter your phone number.");
-        return false;
-      }
-
-      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
-        showToast(
-          "info",
-          "Invalid phone",
-          "Enter a valid 10 digit Indian phone number."
-        );
-        return false;
-      }
+    if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) {
+      showToast("info", "Invalid email", "Please enter a valid email address.");
+      return false;
     }
 
     return true;
+  };
+
+  const validatePhone = () => {
+    if (!cleanPhone) {
+      showToast("info", "Phone required", "Please enter your phone number.");
+      return false;
+    }
+
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      showToast(
+        "info",
+        "Invalid phone",
+        "Enter a valid 10 digit Indian phone number."
+      );
+      return false;
+    }
+
+    return true;
+  };
+
+  const handlePasswordLogin = async () => {
+    if (loading) return;
+    if (!validateEmail()) return;
+
+    if (!password.trim()) {
+      showToast("info", "Password required", "Please enter your password.");
+      return;
+    }
+
+    setLoadingAction("login");
+
+    try {
+      const res = await apiClient.post("/auth/login", {
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      const authData = normalizeAuthData(res?.data);
+
+      if (!authData.success || !authData.accessToken || !authData.user) {
+        showToast(
+          "error",
+          "Login failed",
+          authData.message || "Invalid email or password."
+        );
+        return;
+      }
+
+      showToast("success", "Welcome to Karto", "You are logged in successfully.");
+      await saveAuthAndContinue(authData);
+    } catch (error: any) {
+      showToast(
+        "error",
+        "Login failed",
+        error?.response?.data?.message || "Invalid email or password."
+      );
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const validateBeforeOtp = () => {
+    if (loginType === "emailOtp") return validateEmail();
+    if (loginType === "phone") return validatePhone();
+
+    return false;
   };
 
   const handleSendOtp = async () => {
@@ -206,7 +270,7 @@ export default function LoginScreen() {
 
     try {
       const payload =
-        loginType === "email"
+        loginType === "emailOtp"
           ? { email: email.trim().toLowerCase() }
           : { phone: `+91${cleanPhone}` };
 
@@ -223,7 +287,7 @@ export default function LoginScreen() {
       showToast(
         "success",
         "OTP sent",
-        loginType === "email"
+        loginType === "emailOtp"
           ? "Please check your email inbox."
           : "Please check your phone messages."
       );
@@ -243,6 +307,11 @@ export default function LoginScreen() {
 
     const cleanOtp = otp.trim();
 
+    if (!otpSent) {
+      showToast("info", "Send OTP first", "Please send OTP first.");
+      return;
+    }
+
     if (!/^\d{4,6}$/.test(cleanOtp)) {
       showToast("info", "Invalid OTP", "Please enter the correct OTP.");
       return;
@@ -252,7 +321,7 @@ export default function LoginScreen() {
 
     try {
       const payload =
-        loginType === "email"
+        loginType === "emailOtp"
           ? { email: email.trim().toLowerCase(), otp: cleanOtp }
           : { phone: `+91${cleanPhone}`, otp: cleanOtp };
 
@@ -268,19 +337,8 @@ export default function LoginScreen() {
         return;
       }
 
-      await AsyncStorage.multiSet([
-        ["accessToken", authData.accessToken],
-        ["refreshToken", authData.refreshToken || ""],
-        ["user", JSON.stringify(authData.user)],
-        ["hasLaunched", "true"],
-        ["guestMode", "false"],
-      ]);
-
-      await signInFromStorage?.();
-
       showToast("success", "Welcome to Karto", "You are logged in successfully.");
-
-      resetToRoute(getRoleRoute(authData.user?.role));
+      await saveAuthAndContinue(authData);
     } catch (error: any) {
       showToast(
         "error",
@@ -316,7 +374,10 @@ export default function LoginScreen() {
           <Animated.View
             style={[
               styles.container,
-              { opacity: fade, transform: [{ translateY: slide }, { scale }] },
+              {
+                opacity: fade,
+                transform: [{ translateY: slide }, { scale }],
+              },
             ]}
           >
             <View style={styles.logoWrap}>
@@ -329,15 +390,22 @@ export default function LoginScreen() {
             <Text style={styles.appName}>Karto</Text>
             <Text style={styles.premium}>FAST LOCAL DELIVERY</Text>
             <Text style={styles.tagline}>
-              Login only when you need cart, orders or checkout.
+              Login for cart, checkout, orders and vendor/rider panels.
             </Text>
 
             <View style={styles.card}>
               <View style={styles.cardHeader}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.title}>Login with OTP</Text>
+                  <Text style={styles.title}>
+                    {loginType === "emailPassword"
+                      ? "Login with Password"
+                      : "Login with OTP"}
+                  </Text>
+
                   <Text style={styles.subtitle}>
-                    No password needed. Simple and secure.
+                    {loginType === "emailPassword"
+                      ? "Use your email and password."
+                      : "No password needed. Simple and secure."}
                   </Text>
                 </View>
 
@@ -348,14 +416,69 @@ export default function LoginScreen() {
 
               <View style={styles.switchRow}>
                 <TouchableOpacity
-                  style={[styles.switchBtn, loginType === "phone" && styles.switchActive]}
+                  style={[
+                    styles.switchBtn,
+                    loginType === "emailPassword" && styles.switchActive,
+                  ]}
+                  onPress={() => switchLoginType("emailPassword")}
+                  activeOpacity={0.85}
+                  disabled={loading}
+                >
+                  <Icon
+                    name="lock-closed-outline"
+                    size={15}
+                    color={
+                      loginType === "emailPassword"
+                        ? THEME.black
+                        : THEME.muted
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.switchText,
+                      loginType === "emailPassword" && styles.switchTextActive,
+                    ]}
+                  >
+                    Email
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.switchBtn,
+                    loginType === "emailOtp" && styles.switchActive,
+                  ]}
+                  onPress={() => switchLoginType("emailOtp")}
+                  activeOpacity={0.85}
+                  disabled={loading}
+                >
+                  <Icon
+                    name="mail-outline"
+                    size={15}
+                    color={loginType === "emailOtp" ? THEME.black : THEME.muted}
+                  />
+                  <Text
+                    style={[
+                      styles.switchText,
+                      loginType === "emailOtp" && styles.switchTextActive,
+                    ]}
+                  >
+                    OTP
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.switchBtn,
+                    loginType === "phone" && styles.switchActive,
+                  ]}
                   onPress={() => switchLoginType("phone")}
                   activeOpacity={0.85}
                   disabled={loading}
                 >
                   <Icon
                     name="call-outline"
-                    size={16}
+                    size={15}
                     color={loginType === "phone" ? THEME.black : THEME.muted}
                   />
                   <Text
@@ -367,32 +490,12 @@ export default function LoginScreen() {
                     Phone
                   </Text>
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.switchBtn, loginType === "email" && styles.switchActive]}
-                  onPress={() => switchLoginType("email")}
-                  activeOpacity={0.85}
-                  disabled={loading}
-                >
-                  <Icon
-                    name="mail-outline"
-                    size={16}
-                    color={loginType === "email" ? THEME.black : THEME.muted}
-                  />
-                  <Text
-                    style={[
-                      styles.switchText,
-                      loginType === "email" && styles.switchTextActive,
-                    ]}
-                  >
-                    Email
-                  </Text>
-                </TouchableOpacity>
               </View>
 
               {loginType === "phone" ? (
                 <View style={styles.inputBox}>
                   <Text style={styles.country}>+91</Text>
+
                   <TextInput
                     style={styles.input}
                     placeholder="Enter phone number"
@@ -410,6 +513,7 @@ export default function LoginScreen() {
               ) : (
                 <View style={styles.inputBox}>
                   <Icon name="mail-outline" size={20} color={THEME.yellow} />
+
                   <TextInput
                     style={styles.input}
                     placeholder="Enter email address"
@@ -427,61 +531,146 @@ export default function LoginScreen() {
                 </View>
               )}
 
-              <TouchableOpacity
-                style={[styles.primaryBtn, loadingAction === "send" && styles.disabled]}
-                onPress={handleSendOtp}
-                disabled={loading}
-                activeOpacity={0.9}
-              >
-                {loadingAction === "send" ? (
-                  <ActivityIndicator color={THEME.black} />
-                ) : (
-                  <>
-                    <Text style={styles.primaryText}>
-                      {otpSent ? "Resend OTP" : "Send OTP"}
-                    </Text>
-                    <Icon name="arrow-forward" size={20} color={THEME.black} />
-                  </>
-                )}
-              </TouchableOpacity>
-
-              {otpSent && (
-                <View style={styles.otpBox}>
-                  <Text style={styles.otpTitle}>Enter verification code</Text>
-                  <Text style={styles.otpSub}>
-                    We sent an OTP to your {loginType === "phone" ? "phone" : "email"}.
-                  </Text>
-
+              {loginType === "emailPassword" && (
+                <>
                   <View style={styles.inputBox}>
-                    <Icon name="keypad-outline" size={20} color={THEME.yellow} />
+                    <Icon
+                      name="lock-closed-outline"
+                      size={20}
+                      color={THEME.yellow}
+                    />
+
                     <TextInput
                       style={styles.input}
-                      placeholder="Enter OTP"
+                      placeholder="Enter password"
                       placeholderTextColor={THEME.muted}
-                      value={otp}
-                      onChangeText={text => setOtp(text.replace(/\D/g, ""))}
-                      keyboardType="number-pad"
-                      maxLength={6}
+                      value={password}
+                      onChangeText={setPassword}
+                      secureTextEntry={securePassword}
                       editable={!loading}
                     />
+
+                    <TouchableOpacity
+                      onPress={() => setSecurePassword(prev => !prev)}
+                      disabled={loading}
+                    >
+                      <Icon
+                        name={securePassword ? "eye-outline" : "eye-off-outline"}
+                        size={20}
+                        color={THEME.muted}
+                      />
+                    </TouchableOpacity>
                   </View>
 
                   <TouchableOpacity
-                    style={[styles.verifyBtn, loadingAction === "verify" && styles.disabled]}
-                    onPress={handleVerifyOtp}
+                    style={[
+                      styles.primaryBtn,
+                      loadingAction === "login" && styles.disabled,
+                    ]}
+                    onPress={handlePasswordLogin}
                     disabled={loading}
                     activeOpacity={0.9}
                   >
-                    {loadingAction === "verify" ? (
+                    {loadingAction === "login" ? (
                       <ActivityIndicator color={THEME.black} />
                     ) : (
                       <>
-                        <Text style={styles.verifyText}>Verify & Continue</Text>
-                        <Icon name="checkmark-circle" size={20} color={THEME.black} />
+                        <Text style={styles.primaryText}>Login</Text>
+                        <Icon
+                          name="arrow-forward"
+                          size={20}
+                          color={THEME.black}
+                        />
                       </>
                     )}
                   </TouchableOpacity>
-                </View>
+                </>
+              )}
+
+              {loginType !== "emailPassword" && (
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryBtn,
+                      loadingAction === "send" && styles.disabled,
+                    ]}
+                    onPress={handleSendOtp}
+                    disabled={loading}
+                    activeOpacity={0.9}
+                  >
+                    {loadingAction === "send" ? (
+                      <ActivityIndicator color={THEME.black} />
+                    ) : (
+                      <>
+                        <Text style={styles.primaryText}>
+                          {otpSent ? "Resend OTP" : "Send OTP"}
+                        </Text>
+                        <Icon
+                          name="arrow-forward"
+                          size={20}
+                          color={THEME.black}
+                        />
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  {otpSent && (
+                    <View style={styles.otpBox}>
+                      <Text style={styles.otpTitle}>Enter verification code</Text>
+
+                      <Text style={styles.otpSub}>
+                        We sent an OTP to your{" "}
+                        {loginType === "phone" ? "phone" : "email"}.
+                      </Text>
+
+                      <View style={styles.inputBox}>
+                        <Icon
+                          name="keypad-outline"
+                          size={20}
+                          color={THEME.yellow}
+                        />
+
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Enter OTP"
+                          placeholderTextColor={THEME.muted}
+                          value={otp}
+                          onChangeText={text =>
+                            setOtp(text.replace(/\D/g, ""))
+                          }
+                          keyboardType="number-pad"
+                          maxLength={6}
+                          editable={!loading}
+                        />
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.verifyBtn,
+                          loadingAction === "verify" && styles.disabled,
+                        ]}
+                        onPress={handleVerifyOtp}
+                        disabled={loading}
+                        activeOpacity={0.9}
+                      >
+                        {loadingAction === "verify" ? (
+                          <ActivityIndicator color={THEME.black} />
+                        ) : (
+                          <>
+                            <Text style={styles.verifyText}>
+                              Verify & Continue
+                            </Text>
+                            <Icon
+                              name="checkmark-circle"
+                              size={20}
+                              color={THEME.black}
+                            />
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </>
               )}
 
               <View style={styles.dividerRow}>
@@ -496,13 +685,24 @@ export default function LoginScreen() {
                 onPress={continueBrowsing}
                 disabled={loading}
               >
-                <Icon name="storefront-outline" size={20} color={THEME.green} />
+                <Icon
+                  name="storefront-outline"
+                  size={20}
+                  color={THEME.green}
+                />
+
                 <Text style={styles.guestText}>Continue As Guest</Text>
-                <Icon name="chevron-forward" size={18} color={THEME.muted} />
+
+                <Icon
+                  name="chevron-forward"
+                  size={18}
+                  color={THEME.muted}
+                />
               </TouchableOpacity>
 
               <View style={styles.footer}>
                 <Text style={styles.footerText}>New to Karto?</Text>
+
                 <TouchableOpacity onPress={goToSignup} disabled={loading}>
                   <Text style={styles.link}> Create account</Text>
                 </TouchableOpacity>
@@ -638,10 +838,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     flexDirection: "row",
-    gap: 6,
+    gap: 5,
   },
   switchActive: { backgroundColor: THEME.green },
-  switchText: { color: THEME.muted, fontWeight: "900", fontSize: 13 },
+  switchText: { color: THEME.muted, fontWeight: "900", fontSize: 12 },
   switchTextActive: { color: THEME.black },
   inputBox: {
     height: 56,

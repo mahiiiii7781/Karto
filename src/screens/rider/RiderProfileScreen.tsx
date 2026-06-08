@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   RefreshControl,
   SafeAreaView,
   ScrollView,
@@ -13,6 +14,8 @@ import {
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { riderService } from "@/services/api/riderApi";
+import { useAuth } from "@/context/AuthContext";
+import { riderSocketService } from "@/services/socket/riderSocketService";
 
 const T = {
   bg: "#070A08",
@@ -27,6 +30,8 @@ const T = {
 };
 
 export default function RiderProfileScreen({ navigation }: any) {
+  const { signOut, user } = useAuth();
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -50,7 +55,13 @@ export default function RiderProfileScreen({ navigation }: any) {
   const loadProfile = useCallback(async () => {
     try {
       const res = await riderService.getProfile();
-      const rider = res?.rider || {};
+
+      if (res?.error) {
+        showToast(res?.error?.message || "Failed to load profile");
+        return;
+      }
+
+      const rider = res?.data || {};
       setProfile(rider);
 
       setForm({
@@ -83,16 +94,52 @@ export default function RiderProfileScreen({ navigation }: any) {
   };
 
   const saveProfile = async () => {
+    if (!form.fullName?.trim()) {
+      showToast("Full name is required");
+      return;
+    }
+
+    if (!form.phone?.trim()) {
+      showToast("Phone number is required");
+      return;
+    }
+
     setSaving(true);
+
     try {
       const res = await riderService.updateProfile(form);
-      setProfile(res?.rider || profile);
+
+      if (res?.error) {
+        showToast(res?.error?.message || "Could not update profile");
+        return;
+      }
+
+      setProfile(res?.data || profile);
       showToast("Profile updated successfully");
+      loadProfile();
     } catch (e: any) {
       showToast(e?.message || "Could not update profile");
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleLogout = () => {
+    Alert.alert("Logout", "Are you sure you want to logout from Rider app?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            riderSocketService.disconnect(profile?.id || user?.id);
+            await signOut();
+          } catch {
+            await signOut();
+          }
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -121,10 +168,14 @@ export default function RiderProfileScreen({ navigation }: any) {
           <Icon name="arrow-back" size={22} color={T.text} />
         </TouchableOpacity>
 
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.title}>Rider Profile</Text>
           <Text style={styles.sub}>Manage delivery partner details</Text>
         </View>
+
+        <TouchableOpacity style={styles.logoutIconBtn} onPress={handleLogout}>
+          <Icon name="log-out-outline" size={22} color={T.danger} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -145,8 +196,8 @@ export default function RiderProfileScreen({ navigation }: any) {
             <Text style={styles.email}>{profile?.email || "No email"}</Text>
 
             <View style={styles.badges}>
-              <View style={styles.onlineBadge}>
-                <Text style={styles.onlineText}>
+              <View style={profile?.isOnline ? styles.onlineBadge : styles.offlineBadge}>
+                <Text style={profile?.isOnline ? styles.onlineText : styles.offlineText}>
                   {profile?.isOnline ? "ONLINE" : "OFFLINE"}
                 </Text>
               </View>
@@ -156,6 +207,27 @@ export default function RiderProfileScreen({ navigation }: any) {
               </View>
             </View>
           </View>
+        </View>
+
+        <View style={styles.quickGrid}>
+          <QuickCard
+            icon="shield-checkmark-outline"
+            title="KYC"
+            value={profile?.kycStatus || "PENDING"}
+            onPress={() => navigation?.navigate?.("RiderKyc")}
+          />
+          <QuickCard
+            icon="wallet-outline"
+            title="Wallet"
+            value="Open"
+            onPress={() => navigation?.navigate?.("RiderWallet")}
+          />
+          <QuickCard
+            icon="help-circle-outline"
+            title="Support"
+            value="Tickets"
+            onPress={() => navigation?.navigate?.("RiderSupport")}
+          />
         </View>
 
         <Text style={styles.section}>Personal Details</Text>
@@ -172,7 +244,7 @@ export default function RiderProfileScreen({ navigation }: any) {
           icon="call-outline"
           label="Phone"
           value={form.phone}
-          onChangeText={(v: string) => update("phone", v)}
+          onChangeText={(v: string) => update("phone", v.replace(/[^0-9]/g, "").slice(0, 10))}
           placeholder="Enter phone number"
           keyboardType="phone-pad"
         />
@@ -215,7 +287,11 @@ export default function RiderProfileScreen({ navigation }: any) {
           <Icon name="chevron-forward" size={22} color={T.yellow} />
         </TouchableOpacity>
 
-        <TouchableOpacity disabled={saving} style={styles.saveBtn} onPress={saveProfile}>
+        <TouchableOpacity
+          disabled={saving}
+          style={[styles.saveBtn, saving && styles.disabledBtn]}
+          onPress={saveProfile}
+        >
           {saving ? (
             <ActivityIndicator color={T.black} />
           ) : (
@@ -224,6 +300,11 @@ export default function RiderProfileScreen({ navigation }: any) {
               <Icon name="checkmark-circle" size={19} color={T.black} />
             </>
           )}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <Icon name="log-out-outline" size={20} color={T.danger} />
+          <Text style={styles.logoutText}>Logout</Text>
         </TouchableOpacity>
 
         <View style={{ height: 34 }} />
@@ -244,7 +325,7 @@ function Field({
   return (
     <View style={styles.fieldWrap}>
       <Text style={styles.label}>{label}</Text>
-      <View style={[styles.inputBox, multiline && { minHeight: 86, alignItems: "flex-start" }]}>
+      <View style={[styles.inputBox, multiline && styles.multilineBox]}>
         <Icon name={icon} size={19} color={T.yellow} />
         <TextInput
           value={value}
@@ -253,10 +334,20 @@ function Field({
           placeholderTextColor={T.muted}
           keyboardType={keyboardType}
           multiline={multiline}
-          style={[styles.input, multiline && { height: 70, textAlignVertical: "top" }]}
+          style={[styles.input, multiline && styles.multilineInput]}
         />
       </View>
     </View>
+  );
+}
+
+function QuickCard({ icon, title, value, onPress }: any) {
+  return (
+    <TouchableOpacity activeOpacity={0.85} style={styles.quickCard} onPress={onPress}>
+      <Icon name={icon} size={21} color={T.yellow} />
+      <Text style={styles.quickTitle}>{title}</Text>
+      <Text style={styles.quickValue}>{value}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -305,6 +396,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  logoutIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: "#2B1111",
+    borderWidth: 1,
+    borderColor: "#7F1D1D",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   title: { color: T.text, fontSize: 25, fontWeight: "900" },
   sub: { color: T.muted, marginTop: 3 },
 
@@ -338,6 +439,13 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   onlineText: { color: T.green, fontSize: 10, fontWeight: "900" },
+  offlineBadge: {
+    backgroundColor: "#111827",
+    borderRadius: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  offlineText: { color: T.muted, fontSize: 10, fontWeight: "900" },
   kycBadge: {
     backgroundColor: "#2B2207",
     borderRadius: 12,
@@ -345,6 +453,32 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   kycText: { color: T.yellow, fontSize: 10, fontWeight: "900" },
+
+  quickGrid: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+  },
+  quickCard: {
+    flex: 1,
+    backgroundColor: T.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 12,
+  },
+  quickTitle: {
+    color: T.text,
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 8,
+  },
+  quickValue: {
+    color: T.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 3,
+  },
 
   section: {
     color: T.text,
@@ -367,11 +501,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  multilineBox: {
+    minHeight: 86,
+    alignItems: "flex-start",
+    paddingTop: 14,
+  },
   input: {
     flex: 1,
     color: T.text,
     fontWeight: "700",
     paddingVertical: 12,
+  },
+  multilineInput: {
+    height: 70,
+    textAlignVertical: "top",
   },
 
   kycBtn: {
@@ -398,5 +541,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
+  disabledBtn: { opacity: 0.55 },
   saveText: { color: T.black, fontWeight: "900", fontSize: 16 },
+
+  logoutBtn: {
+    borderRadius: 18,
+    paddingVertical: 15,
+    marginTop: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "#7F1D1D",
+    backgroundColor: "#2B1111",
+  },
+  logoutText: { color: T.danger, fontWeight: "900", fontSize: 16 },
 });

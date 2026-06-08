@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -40,6 +40,7 @@ type MessageState = {
 
 export default function AdminAnalyticsScreen({ navigation }: any) {
   const [data, setData] = useState<any>(null);
+  const [monthly, setMonthly] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -51,63 +52,58 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
   });
 
   const showMessage = (type: KartoMessageType, title: string, msg: string) => {
-    setMessage({
-      visible: true,
-      type,
-      title,
-      message: msg,
-    });
+    setMessage({ visible: true, type, title, message: msg });
   };
 
   const closeMessage = () => {
     setMessage((prev) => ({ ...prev, visible: false }));
   };
 
-  const load = async () => {
-    const res = await adminService.getDashboard();
+  const load = useCallback(async () => {
+    const [dashboardRes, monthlyRes] = await Promise.all([
+      adminService.getDashboard(),
+      adminService.monthlyBilling?.(),
+    ]);
 
-    if (res.error) {
+    if (dashboardRes.error) {
       showMessage(
         "error",
         "Analytics Load Failed",
-        res.error.message || "Unable to load analytics report."
+        dashboardRes.error.message || "Unable to load analytics report."
       );
     } else {
-      setData(res.data);
+      setData(dashboardRes.data);
+    }
+
+    if (!monthlyRes?.error && monthlyRes?.data) {
+      setMonthly(monthlyRes.data);
     }
 
     setLoading(false);
     setRefreshing(false);
-  };
+  }, []);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   const onRefresh = () => {
     setRefreshing(true);
     load();
   };
 
-  const analytics = useMemo(() => {
-    if (!data) {
-      return {
-        gst: 0,
-        netProfit: 0,
-        avgOrderValue: 0,
-        deliveryRate: 0,
-        activeRate: 0,
-        vendorShare: 0,
-        kartoShare: 0,
-      };
-    }
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
 
-    const totalRevenue = Number(data.totalRevenue || 0);
-    const kartoIncome = Number(data.kartoIncome || 0);
-    const vendorIncome = Number(data.vendorIncome || 0);
-    const totalOrders = Number(data.totalOrders || 0);
-    const deliveredOrders = Number(data.deliveredOrders || 0);
-    const activeOrders = Number(data.activeOrders || 0);
+  const analytics = useMemo(() => {
+    const totalRevenue = Number(data?.totalRevenue || 0);
+    const kartoIncome = Number(data?.kartoIncome || 0);
+    const vendorIncome = Number(data?.vendorIncome || 0);
+    const totalOrders = Number(data?.totalOrders || 0);
+    const deliveredOrders = Number(data?.deliveredOrders || 0);
+    const activeOrders = Number(data?.activeOrders || 0);
 
     const gst = kartoIncome * 0.18;
     const netProfit = kartoIncome - gst;
@@ -163,7 +159,7 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
         }
       >
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+          <TouchableOpacity style={styles.backBtn} onPress={goBack}>
             <Icon name="chevron-back" size={24} color={THEME.text} />
           </TouchableOpacity>
 
@@ -172,10 +168,17 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
             <Text style={styles.title}>Analytics</Text>
             <Text style={styles.subtitle}>Revenue, orders, tax and platform health</Text>
           </View>
+
+          <TouchableOpacity
+            style={styles.homeBtn}
+            onPress={() => navigation.navigate("AdminDashboard")}
+          >
+            <Icon name="home-outline" size={21} color="#000" />
+          </TouchableOpacity>
         </View>
 
         <View style={styles.heroCard}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.heroLabel}>Total Platform Revenue</Text>
             <Text style={styles.heroAmount}>{money(data.totalRevenue)}</Text>
             <Text style={styles.heroSub}>Live admin business snapshot</Text>
@@ -184,6 +187,13 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
           <View style={styles.heroIcon}>
             <Icon name="analytics-outline" size={35} color={THEME.yellow} />
           </View>
+        </View>
+
+        <View style={styles.quickRail}>
+          <QuickAction icon="receipt-outline" label="Orders" onPress={() => navigation.navigate("AdminOrders")} />
+          <QuickAction icon="storefront-outline" label="Vendors" onPress={() => navigation.navigate("AdminVendors")} />
+          <QuickAction icon="bicycle-outline" label="Riders" onPress={() => navigation.navigate("AdminRiders")} />
+          <QuickAction icon="ticket-outline" label="Coupons" onPress={() => navigation.navigate("AdminCoupons")} />
         </View>
 
         <View style={styles.kpiGrid}>
@@ -211,11 +221,34 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
           <MetricRow label="Vendor Share" value={pct(analytics.vendorShare)} icon="stats-chart-outline" green />
         </View>
 
+        <SectionTitle title="Monthly Billing Snapshot" />
+
+        <View style={styles.reportGrid}>
+          <ReportBox title="Delivered" value={monthly?.totalDeliveredOrders || data.deliveredOrders || 0} icon="checkmark-done-outline" />
+          <ReportBox title="Commission" value={money(monthly?.platformCommission || data.kartoIncome)} icon="cash-outline" />
+          <ReportBox title="Vendor Payable" value={money(monthly?.vendorPayable || data.vendorIncome)} icon="storefront-outline" />
+          <ReportBox title="Rider Payable" value={money(monthly?.riderPayable || 0)} icon="bicycle-outline" />
+        </View>
+
         <SectionTitle title="Order Performance" />
 
         <View style={styles.performanceCard}>
           <PerformanceItem title="Delivered Orders" value={data.deliveredOrders || 0} percent={analytics.deliveryRate} />
           <PerformanceItem title="Active Orders" value={data.activeOrders || 0} percent={analytics.activeRate} yellow />
+        </View>
+
+        <SectionTitle title="Revenue Split" />
+
+        <View style={styles.splitCard}>
+          <View style={styles.splitTrack}>
+            <View style={[styles.splitKarto, { flex: analytics.kartoShare || 0.1 }]} />
+            <View style={[styles.splitVendor, { flex: analytics.vendorShare || 0.1 }]} />
+          </View>
+
+          <View style={styles.splitLabels}>
+            <Text style={styles.splitText}>Karto {pct(analytics.kartoShare)}</Text>
+            <Text style={styles.splitText}>Vendor {pct(analytics.vendorShare)}</Text>
+          </View>
         </View>
 
         <SectionTitle title="Weekly Growth Snapshot" />
@@ -233,21 +266,47 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
           })}
         </View>
 
+        <SectionTitle title="Peak Timing Heatmap" />
+
+        <View style={styles.heatCard}>
+          {["8-10", "10-12", "12-2", "2-4", "4-6", "6-8", "8-10", "10-12"].map((slot, index) => {
+            const level = [1, 2, 4, 2, 3, 5, 5, 2][index];
+
+            return (
+              <View key={slot} style={styles.heatItem}>
+                <View
+                  style={[
+                    styles.heatBox,
+                    {
+                      opacity: 0.25 + level * 0.15,
+                      height: 34 + level * 6,
+                    },
+                  ]}
+                />
+                <Text style={styles.heatText}>{slot}</Text>
+              </View>
+            );
+          })}
+        </View>
+
+        <SectionTitle title="Admin Management Reports" />
+
+        <View style={styles.menuGrid}>
+          <MenuCard title="Orders Report" icon="receipt-outline" onPress={() => navigation.navigate("AdminOrders")} />
+          <MenuCard title="Vendor Report" icon="storefront-outline" onPress={() => navigation.navigate("AdminVendors")} />
+          <MenuCard title="Rider Billing" icon="bicycle-outline" onPress={() => navigation.navigate("AdminRiders")} />
+          <MenuCard title="Coupons" icon="ticket-outline" onPress={() => navigation.navigate("AdminCoupons")} />
+          <MenuCard title="Categories" icon="grid-outline" onPress={() => navigation.navigate("AdminCategories")} />
+          <MenuCard title="Menu Items" icon="fast-food-outline" onPress={() => navigation.navigate("AdminMenuItems")} />
+        </View>
+
         <SectionTitle title="Insights" />
 
         <View style={styles.insightCard}>
-          <Insight
-            icon="flame-outline"
-            text={`Average order value is ${money(analytics.avgOrderValue)}.`}
-          />
-          <Insight
-            icon="checkmark-done-outline"
-            text={`Delivery completion rate is ${pct(analytics.deliveryRate)}.`}
-          />
-          <Insight
-            icon="wallet-outline"
-            text={`Net Karto profit after GST is ${money(analytics.netProfit)}.`}
-          />
+          <Insight icon="flame-outline" text={`Average order value is ${money(analytics.avgOrderValue)}.`} />
+          <Insight icon="checkmark-done-outline" text={`Delivery completion rate is ${pct(analytics.deliveryRate)}.`} />
+          <Insight icon="wallet-outline" text={`Net Karto profit after GST is ${money(analytics.netProfit)}.`} />
+          <Insight icon="pie-chart-outline" text={`Karto platform share is ${pct(analytics.kartoShare)} of total revenue.`} />
         </View>
 
         <SectionTitle title="Recent Orders" />
@@ -260,10 +319,11 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
               <Text style={styles.emptyText}>Recent orders will appear here.</Text>
             </View>
           ) : (
-            (data.recentOrders || []).slice(0, 6).map((order: any) => (
+            (data.recentOrders || []).slice(0, 8).map((order: any) => (
               <TouchableOpacity
                 key={order.id}
                 style={styles.orderRow}
+                activeOpacity={0.86}
                 onPress={() =>
                   navigation.navigate("AdminOrderDetail", {
                     orderId: order.id,
@@ -272,7 +332,7 @@ export default function AdminAnalyticsScreen({ navigation }: any) {
               >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.orderTitle}>
-                    #{order.orderNumber || order.id.slice(0, 8)}
+                    #{order.orderNumber || order.id?.slice?.(0, 8) || "ORDER"}
                   </Text>
                   <Text style={styles.orderMeta}>
                     {order.user?.fullName || "Customer"} • {order.restaurant?.name || "Vendor"}
@@ -306,6 +366,15 @@ function SectionTitle({ title }: any) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
 }
 
+function QuickAction({ icon, label, onPress }: any) {
+  return (
+    <TouchableOpacity style={styles.quickItem} onPress={onPress} activeOpacity={0.86}>
+      <Icon name={icon} size={22} color={THEME.yellow} />
+      <Text style={styles.quickText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 function KpiBox({ title, value, icon }: any) {
   return (
     <View style={styles.kpiBox}>
@@ -336,6 +405,18 @@ function MetricRow({ label, value, icon, green }: any) {
   );
 }
 
+function ReportBox({ title, value, icon }: any) {
+  return (
+    <View style={styles.reportBox}>
+      <View style={styles.reportIcon}>
+        <Icon name={icon} size={22} color={THEME.yellow} />
+      </View>
+      <Text style={styles.reportValue}>{value}</Text>
+      <Text style={styles.reportTitle}>{title}</Text>
+    </View>
+  );
+}
+
 function PerformanceItem({ title, value, percent, yellow }: any) {
   return (
     <View style={styles.performanceItem}>
@@ -358,6 +439,17 @@ function PerformanceItem({ title, value, percent, yellow }: any) {
         />
       </View>
     </View>
+  );
+}
+
+function MenuCard({ icon, title, onPress }: any) {
+  return (
+    <TouchableOpacity style={styles.menuCard} onPress={onPress} activeOpacity={0.86}>
+      <View style={styles.menuIcon}>
+        <Icon name={icon} size={24} color={THEME.yellow} />
+      </View>
+      <Text style={styles.menuText}>{title}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -421,6 +513,15 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderWidth: 1,
     borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -489,6 +590,30 @@ const styles = StyleSheet.create({
     borderColor: "#5D4D0B",
     alignItems: "center",
     justifyContent: "center",
+  },
+
+  quickRail: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+
+  quickItem: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+
+  quickText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: "900",
+    marginTop: 6,
+    textAlign: "center",
   },
 
   kpiGrid: {
@@ -582,6 +707,46 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
+  reportGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+
+  reportBox: {
+    width: "48.5%",
+    backgroundColor: THEME.card,
+    borderRadius: 22,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+
+  reportIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 15,
+    backgroundColor: "#1C190D",
+    borderWidth: 1,
+    borderColor: "#5D4D0B",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  reportValue: {
+    color: THEME.yellow,
+    fontSize: 18,
+    fontWeight: "900",
+    marginTop: 10,
+  },
+
+  reportTitle: {
+    color: THEME.muted,
+    fontWeight: "800",
+    marginTop: 4,
+    fontSize: 12,
+  },
+
   performanceCard: {
     flexDirection: "row",
     gap: 10,
@@ -633,6 +798,42 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
 
+  splitCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 15,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+
+  splitTrack: {
+    height: 14,
+    borderRadius: 999,
+    flexDirection: "row",
+    backgroundColor: THEME.card2,
+    overflow: "hidden",
+  },
+
+  splitKarto: {
+    backgroundColor: THEME.yellow,
+  },
+
+  splitVendor: {
+    backgroundColor: THEME.green,
+  },
+
+  splitLabels: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 9,
+  },
+
+  splitText: {
+    color: THEME.muted,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+
   weekCard: {
     height: 152,
     backgroundColor: THEME.card,
@@ -662,6 +863,71 @@ const styles = StyleSheet.create({
     color: THEME.muted,
     fontSize: 11,
     fontWeight: "900",
+  },
+
+  heatCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 14,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+
+  heatItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+
+  heatBox: {
+    width: 25,
+    borderRadius: 8,
+    backgroundColor: THEME.green,
+  },
+
+  heatText: {
+    color: THEME.muted,
+    fontSize: 10,
+    marginTop: 7,
+    fontWeight: "900",
+  },
+
+  menuGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+
+  menuCard: {
+    width: "31.5%",
+    minHeight: 98,
+    backgroundColor: THEME.card,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 10,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+
+  menuIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: "#1C190D",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#5D4D0B",
+  },
+
+  menuText: {
+    color: THEME.text,
+    fontWeight: "900",
+    marginTop: 8,
+    fontSize: 11,
+    textAlign: "center",
   },
 
   insightCard: {

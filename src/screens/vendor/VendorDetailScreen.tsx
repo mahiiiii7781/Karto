@@ -72,6 +72,7 @@ const statusLabel = (status?: string) => {
     PICKED_UP: "Picked Up",
     OUT_FOR_DELIVERY: "Out For Delivery",
     DELIVERED: "Delivered",
+    COMPLETED: "Completed",
     CANCELLED: "Cancelled",
   };
 
@@ -80,7 +81,7 @@ const statusLabel = (status?: string) => {
 
 const statusColor = (status?: string) => {
   if (status === "CANCELLED") return THEME.danger;
-  if (status === "DELIVERED") return THEME.green;
+  if (["DELIVERED", "COMPLETED"].includes(status || "")) return THEME.green;
   if (status === "PLACED") return THEME.yellow;
   return THEME.green;
 };
@@ -171,7 +172,7 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
 
   const canEditPrepTime = ACTIVE_VENDOR_STATUSES.includes(order.status);
   const canAssignRider = RIDER_ASSIGN_STATUSES.includes(order.status);
-  const isClosedOrder = ["DELIVERED", "CANCELLED"].includes(order.status);
+  const isClosedOrder = ["DELIVERED", "COMPLETED", "CANCELLED"].includes(order.status);
 
   const refreshOrder = async () => {
     setRefreshing(true);
@@ -187,7 +188,9 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
     const freshOrder = (data || []).find((item) => item.id === order.id);
 
     if (freshOrder) {
-      setOrder(normalizeOrder(freshOrder));
+      const nextOrder = normalizeOrder(freshOrder);
+      setOrder(nextOrder);
+      setPrepTime(String(nextOrder.estimatedPreparationMinutes || 30));
     }
 
     setRefreshing(false);
@@ -295,7 +298,11 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
 
     setLoading(true);
 
-    const { data, error } = await vendorService.assignRider(order.id, selectedRiderId);
+    const apiCall = order.rider?.id
+      ? vendorService.reassignRider
+      : vendorService.assignRider;
+
+    const { data, error } = await apiCall(order.id, selectedRiderId);
 
     if (error || !data) {
       showToast(error?.message || "Failed to assign rider");
@@ -388,7 +395,7 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Customer</Text>
 
-          <InfoRow icon="person-outline" label="Name" value={order.user?.fullName || "Customer"} />
+          <InfoRow icon="person-outline" label="Name" value={order.user?.fullName || order.user?.full_name || "Customer"} />
           <InfoRow icon="call-outline" label="Phone" value={order.user?.phone || "No phone"} />
           <InfoRow icon="mail-outline" label="Email" value={order.user?.email || "-"} />
           <InfoRow icon="location-outline" label="Address" value={getAddressText(order.address)} />
@@ -478,12 +485,12 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
           </View>
         </View>
 
-        {!!order.customerNote && (
+        {!!(order.customerNote || order.customer_note) && (
           <View style={styles.noteCard}>
             <Icon name="chatbubble-ellipses-outline" size={20} color={THEME.yellow} />
             <View style={{ flex: 1 }}>
               <Text style={styles.noteTitle}>Customer Note</Text>
-              <Text style={styles.noteText}>{order.customerNote}</Text>
+              <Text style={styles.noteText}>{order.customerNote || order.customer_note}</Text>
             </View>
           </View>
         )}
@@ -508,7 +515,7 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
           <InfoRow
             icon="bicycle-outline"
             label="Rider"
-            value={order.rider?.fullName || order.rider?.name || "Not assigned"}
+            value={order.rider?.fullName || order.rider?.full_name || order.rider?.name || "Not assigned"}
           />
           <InfoRow
             icon="call-outline"
@@ -521,12 +528,12 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
           <Text style={styles.cardTitle}>Timeline</Text>
 
           <TimelineRow title="Placed" value={formatDateTime(order.createdAt || order.created_at)} active />
-          <TimelineRow title="Accepted" value={formatDateTime(order.acceptedAt)} active={!!order.acceptedAt} />
-          <TimelineRow title="Preparing" value={formatDateTime(order.preparingAt)} active={!!order.preparingAt} />
-          <TimelineRow title="Ready" value={formatDateTime(order.readyAt)} active={!!order.readyAt} />
-          <TimelineRow title="Picked" value={formatDateTime(order.pickedAt)} active={!!order.pickedAt} />
-          <TimelineRow title="Delivered" value={formatDateTime(order.deliveredAt)} active={!!order.deliveredAt} />
-          <TimelineRow title="Cancelled" value={formatDateTime(order.cancelledAt)} active={!!order.cancelledAt} danger />
+          <TimelineRow title="Accepted" value={formatDateTime(order.acceptedAt || order.accepted_at)} active={!!(order.acceptedAt || order.accepted_at)} />
+          <TimelineRow title="Preparing" value={formatDateTime(order.preparingAt || order.preparing_at)} active={!!(order.preparingAt || order.preparing_at)} />
+          <TimelineRow title="Ready" value={formatDateTime(order.readyAt || order.ready_at)} active={!!(order.readyAt || order.ready_at)} />
+          <TimelineRow title="Picked" value={formatDateTime(order.pickedAt || order.picked_at)} active={!!(order.pickedAt || order.picked_at)} />
+          <TimelineRow title="Delivered" value={formatDateTime(order.deliveredAt || order.delivered_at)} active={!!(order.deliveredAt || order.delivered_at)} />
+          <TimelineRow title="Cancelled" value={formatDateTime(order.cancelledAt || order.cancelled_at)} active={!!(order.cancelledAt || order.cancelled_at)} danger />
         </View>
 
         <View style={styles.actionCard}>
@@ -681,8 +688,8 @@ export default function VendorOrderDetailScreen({ route, navigation }: any) {
                       </View>
 
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.riderName}>{item.fullName || item.email || "Rider"}</Text>
-                        <Text style={styles.riderMeta}>{item.phone || "No phone"}</Text>
+                        <Text style={styles.riderName}>{item.fullName || item.full_name || item.email || "Rider"}</Text>
+                        <Text style={styles.riderMeta}>{item.distanceText || item.phone || item.currentStatus || "Available"}</Text>
                       </View>
 
                       <Icon

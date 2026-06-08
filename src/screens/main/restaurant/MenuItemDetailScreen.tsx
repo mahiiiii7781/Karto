@@ -10,6 +10,8 @@ import {
   ScrollView,
   FlatList,
   StatusBar,
+  Platform,
+  Modal,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Icon from "react-native-vector-icons/Ionicons";
@@ -23,25 +25,36 @@ import {
   isDifferentRestaurantError,
   getCartErrorMessage,
 } from "@/services/api/cartService";
-import { favoriteService } from "@/services/api/favouriteService";
+import favoriteService from "@/services/api/favouriteService";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
   green: "#22C55E",
-  yellow: "#FACC15",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
-  black: "#050807",
+  yellow: "#F59E0B",
+  purple: "#8B5CF6",
+  pink: "#EC4899",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
+  white: "#FFFFFF",
+  black: "#050807",
 };
 
 const NOTE_SUGGESTIONS = ["Less spicy", "No onion", "Extra fresh", "Pack separately"];
 
-const getImage = (item: any) => item?.image_url || item?.imageUrl || item?.image || null;
+const getImage = (item: any) =>
+  item?.image_url || item?.imageUrl || item?.image || item?.coverImage || item?.cover_image || null;
+
 const num = (value: any) => Number(value || 0);
+
+const money = (value: any) => `₹${Number(value || 0).toFixed(0)}`;
 
 const normalizeMenuItemResponse = (data: any) =>
   data?.data?.menuItem ||
@@ -54,24 +67,59 @@ const normalizeMenuItemResponse = (data: any) =>
   data ||
   null;
 
-const normalizeFavoriteStatus = (data: any) =>
-  Boolean(data?.isFavorite ?? data?.is_favorite ?? data?.data?.isFavorite ?? data?.data?.is_favorite);
+const normalizeFavoriteStatus = (data: any, fallback = false) =>
+  Boolean(
+    data?.isFavorite ??
+      data?.is_favorite ??
+      data?.data?.isFavorite ??
+      data?.data?.is_favorite ??
+      fallback
+  );
 
 const isAvailable = (item: any) =>
   item?.is_available !== false && item?.isAvailable !== false;
 
 const isVeg = (item: any) =>
-  item?.is_vegetarian === true || item?.isVegetarian === true || item?.isVeg === true;
+  item?.is_vegetarian === true ||
+  item?.isVegetarian === true ||
+  item?.isVeg === true ||
+  item?.veg === true;
+
+const getRestaurantName = (item: any) =>
+  item?.restaurant?.restaurant_name ||
+  item?.restaurant?.restaurantName ||
+  item?.restaurant?.name ||
+  "Karto Store";
+
+const getPrepTime = (item: any) =>
+  item?.prepTimeMin || item?.prep_time_min || item?.preparationTime || item?.preparation_time || 20;
+
+const showToast = (
+  type: "success" | "error" | "info",
+  text1: string,
+  text2?: string
+) => {
+  Toast.show({
+    type,
+    text1,
+    text2,
+    position: "bottom",
+    visibilityTime: 1900,
+  });
+};
 
 export default function MenuItemDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const { user } = useAuth();
 
-  const { itemId, restaurantId: routeRestaurantId } = route.params || {};
+  const initialItem = route.params?.item || route.params?.menuItem || null;
+  const itemId = route.params?.itemId || route.params?.menuItemId || initialItem?.id;
+  const routeRestaurantId =
+    route.params?.restaurantId || route.params?.restaurant?.id || initialItem?.restaurantId;
 
-  const [item, setItem] = useState<(MenuItem & any) | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [item, setItem] = useState<(MenuItem & any) | null>(initialItem);
+  const [loading, setLoading] = useState(!initialItem);
   const [adding, setAdding] = useState(false);
   const [quantity, setQuantity] = useState(1);
   const [note, setNote] = useState("");
@@ -80,20 +128,7 @@ export default function MenuItemDetailScreen() {
 
   const [selectedAddonIds, setSelectedAddonIds] = useState<string[]>([]);
   const [selectedCustomizationIds, setSelectedCustomizationIds] = useState<string[]>([]);
-
-  const showToast = (
-    type: "success" | "error" | "info",
-    text1: string,
-    text2?: string
-  ) => {
-    Toast.show({
-      type,
-      text1,
-      text2,
-      position: "bottom",
-      visibilityTime: 1900,
-    });
-  };
+  const [priceModalVisible, setPriceModalVisible] = useState(false);
 
   const requireAuth = (message = "Please sign in to continue.") => {
     if (user?.id) return true;
@@ -118,18 +153,22 @@ export default function MenuItemDetailScreen() {
 
   const addons = useMemo(() => {
     const data = item?.addons || [];
-    return Array.isArray(data) ? data.filter((x: any) => x.isActive !== false) : [];
+    return Array.isArray(data)
+      ? data.filter((x: any) => x.isActive !== false && x.is_active !== false)
+      : [];
   }, [item]);
 
   const customizations = useMemo(() => {
     const data = item?.customizations || [];
-    return Array.isArray(data) ? data.filter((x: any) => x.isActive !== false) : [];
+    return Array.isArray(data)
+      ? data.filter((x: any) => x.isActive !== false && x.is_active !== false)
+      : [];
   }, [item]);
 
   const reviews = useMemo(() => {
     const data = item?.reviews || [];
     return Array.isArray(data)
-      ? data.filter((x: any) => x.isActive !== false).slice(0, 3)
+      ? data.filter((x: any) => x.isActive !== false && x.is_active !== false).slice(0, 3)
       : [];
   }, [item]);
 
@@ -147,17 +186,26 @@ export default function MenuItemDetailScreen() {
   );
 
   const basePrice = num(item?.price);
+  const discountPrice =
+    item?.discountPrice !== undefined || item?.discount_price !== undefined
+      ? num(item?.discountPrice ?? item?.discount_price)
+      : 0;
+
+  const finalBasePrice = discountPrice > 0 && discountPrice < basePrice ? discountPrice : basePrice;
+
   const addonsTotal = selectedAddons.reduce(
     (sum: number, addon: any) => sum + num(addon.price),
     0
   );
+
   const customizationTotal = selectedCustomizations.reduce(
     (sum: number, custom: any) => sum + num(custom.price),
     0
   );
 
-  const unitPrice = basePrice + addonsTotal + customizationTotal;
+  const unitPrice = finalBasePrice + addonsTotal + customizationTotal;
   const totalPrice = unitPrice * quantity;
+  const savedAmount = discountPrice > 0 && discountPrice < basePrice ? (basePrice - discountPrice) * quantity : 0;
   const frequentlyBought = addons.slice(0, 4);
 
   const effectiveRestaurantId =
@@ -184,14 +232,18 @@ export default function MenuItemDetailScreen() {
       const nextItem = normalizeMenuItemResponse(data);
 
       if (error || !nextItem) {
-        showToast("error", "Item unavailable", "This item is currently unavailable.");
-        navigation.goBack();
+        if (!initialItem) {
+          showToast("error", "Item unavailable", "This item is currently unavailable.");
+          navigation.goBack();
+        }
         return;
       }
 
       setItem(nextItem as any);
     } catch {
-      showToast("error", "Unable to load item", "Please try again.");
+      if (!initialItem) {
+        showToast("error", "Unable to load item", "Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -202,7 +254,7 @@ export default function MenuItemDetailScreen() {
 
     try {
       const { data } = await favoriteService.isItemFavorite(itemId);
-      setIsFav(normalizeFavoriteStatus(data));
+      setIsFav(normalizeFavoriteStatus(data, false));
     } catch {
       setIsFav(false);
     }
@@ -222,7 +274,7 @@ export default function MenuItemDetailScreen() {
         return;
       }
 
-      const next = normalizeFavoriteStatus(data);
+      const next = normalizeFavoriteStatus(data, !isFav);
       setIsFav(next);
 
       showToast(
@@ -243,7 +295,7 @@ export default function MenuItemDetailScreen() {
         await restaurantService.saveRecentlyViewed(itemId);
       }
     } catch {
-      // Recently viewed is non-critical.
+      // non-critical
     }
   };
 
@@ -270,11 +322,14 @@ export default function MenuItemDetailScreen() {
 
   const validateRequiredCustomizations = () => {
     const required = customizations.filter((x: any) => x.isRequired || x.is_required);
-
     const missing = required.find((x: any) => !selectedCustomizationIds.includes(x.id));
 
     if (missing) {
-      showToast("info", "Selection required", `Please select ${missing.title} to continue.`);
+      showToast(
+        "info",
+        "Selection required",
+        `Please select ${missing.title || missing.name || "required option"} to continue.`
+      );
       return false;
     }
 
@@ -330,7 +385,7 @@ export default function MenuItemDetailScreen() {
         menuItemId: item.id,
         restaurantId: effectiveRestaurantId,
         quantity,
-        note: note.trim(),
+        note: note.trim() || null,
         customizationIds: selectedCustomizationIds,
         addonIds: selectedAddonIds,
       });
@@ -372,7 +427,7 @@ export default function MenuItemDetailScreen() {
 
     return (
       <View style={[styles.image, styles.imagePlaceholder]}>
-        <Icon name="fast-food-outline" size={62} color={THEME.yellow} />
+        <Icon name="fast-food-outline" size={62} color={THEME.orange} />
         <Text style={styles.imagePlaceholderText}>Karto Item</Text>
       </View>
     );
@@ -391,24 +446,24 @@ export default function MenuItemDetailScreen() {
       >
         <View style={styles.optionLeft}>
           <View style={[styles.checkBox, selected && styles.checkBoxActive]}>
-            {selected && <Icon name="checkmark" size={15} color={THEME.black} />}
+            {selected && <Icon name="checkmark" size={15} color={THEME.white} />}
           </View>
 
           {addonImg ? (
             <Image source={{ uri: addonImg }} style={styles.optionImg} />
           ) : (
             <View style={styles.optionIcon}>
-              <Icon name="add-circle-outline" size={20} color={THEME.green} />
+              <Icon name="add-circle-outline" size={20} color={THEME.orange} />
             </View>
           )}
 
           <View style={{ flex: 1 }}>
-            <Text style={styles.optionTitle}>{addon.title || "Add-on"}</Text>
+            <Text style={styles.optionTitle}>{addon.title || addon.name || "Add-on"}</Text>
             <Text style={styles.optionSub}>Recommended add-on</Text>
           </View>
         </View>
 
-        <Text style={styles.optionPrice}>+₹{num(addon.price).toFixed(0)}</Text>
+        <Text style={styles.optionPrice}>+{money(addon.price)}</Text>
       </TouchableOpacity>
     );
   };
@@ -431,7 +486,9 @@ export default function MenuItemDetailScreen() {
 
           <View style={{ flex: 1 }}>
             <View style={styles.optionTitleRow}>
-              <Text style={styles.optionTitle}>{customization.title || "Customization"}</Text>
+              <Text style={styles.optionTitle}>
+                {customization.title || customization.name || "Customization"}
+              </Text>
 
               {required && (
                 <View style={styles.requiredPill}>
@@ -445,9 +502,7 @@ export default function MenuItemDetailScreen() {
         </View>
 
         <Text style={styles.optionPrice}>
-          {num(customization.price) > 0
-            ? `+₹${num(customization.price).toFixed(0)}`
-            : "Free"}
+          {num(customization.price) > 0 ? `+${money(customization.price)}` : "Free"}
         </Text>
       </TouchableOpacity>
     );
@@ -456,11 +511,11 @@ export default function MenuItemDetailScreen() {
   if (loading || !item) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
-          <Icon name="fast-food-outline" size={34} color={THEME.yellow} />
+          <Icon name="fast-food-outline" size={34} color={THEME.orange} />
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.loadingText}>Loading item details...</Text>
       </View>
     );
@@ -470,15 +525,16 @@ export default function MenuItemDetailScreen() {
   const rating = Number(item.rating || 4.4);
   const totalReviews = Number(item.totalReviews || item.total_reviews || 0);
   const soldCount = Number((item as any).soldCount || (item as any).sold_count || 0);
+  const prepTime = getPrepTime(item);
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <View style={styles.screen}>
         <ScrollView
           style={styles.container}
-          contentContainerStyle={{ paddingBottom: 160 }}
+          contentContainerStyle={{ paddingBottom: 158 }}
           showsVerticalScrollIndicator={false}
         >
           <View style={styles.imageWrapper}>
@@ -491,11 +547,10 @@ export default function MenuItemDetailScreen() {
                 onPress={() => navigation.goBack()}
                 activeOpacity={0.85}
               >
-                <Icon name="chevron-back" size={23} color={THEME.text} />
+                <Icon name="chevron-back" size={23} color={THEME.blue} />
               </TouchableOpacity>
 
               <View style={styles.topRight}>
-                {/*
                 <TouchableOpacity
                   style={styles.circleBtn}
                   activeOpacity={0.85}
@@ -503,9 +558,8 @@ export default function MenuItemDetailScreen() {
                     showToast("info", "Sharing coming soon", "This feature will be available soon.")
                   }
                 >
-                  <Icon name="share-social-outline" size={22} color={THEME.text} />
+                  <Icon name="share-social-outline" size={22} color={THEME.blue} />
                 </TouchableOpacity>
-                */}
 
                 <TouchableOpacity
                   style={styles.circleBtn}
@@ -514,12 +568,12 @@ export default function MenuItemDetailScreen() {
                   disabled={favLoading}
                 >
                   {favLoading ? (
-                    <ActivityIndicator size="small" color={THEME.green} />
+                    <ActivityIndicator size="small" color={THEME.orange} />
                   ) : (
                     <Icon
                       name={isFav ? "heart" : "heart-outline"}
                       size={23}
-                      color={isFav ? THEME.danger : THEME.text}
+                      color={isFav ? THEME.danger : THEME.blue}
                     />
                   )}
                 </TouchableOpacity>
@@ -528,7 +582,7 @@ export default function MenuItemDetailScreen() {
 
             <View style={styles.imageBottomInfo}>
               <View style={styles.ratingBadge}>
-                <Icon name="star" size={14} color={THEME.black} />
+                <Icon name="star" size={14} color={THEME.white} />
                 <Text style={styles.ratingBadgeText}>{rating.toFixed(1)}</Text>
               </View>
 
@@ -542,6 +596,33 @@ export default function MenuItemDetailScreen() {
           </View>
 
           <View style={styles.contentCard}>
+            <View style={styles.restaurantMiniCard}>
+              <View style={styles.storeIcon}>
+                <Icon name="storefront-outline" size={22} color={THEME.orange} />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.storeLabel}>From</Text>
+                <Text style={styles.storeName} numberOfLines={1}>
+                  {getRestaurantName(item)}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.storeViewBtn}
+                onPress={() => {
+                  if (effectiveRestaurantId) {
+                    navigation.navigate("RestaurantDetail", {
+                      restaurantId: effectiveRestaurantId,
+                      restaurant: item?.restaurant,
+                    });
+                  }
+                }}
+              >
+                <Text style={styles.storeViewText}>View</Text>
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.heroStatsBanner}>
               <View style={styles.heroStat}>
                 <Text style={styles.heroStatValue}>⭐ {rating.toFixed(1)}</Text>
@@ -556,9 +637,7 @@ export default function MenuItemDetailScreen() {
               </View>
 
               <View style={styles.heroStat}>
-                <Text style={styles.heroStatValue}>
-                  {item.prepTimeMin || item.prep_time_min || 20} min
-                </Text>
+                <Text style={styles.heroStatValue}>{prepTime} min</Text>
                 <Text style={styles.heroStatLabel}>Prep time</Text>
               </View>
             </View>
@@ -574,9 +653,9 @@ export default function MenuItemDetailScreen() {
                     {isVeg(item) ? "Vegetarian" : "Non vegetarian"}
                   </Text>
 
-                  {(item.isPopular || item.is_popular || item.isBestSeller) && (
+                  {(item.isPopular || item.is_popular || item.isBestSeller || item.is_best_seller) && (
                     <View style={styles.bestSellerPill}>
-                      <Icon name="flame" size={12} color={THEME.yellow} />
+                      <Icon name="flame" size={12} color={THEME.white} />
                       <Text style={styles.bestSellerText}>Best Seller</Text>
                     </View>
                   )}
@@ -589,33 +668,27 @@ export default function MenuItemDetailScreen() {
               </View>
 
               <View style={styles.pricePill}>
-                <Text style={styles.price}>₹{basePrice.toFixed(0)}</Text>
+                <Text style={styles.price}>{money(finalBasePrice)}</Text>
+                {savedAmount > 0 && <Text style={styles.cutPrice}>{money(basePrice)}</Text>}
               </View>
             </View>
 
             <View style={styles.offerBanner}>
-              <Icon name="gift-outline" size={20} color={THEME.black} />
-              <Text style={styles.offerText}>Eligible for restaurant offers at checkout.</Text>
+              <Icon name="gift-outline" size={20} color={THEME.white} />
+              <Text style={styles.offerText}>
+                {savedAmount > 0
+                  ? `You save ${money(savedAmount)} on this item.`
+                  : "Eligible for restaurant offers at checkout."}
+              </Text>
             </View>
 
             <View style={styles.trustRow}>
-              <View style={styles.trustChip}>
-                <Icon name="flash-outline" size={16} color={THEME.green} />
-                <Text style={styles.trustText}>Fast preparation</Text>
-              </View>
-
-              <View style={styles.trustChip}>
-                <Icon name="shield-checkmark-outline" size={16} color={THEME.green} />
-                <Text style={styles.trustText}>Quality checked</Text>
-              </View>
-
-              <View style={styles.trustChip}>
-                <Icon name="cube-outline" size={16} color={THEME.green} />
-                <Text style={styles.trustText}>Safe packing</Text>
-              </View>
+              <TrustChip icon="flash-outline" text="Fast preparation" color={THEME.green} />
+              <TrustChip icon="shield-checkmark-outline" text="Quality checked" color={THEME.orange} />
+              <TrustChip icon="cube-outline" text="Safe packing" color={THEME.blue} />
             </View>
 
-            {(item.calories || item.servingInfo || item.spiceLevel !== undefined) && (
+            {(item.calories || item.servingInfo || item.serving_info || item.spiceLevel !== undefined || item.spice_level !== undefined) && (
               <View style={styles.sectionBox}>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Nutrition & serving</Text>
@@ -653,7 +726,7 @@ export default function MenuItemDetailScreen() {
                     <Text style={styles.sectionSub}>Make your order more complete</Text>
                   </View>
 
-                  <Text style={styles.sectionAmount}>₹{addonsTotal.toFixed(0)}</Text>
+                  <Text style={styles.sectionAmount}>{money(addonsTotal)}</Text>
                 </View>
 
                 {addons.map(renderAddon)}
@@ -668,7 +741,7 @@ export default function MenuItemDetailScreen() {
                     <Text style={styles.sectionSub}>Choose your preferences</Text>
                   </View>
 
-                  <Text style={styles.sectionAmount}>₹{customizationTotal.toFixed(0)}</Text>
+                  <Text style={styles.sectionAmount}>{money(customizationTotal)}</Text>
                 </View>
 
                 {customizations.map(renderCustomization)}
@@ -700,15 +773,15 @@ export default function MenuItemDetailScreen() {
                           <Icon
                             name={selected ? "checkmark-circle" : "add-circle-outline"}
                             size={26}
-                            color={selected ? THEME.yellow : THEME.green}
+                            color={selected ? THEME.orange : THEME.green}
                           />
                         </View>
 
                         <Text style={styles.comboTitle} numberOfLines={1}>
-                          {addon.title || "Add-on"}
+                          {addon.title || addon.name || "Add-on"}
                         </Text>
 
-                        <Text style={styles.comboPrice}>+₹{num(addon.price).toFixed(0)}</Text>
+                        <Text style={styles.comboPrice}>+{money(addon.price)}</Text>
                       </TouchableOpacity>
                     );
                   }}
@@ -732,7 +805,7 @@ export default function MenuItemDetailScreen() {
                   <Icon
                     name="remove"
                     size={20}
-                    color={quantity <= 1 ? THEME.muted : THEME.green}
+                    color={quantity <= 1 ? THEME.muted : THEME.orange}
                   />
                 </TouchableOpacity>
 
@@ -747,41 +820,30 @@ export default function MenuItemDetailScreen() {
                   disabled={adding}
                   activeOpacity={0.85}
                 >
-                  <Icon name="add" size={20} color={THEME.green} />
+                  <Icon name="add" size={20} color={THEME.orange} />
                 </TouchableOpacity>
               </View>
             </View>
 
-            <View style={styles.priceBreakdown}>
-              <Text style={styles.breakTitle}>Price summary</Text>
-
-              <View style={styles.breakRow}>
-                <Text style={styles.breakLabel}>Base price</Text>
-                <Text style={styles.breakValue}>₹{basePrice.toFixed(0)}</Text>
+            <TouchableOpacity
+              style={styles.priceBreakdown}
+              activeOpacity={0.9}
+              onPress={() => setPriceModalVisible(true)}
+            >
+              <View style={styles.breakHeader}>
+                <Text style={styles.breakTitle}>Price summary</Text>
+                <Icon name="information-circle-outline" size={19} color={THEME.orange} />
               </View>
 
-              <View style={styles.breakRow}>
-                <Text style={styles.breakLabel}>Add-ons</Text>
-                <Text style={styles.breakValue}>₹{addonsTotal.toFixed(0)}</Text>
-              </View>
-
-              <View style={styles.breakRow}>
-                <Text style={styles.breakLabel}>Customizations</Text>
-                <Text style={styles.breakValue}>₹{customizationTotal.toFixed(0)}</Text>
-              </View>
-
-              <View style={styles.breakRow}>
-                <Text style={styles.breakLabel}>Quantity</Text>
-                <Text style={styles.breakValue}>x {quantity}</Text>
-              </View>
+              <PriceRow label="Base price" value={money(finalBasePrice)} />
+              <PriceRow label="Add-ons" value={money(addonsTotal)} />
+              <PriceRow label="Customizations" value={money(customizationTotal)} />
+              <PriceRow label="Quantity" value={`x ${quantity}`} />
 
               <View style={styles.breakDivider} />
 
-              <View style={styles.breakRow}>
-                <Text style={styles.breakTotalLabel}>Total</Text>
-                <Text style={styles.breakTotalValue}>₹{totalPrice.toFixed(0)}</Text>
-              </View>
-            </View>
+              <PriceRow label="Total" value={`₹${totalPrice.toFixed(2)}`} total />
+            </TouchableOpacity>
 
             {reviews.length > 0 && (
               <View style={styles.sectionBox}>
@@ -826,7 +888,7 @@ export default function MenuItemDetailScreen() {
                     onPress={() => addSuggestion(suggestion)}
                     activeOpacity={0.85}
                   >
-                    <Icon name="add-circle-outline" size={15} color={THEME.green} />
+                    <Icon name="add-circle-outline" size={15} color={THEME.orange} />
                     <Text style={styles.suggestionText}>{suggestion}</Text>
                   </TouchableOpacity>
                 ))}
@@ -847,14 +909,14 @@ export default function MenuItemDetailScreen() {
             </View>
 
             <View style={styles.infoBox}>
-              <Icon name="information-circle-outline" size={20} color={THEME.yellow} />
+              <Icon name="information-circle-outline" size={20} color={THEME.orange} />
               <Text style={styles.infoText}>
                 Add-ons and customizations are included in the final cart total.
               </Text>
             </View>
 
             <TouchableOpacity style={styles.goToCartBtn} onPress={openCart} activeOpacity={0.85}>
-              <Icon name="bag-handle-outline" size={18} color={THEME.green} />
+              <Icon name="bag-handle-outline" size={18} color={THEME.orange} />
               <Text style={styles.goToCartText}>Go to Cart</Text>
             </TouchableOpacity>
           </View>
@@ -862,7 +924,7 @@ export default function MenuItemDetailScreen() {
 
         <View style={styles.bottomBar}>
           <View>
-            <Text style={styles.bottomLabel}>Total</Text>
+            <Text style={styles.bottomLabel}>{quantity} item{quantity > 1 ? "s" : ""}</Text>
             <Text style={styles.bottomPrice}>₹{totalPrice.toFixed(2)}</Text>
           </View>
 
@@ -873,21 +935,94 @@ export default function MenuItemDetailScreen() {
             activeOpacity={0.9}
           >
             {adding ? (
-              <ActivityIndicator color={THEME.black} />
+              <ActivityIndicator color={THEME.white} />
             ) : (
               <>
-                <Icon name="cart" size={19} color={THEME.black} />
+                <Icon name="cart" size={19} color={THEME.white} />
                 <Text style={styles.addToCartText}>
-                  {available ? `Add • ₹${totalPrice.toFixed(0)}` : "Unavailable"}
+                  {available ? "Add to Cart" : "Unavailable"}
                 </Text>
               </>
             )}
           </TouchableOpacity>
         </View>
+
+        <PriceModal
+          visible={priceModalVisible}
+          onClose={() => setPriceModalVisible(false)}
+          basePrice={finalBasePrice}
+          addonsTotal={addonsTotal}
+          customizationTotal={customizationTotal}
+          quantity={quantity}
+          totalPrice={totalPrice}
+          savedAmount={savedAmount}
+        />
       </View>
     </SafeAreaView>
   );
 }
+
+const TrustChip = ({ icon, text, color }: any) => (
+  <View style={styles.trustChip}>
+    <Icon name={icon} size={16} color={color} />
+    <Text style={styles.trustText}>{text}</Text>
+  </View>
+);
+
+const PriceRow = ({ label, value, total }: any) => (
+  <View style={styles.breakRow}>
+    <Text style={[styles.breakLabel, total && styles.breakTotalLabel]}>{label}</Text>
+    <Text style={[styles.breakValue, total && styles.breakTotalValue]}>{value}</Text>
+  </View>
+);
+
+const PriceModal = ({
+  visible,
+  onClose,
+  basePrice,
+  addonsTotal,
+  customizationTotal,
+  quantity,
+  totalPrice,
+  savedAmount,
+}: any) => (
+  <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.modalOverlay}>
+      <View style={styles.modalBox}>
+        <View style={styles.modalIcon}>
+          <Icon name="receipt-outline" size={31} color={THEME.orange} />
+        </View>
+
+        <Text style={styles.modalTitle}>Price Breakdown</Text>
+        <Text style={styles.modalSub}>Final amount includes your selected add-ons and quantity.</Text>
+
+        <View style={styles.modalBillBox}>
+          <PriceRow label="Base price" value={money(basePrice)} />
+          <PriceRow label="Add-ons" value={money(addonsTotal)} />
+          <PriceRow label="Customizations" value={money(customizationTotal)} />
+          <PriceRow label="Quantity" value={`x ${quantity}`} />
+
+          {savedAmount > 0 && <PriceRow label="Savings" value={`-${money(savedAmount)}`} />}
+
+          <View style={styles.breakDivider} />
+          <PriceRow label="Final total" value={`₹${totalPrice.toFixed(2)}`} total />
+        </View>
+
+        <TouchableOpacity style={styles.modalBtn} onPress={onClose}>
+          <Text style={styles.modalBtnText}>Got it</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  </Modal>
+);
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: THEME.bg },
@@ -904,12 +1039,10 @@ const styles = StyleSheet.create({
     height: 76,
     borderRadius: 26,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 18,
-    elevation: 4,
+    ...shadow,
   },
   loadingText: {
     marginTop: 12,
@@ -918,7 +1051,7 @@ const styles = StyleSheet.create({
   },
   imageWrapper: {
     position: "relative",
-    height: 330,
+    height: 342,
     backgroundColor: THEME.card2,
   },
   image: {
@@ -937,11 +1070,11 @@ const styles = StyleSheet.create({
   },
   imageGradient: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.42)",
+    backgroundColor: "rgba(0,0,0,0.28)",
   },
   topBar: {
     position: "absolute",
-    top: 14,
+    top: Platform.OS === "ios" ? 16 : 16,
     left: 16,
     right: 16,
     flexDirection: "row",
@@ -952,13 +1085,11 @@ const styles = StyleSheet.create({
   circleBtn: {
     width: 44,
     height: 44,
-    borderRadius: 18,
-    backgroundColor: "rgba(5,8,7,0.82)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.12)",
+    borderRadius: 17,
+    backgroundColor: "rgba(255,255,255,0.92)",
     justifyContent: "center",
     alignItems: "center",
-    elevation: 4,
+    ...shadow,
   },
   imageBottomInfo: {
     position: "absolute",
@@ -970,7 +1101,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   ratingBadge: {
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.green,
     paddingHorizontal: 11,
     paddingVertical: 7,
     borderRadius: 99,
@@ -979,23 +1110,20 @@ const styles = StyleSheet.create({
   },
   ratingBadgeText: {
     marginLeft: 5,
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 13,
   },
   availabilityBadge: {
-    backgroundColor: THEME.card,
+    backgroundColor: "rgba(255,255,255,0.94)",
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 99,
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: THEME.border,
   },
   unavailableBadge: {
-    backgroundColor: "#1A0E0E",
-    borderColor: "#5C2020",
+    backgroundColor: "#FFF1F1",
   },
   liveDot: {
     width: 7,
@@ -1010,32 +1138,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   contentCard: {
-    marginTop: -18,
+    marginTop: -20,
     backgroundColor: THEME.bg,
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
     paddingHorizontal: 18,
     paddingTop: 22,
   },
+  restaurantMiniCard: {
+    backgroundColor: THEME.card,
+    borderRadius: 20,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 14,
+    ...shadow,
+  },
+  storeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: THEME.orangeSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
+  storeLabel: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  storeName: {
+    color: THEME.blue,
+    fontWeight: "900",
+    fontSize: 15,
+    marginTop: 2,
+  },
+  storeViewBtn: {
+    backgroundColor: THEME.orange,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 13,
+  },
+  storeViewText: {
+    color: THEME.white,
+    fontWeight: "900",
+    fontSize: 12,
+  },
   heroStatsBanner: {
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     borderRadius: 22,
     padding: 13,
     flexDirection: "row",
     gap: 9,
     marginBottom: 18,
+    ...shadow,
   },
   heroStat: {
     flex: 1,
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 16,
     paddingVertical: 11,
     alignItems: "center",
   },
   heroStatValue: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 13,
   },
@@ -1063,7 +1230,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     marginRight: 6,
-    backgroundColor: THEME.bg,
+    backgroundColor: THEME.white,
   },
   vegDot: {
     width: 8,
@@ -1080,23 +1247,21 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#252109",
+    backgroundColor: THEME.orange,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 99,
-    borderWidth: 1,
-    borderColor: "#57470A",
   },
   bestSellerText: {
-    color: THEME.yellow,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 10,
     marginLeft: 4,
   },
   title: {
-    fontSize: 26,
+    fontSize: 27,
     fontWeight: "900",
-    color: THEME.text,
+    color: THEME.blue,
     letterSpacing: -0.4,
   },
   desc: {
@@ -1108,27 +1273,36 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   pricePill: {
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orangeSoft,
     paddingHorizontal: 13,
     paddingVertical: 9,
     borderRadius: 18,
     marginLeft: 10,
+    alignItems: "center",
   },
   price: {
     fontSize: 17,
-    color: THEME.black,
+    color: THEME.orange,
     fontWeight: "900",
   },
+  cutPrice: {
+    color: THEME.muted,
+    fontWeight: "800",
+    fontSize: 11,
+    textDecorationLine: "line-through",
+    marginTop: 2,
+  },
   offerBanner: {
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     borderRadius: 18,
     padding: 13,
     marginTop: 16,
     flexDirection: "row",
     alignItems: "center",
+    ...shadow,
   },
   offerText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     marginLeft: 8,
     flex: 1,
@@ -1140,8 +1314,6 @@ const styles = StyleSheet.create({
   },
   trustChip: {
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 99,
@@ -1149,11 +1321,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginRight: 8,
     marginBottom: 8,
-    elevation: 1,
+    ...shadow,
   },
   trustText: {
     marginLeft: 5,
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "800",
     fontSize: 12,
   },
@@ -1162,9 +1334,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 16,
     marginTop: 16,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    elevation: 2,
+    ...shadow,
   },
   sectionHeader: { marginBottom: 14 },
   sectionHeaderRow: {
@@ -1174,7 +1344,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   sectionTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
   },
@@ -1185,7 +1355,7 @@ const styles = StyleSheet.create({
     marginTop: 3,
   },
   sectionAmount: {
-    color: THEME.green,
+    color: THEME.orange,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -1195,14 +1365,12 @@ const styles = StyleSheet.create({
   },
   nutritionItem: {
     flex: 1,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
     padding: 12,
   },
   nutritionValue: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -1216,7 +1384,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
     padding: 13,
     borderWidth: 1,
@@ -1224,8 +1392,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   optionSelected: {
-    borderColor: THEME.green,
-    backgroundColor: "#102116",
+    borderColor: THEME.orange,
+    backgroundColor: THEME.orangeSoft,
   },
   optionLeft: {
     flexDirection: "row",
@@ -1244,8 +1412,8 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
   },
   checkBoxActive: {
-    backgroundColor: THEME.green,
-    borderColor: THEME.green,
+    backgroundColor: THEME.orange,
+    borderColor: THEME.orange,
   },
   radioBox: {
     width: 24,
@@ -1259,13 +1427,13 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
   },
   radioBoxActive: {
-    borderColor: THEME.green,
+    borderColor: THEME.orange,
   },
   radioInner: {
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
   },
   optionImg: {
     width: 42,
@@ -1280,8 +1448,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     marginRight: 10,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1291,7 +1457,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
   },
   optionTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 14,
     fontWeight: "900",
   },
@@ -1303,25 +1469,25 @@ const styles = StyleSheet.create({
   },
   requiredPill: {
     marginLeft: 7,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     paddingHorizontal: 7,
     paddingVertical: 3,
     borderRadius: 99,
   },
   requiredText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 9,
   },
   optionPrice: {
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 13,
     fontWeight: "900",
     marginLeft: 10,
   },
   comboCard: {
     width: 126,
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
     padding: 12,
     marginRight: 10,
@@ -1329,19 +1495,19 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
   },
   comboCardActive: {
-    borderColor: THEME.green,
-    backgroundColor: "#102116",
+    borderColor: THEME.orange,
+    backgroundColor: THEME.orangeSoft,
   },
   comboIcon: {
     marginBottom: 8,
   },
   comboTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 13,
     fontWeight: "900",
   },
   comboPrice: {
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 13,
     fontWeight: "900",
     marginTop: 5,
@@ -1350,7 +1516,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 22,
     padding: 12,
     borderWidth: 1,
@@ -1375,7 +1541,7 @@ const styles = StyleSheet.create({
   qtyText: {
     fontSize: 24,
     fontWeight: "900",
-    color: THEME.text,
+    color: THEME.blue,
   },
   qtyLabel: {
     color: THEME.muted,
@@ -1388,12 +1554,15 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     padding: 16,
     marginTop: 16,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    elevation: 2,
+    ...shadow,
+  },
+  breakHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
   breakTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 17,
     marginBottom: 10,
@@ -1408,7 +1577,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   breakValue: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
   },
   breakDivider: {
@@ -1417,17 +1586,17 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   breakTotalLabel: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 16,
     fontWeight: "900",
   },
   breakTotalValue: {
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 17,
     fontWeight: "900",
   },
   reviewCard: {
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
@@ -1439,7 +1608,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   reviewUser: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
   },
   reviewRating: {
@@ -1458,7 +1627,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   suggestionChip: {
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderWidth: 1,
     borderColor: THEME.border,
     paddingHorizontal: 10,
@@ -1471,18 +1640,18 @@ const styles = StyleSheet.create({
   },
   suggestionText: {
     marginLeft: 5,
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 12,
     fontWeight: "900",
   },
   noteInput: {
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
     padding: 14,
     minHeight: 86,
     marginBottom: 6,
     fontSize: 15,
-    color: THEME.text,
+    color: THEME.blue,
     borderWidth: 1,
     borderColor: THEME.border,
     textAlignVertical: "top",
@@ -1495,19 +1664,17 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   infoBox: {
-    backgroundColor: "#252109",
+    backgroundColor: THEME.orangeSoft,
     borderRadius: 18,
     padding: 13,
     marginTop: 16,
     flexDirection: "row",
     alignItems: "flex-start",
-    borderWidth: 1,
-    borderColor: "#57470A",
   },
   infoText: {
     flex: 1,
     marginLeft: 8,
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 12,
     fontWeight: "800",
     lineHeight: 18,
@@ -1515,7 +1682,7 @@ const styles = StyleSheet.create({
   goToCartBtn: {
     marginTop: 16,
     borderWidth: 1.5,
-    borderColor: THEME.green,
+    borderColor: THEME.orange,
     paddingVertical: 14,
     borderRadius: 18,
     alignItems: "center",
@@ -1524,7 +1691,7 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
   },
   goToCartText: {
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 15,
     fontWeight: "900",
     marginLeft: 7,
@@ -1540,9 +1707,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: THEME.border,
-    elevation: 10,
+    ...shadow,
   },
   bottomLabel: {
     color: THEME.muted,
@@ -1550,13 +1715,13 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   bottomPrice: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
     marginTop: 2,
   },
   addToCartBtn: {
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     paddingVertical: 15,
     paddingHorizontal: 18,
     borderRadius: 18,
@@ -1566,9 +1731,60 @@ const styles = StyleSheet.create({
     minWidth: 168,
   },
   addToCartText: {
-    color: THEME.black,
+    color: THEME.white,
     fontSize: 15,
     fontWeight: "900",
     marginLeft: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    justifyContent: "center",
+    padding: 22,
+  },
+  modalBox: {
+    backgroundColor: THEME.card,
+    borderRadius: 24,
+    padding: 20,
+    alignItems: "center",
+  },
+  modalIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 24,
+    backgroundColor: THEME.orangeSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    color: THEME.blue,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  modalSub: {
+    color: THEME.muted,
+    textAlign: "center",
+    marginTop: 7,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  modalBillBox: {
+    alignSelf: "stretch",
+    backgroundColor: THEME.surface,
+    borderRadius: 18,
+    padding: 14,
+    marginTop: 18,
+  },
+  modalBtn: {
+    marginTop: 18,
+    backgroundColor: THEME.orange,
+    paddingHorizontal: 24,
+    paddingVertical: 13,
+    borderRadius: 16,
+  },
+  modalBtnText: {
+    color: THEME.white,
+    fontWeight: "900",
   },
 });

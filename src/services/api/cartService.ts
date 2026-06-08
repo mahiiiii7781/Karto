@@ -70,6 +70,14 @@ export type CartItem = {
   itemName?: string | null;
 };
 
+export type CartResponse = {
+  cartItems: CartItem[];
+  pricing: CartPricing | null;
+  itemCount: number;
+  totalAmount: number;
+  total: number;
+};
+
 export type AddToCartPayload = {
   menuItemId: string;
   restaurantId?: string;
@@ -91,18 +99,54 @@ type ApiResult<T> = {
   error: any | null;
 };
 
-const normalizeData = (res: any) => {
-  return res?.data?.data ?? res?.data?.cartItems ?? res?.data?.cartItem ?? res?.data ?? null;
+const toNumber = (value: any) => Number(value || 0);
+
+const normalizeArray = <T = any>(value: any): T[] => {
+  if (Array.isArray(value)) return value;
+  return [];
 };
 
-const normalizePricing = (res: any): CartPricing | null => {
+const normalizeCartItems = (resData: any): CartItem[] => {
+  return normalizeArray<CartItem>(
+    resData?.data?.cartItems ||
+      resData?.cartItems ||
+      resData?.data ||
+      []
+  );
+};
+
+const normalizeSingleCartItem = (resData: any): CartItem | null => {
   return (
-    res?.data?.data?.pricing ??
-    res?.data?.pricing ??
-    res?.data?.bill ??
-    res?.data?.summary ??
+    resData?.data?.cartItem ||
+    resData?.cartItem ||
+    resData?.data ||
     null
   );
+};
+
+const normalizePricingFromData = (resData: any): CartPricing | null => {
+  return (
+    resData?.data?.pricing ||
+    resData?.pricing ||
+    resData?.data?.bill ||
+    resData?.bill ||
+    resData?.data?.summary ||
+    resData?.summary ||
+    null
+  );
+};
+
+const normalizeCartResponse = (resData: any): CartResponse => {
+  const cartItems = normalizeCartItems(resData);
+  const pricing = normalizePricingFromData(resData);
+
+  return {
+    cartItems,
+    pricing,
+    itemCount: toNumber(resData?.itemCount ?? resData?.data?.itemCount),
+    totalAmount: toNumber(resData?.totalAmount ?? resData?.data?.totalAmount),
+    total: toNumber(resData?.total ?? resData?.data?.total),
+  };
 };
 
 const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
@@ -110,29 +154,11 @@ const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
     const res = await fn();
 
     return {
-      data: normalizeData(res) as T,
+      data: res.data as T,
       error: null,
     };
   } catch (error: any) {
     console.log("CART API ERROR:", error?.response?.data || error?.message);
-
-    return {
-      data: null,
-      error: error?.response?.data || error,
-    };
-  }
-};
-
-const safePricing = async (): Promise<ApiResult<CartPricing>> => {
-  try {
-    const res = await apiClient.get("/cart/pricing");
-
-    return {
-      data: normalizePricing(res),
-      error: null,
-    };
-  } catch (error: any) {
-    console.log("CART PRICING API ERROR:", error?.response?.data || error?.message);
 
     return {
       data: null,
@@ -157,31 +183,67 @@ export const getCartErrorMessage = (error: any) => {
   if (isDifferentRestaurantError(error)) {
     return {
       title: "Different store",
-      message: "Your cart already has items from another store. Please clear the cart before adding this item.",
+      message:
+        "Your cart already has items from another store. Please clear the cart before adding this item.",
     };
   }
 
   return {
     title: "Cart error",
-    message: error?.message || "Something went wrong. Please try again.",
+    message:
+      error?.message ||
+      error?.response?.data?.message ||
+      "Something went wrong. Please try again.",
   };
 };
 
 export const cartService = {
-  getCartItems: async () => {
-    return safe<CartItem[]>(() => apiClient.get("/cart"));
+  getCart: async (): Promise<ApiResult<CartResponse>> => {
+    const result = await safe<any>(() => apiClient.get("/cart"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeCartResponse(result.data),
+      error: null,
+    };
   },
 
-  getCartPricing: async () => {
-    return safePricing();
+  getCartItems: async (): Promise<ApiResult<CartItem[]>> => {
+    const result = await safe<any>(() => apiClient.get("/cart"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeCartItems(result.data),
+      error: null,
+    };
   },
 
-  getCartTotal: async () => {
-    return safe<any>(() => apiClient.get("/cart/total"));
+  getCartPricing: async (): Promise<ApiResult<CartPricing>> => {
+    const result = await safe<any>(() => apiClient.get("/cart/pricing"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizePricingFromData(result.data),
+      error: null,
+    };
   },
 
-  addToCart: async (payload: AddToCartPayload) => {
-    return safe<CartItem>(() =>
+  getCartTotal: async (): Promise<ApiResult<any>> => {
+    const result = await safe<any>(() => apiClient.get("/cart/total"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: result.data?.data || result.data,
+      error: null,
+    };
+  },
+
+  addToCart: async (payload: AddToCartPayload): Promise<ApiResult<CartItem>> => {
+    const result = await safe<any>(() =>
       apiClient.post("/cart/add", {
         menuItemId: payload.menuItemId,
         restaurantId: payload.restaurantId,
@@ -191,18 +253,47 @@ export const cartService = {
         addonIds: payload.addonIds ?? [],
       })
     );
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeSingleCartItem(result.data),
+      error: null,
+    };
+  },
+
+  addToCartAndGetCart: async (
+    payload: AddToCartPayload
+  ): Promise<ApiResult<CartResponse>> => {
+    const result = await safe<any>(() =>
+      apiClient.post("/cart/add", {
+        menuItemId: payload.menuItemId,
+        restaurantId: payload.restaurantId,
+        quantity: payload.quantity ?? 1,
+        note: payload.note ?? null,
+        customizationIds: payload.customizationIds ?? [],
+        addonIds: payload.addonIds ?? [],
+      })
+    );
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeCartResponse(result.data),
+      error: null,
+    };
   },
 
   updateCartItem: async (
     cartItemId: string,
     payloadOrQuantity: UpdateCartItemPayload | number
-  ) => {
+  ): Promise<ApiResult<CartItem>> => {
     const payload =
       typeof payloadOrQuantity === "number"
         ? { quantity: payloadOrQuantity }
         : payloadOrQuantity;
 
-    return safe<CartItem>(() =>
+    const result = await safe<any>(() =>
       apiClient.patch(`/cart/${cartItemId}`, {
         quantity: payload.quantity,
         note: payload.note,
@@ -210,15 +301,91 @@ export const cartService = {
         addonIds: payload.addonIds,
       })
     );
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeSingleCartItem(result.data),
+      error: null,
+    };
   },
 
-  removeFromCart: async (cartItemId: string) => {
-    return safe<{ success: boolean; id?: string }>(() =>
-      apiClient.delete(`/cart/${cartItemId}`)
+  updateCartItemAndGetCart: async (
+    cartItemId: string,
+    payloadOrQuantity: UpdateCartItemPayload | number
+  ): Promise<ApiResult<CartResponse>> => {
+    const payload =
+      typeof payloadOrQuantity === "number"
+        ? { quantity: payloadOrQuantity }
+        : payloadOrQuantity;
+
+    const result = await safe<any>(() =>
+      apiClient.patch(`/cart/${cartItemId}`, {
+        quantity: payload.quantity,
+        note: payload.note,
+        customizationIds: payload.customizationIds,
+        addonIds: payload.addonIds,
+      })
     );
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeCartResponse(result.data),
+      error: null,
+    };
   },
 
-  clearCart: async () => {
-    return safe<{ success: boolean }>(() => apiClient.delete("/cart"));
+  removeFromCart: async (
+    cartItemId: string
+  ): Promise<ApiResult<{ success: boolean; id?: string }>> => {
+    const result = await safe<any>(() => apiClient.delete(`/cart/${cartItemId}`));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: {
+        success: true,
+        id: result.data?.removedId || result.data?.data?.id || cartItemId,
+      },
+      error: null,
+    };
+  },
+
+  removeFromCartAndGetCart: async (
+    cartItemId: string
+  ): Promise<ApiResult<CartResponse>> => {
+    const result = await safe<any>(() => apiClient.delete(`/cart/${cartItemId}`));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeCartResponse(result.data),
+      error: null,
+    };
+  },
+
+  clearCart: async (): Promise<ApiResult<{ success: boolean }>> => {
+    const result = await safe<any>(() => apiClient.delete("/cart"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: { success: true },
+      error: null,
+    };
+  },
+
+  clearCartAndGetCart: async (): Promise<ApiResult<CartResponse>> => {
+    const result = await safe<any>(() => apiClient.delete("/cart"));
+
+    if (result.error) return { data: null, error: result.error };
+
+    return {
+      data: normalizeCartResponse(result.data),
+      error: null,
+    };
   },
 };
+
+export default cartService;

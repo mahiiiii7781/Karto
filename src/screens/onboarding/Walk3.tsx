@@ -13,6 +13,18 @@ import {
 import Icon from "react-native-vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Toast from "react-native-toast-message";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
+
+type OnboardingStackParamList = {
+  WelcomeScreen: undefined;
+  Walk1: undefined;
+  Walk2: undefined;
+  Walk3: undefined;
+};
+
+type Props = NativeStackScreenProps<OnboardingStackParamList, "Walk3"> & {
+  onDone?: () => void;
+};
 
 const THEME = {
   bg: "#070A08",
@@ -41,7 +53,7 @@ const showToast = (
   });
 };
 
-export default function Walk3() {
+export default function Walk3({ onDone }: Props) {
   const [finishing, setFinishing] = useState(false);
 
   const fade = useRef(new Animated.Value(0)).current;
@@ -69,7 +81,7 @@ export default function Walk3() {
       }),
     ]).start();
 
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(imageFloat, {
           toValue: -10,
@@ -82,7 +94,13 @@ export default function Walk3() {
           useNativeDriver: true,
         }),
       ])
-    ).start();
+    );
+
+    loop.start();
+
+    return () => {
+      loop.stop();
+    };
   }, [fade, imageFloat, scale, slide]);
 
   const handleFinishOnboarding = async () => {
@@ -96,7 +114,13 @@ export default function Walk3() {
         ["permissionSetupPending", "true"],
       ]);
 
-      showToast("success", "Welcome to Karto", "Let's set up your delivery experience.");
+      showToast(
+        "success",
+        "Welcome to Karto",
+        "Let's set up your delivery experience."
+      );
+
+      onDone?.();
     } catch {
       showToast("error", "Unable to continue", "Please try again.");
     } finally {
@@ -184,7 +208,11 @@ export default function Walk3() {
         <View style={styles.featureRow}>
           <Feature icon="time-outline" text="Quick ETA" color={THEME.green} />
           <Feature icon="location-outline" text="Nearby" color={THEME.yellow} />
-          <Feature icon="shield-checkmark-outline" text="Trusted" color={THEME.orange} />
+          <Feature
+            icon="shield-checkmark-outline"
+            text="Trusted"
+            color={THEME.orange}
+          />
         </View>
 
         <View style={styles.dots}>
@@ -225,10 +253,18 @@ export default function Walk3() {
   );
 }
 
-const Feature = ({ icon, text, color }: any) => (
+const Feature = ({
+  icon,
+  text,
+  color,
+}: {
+  icon: string;
+  text: string;
+  color: string;
+}) => (
   <View style={styles.featurePill}>
     <View style={[styles.featureIcon, { backgroundColor: `${color}22` }]}>
-      <Icon name={icon} size={15} color={color} />
+      <Icon name={icon as any} size={15} color={color} />
     </View>
     <Text style={styles.featureText}>{text}</Text>
   </View>

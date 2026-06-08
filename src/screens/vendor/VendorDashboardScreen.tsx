@@ -51,13 +51,11 @@ const getSocketUrl = () => {
   return baseUrl.replace(/\/api\/?$/, "");
 };
 
-const getOrderNumber = (order?: VendorOrder | null) => {
-  return order?.orderNumber || order?.order_number || order?.id?.slice(0, 8) || "-";
-};
+const getOrderNumber = (order?: VendorOrder | null) =>
+  order?.orderNumber || order?.order_number || order?.id?.slice(0, 8) || "-";
 
-const getOrderTotal = (order?: VendorOrder | null) => {
-  return Number(order?.totalAmount ?? order?.total_amount ?? 0);
-};
+const getOrderTotal = (order?: VendorOrder | null) =>
+  Number(order?.totalAmount ?? order?.total_amount ?? 0);
 
 const statusLabel = (status?: string) => {
   const map: Record<string, string> = {
@@ -72,6 +70,7 @@ const statusLabel = (status?: string) => {
     PICKED_UP: "Picked",
     OUT_FOR_DELIVERY: "On Way",
     DELIVERED: "Delivered",
+    COMPLETED: "Completed",
     CANCELLED: "Cancelled",
   };
 
@@ -79,6 +78,14 @@ const statusLabel = (status?: string) => {
 };
 
 const isNewOrder = (status?: string) => status === "PLACED";
+
+const getEventOrder = (payload: any): VendorOrder | null => {
+  if (!payload) return null;
+  if (payload.order?.id) return payload.order;
+  if (payload.id) return payload;
+  if (payload.orderId) return { ...payload, id: payload.orderId } as VendorOrder;
+  return null;
+};
 
 const mergeRecentOrders = (
   currentOrders: VendorOrder[],
@@ -92,11 +99,11 @@ const mergeRecentOrders = (
     );
   }
 
-  return [nextOrder, ...currentOrders];
+  return [nextOrder, ...currentOrders].slice(0, 10);
 };
 
 export default function VendorDashboardScreen({ navigation }: any) {
-  const { user, signOut } = useAuth();
+  const { user, signOut, accessToken }: any = useAuth();
 
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenOrderIdsRef = useRef<Set<string>>(new Set());
@@ -114,9 +121,7 @@ export default function VendorDashboardScreen({ navigation }: any) {
   const [actionLoading, setActionLoading] = useState(false);
 
   const showToast = useCallback((msg: string) => {
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-    }
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
 
     setToast(msg);
 
@@ -132,7 +137,7 @@ export default function VendorDashboardScreen({ navigation }: any) {
       const { data, error } = await vendorService.getDashboard();
 
       if (error) {
-        showToast(error?.message || "Failed to load dashboard");
+        showToast(error.message || "Failed to load dashboard");
       } else if (data) {
         setDashboard(data);
 
@@ -172,12 +177,13 @@ export default function VendorDashboardScreen({ navigation }: any) {
     }
 
     const socket: Socket = io(socketUrl, {
-      transports: ["websocket"],
+      transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: 999,
       reconnectionDelay: 1200,
       timeout: 12000,
       auth: {
+        token: accessToken,
         userId: user.id,
         role: user.role,
       },
@@ -187,8 +193,10 @@ export default function VendorDashboardScreen({ navigation }: any) {
 
     socket.on("connect", () => {
       setSocketConnected(true);
+
       socket.emit("joinVendorRoom", user.id);
-      socket.emit("join_vendor_room", user.id);
+      socket.emit("join-vendor-room", user.id);
+      socket.emit("vendor-online", { vendorId: user.id });
     });
 
     socket.on("disconnect", () => {
@@ -199,7 +207,9 @@ export default function VendorDashboardScreen({ navigation }: any) {
       setSocketConnected(false);
     });
 
-    const handleNewOrder = (order: VendorOrder) => {
+    const handleNewOrderPayload = (payload: any) => {
+      const order = getEventOrder(payload);
+
       if (!order?.id) {
         loadDashboard(true);
         return;
@@ -234,6 +244,7 @@ export default function VendorDashboardScreen({ navigation }: any) {
           ...prev,
           todayOrders: Number(prev.todayOrders || 0) + 1,
           activeOrders: Number(prev.activeOrders || 0) + 1,
+          pendingOrders: Number(prev.pendingOrders || 0) + 1,
           recentOrders: mergeRecentOrders(prev.recentOrders || [], order),
         };
       });
@@ -241,32 +252,51 @@ export default function VendorDashboardScreen({ navigation }: any) {
       loadDashboard(true);
     };
 
-    socket.on("NEW_ORDER", handleNewOrder);
-    socket.on("new_order", handleNewOrder);
-    socket.on("ORDER_CREATED", handleNewOrder);
+    const refreshDashboard = () => loadDashboard(true);
 
-    socket.on("VENDOR_DASHBOARD_REFRESH", () => loadDashboard(true));
-    socket.on("ORDER_STATUS_UPDATED", () => loadDashboard(true));
-    socket.on("RIDER_ASSIGNED", () => loadDashboard(true));
+    socket.on("NEW_ORDER", handleNewOrderPayload);
+    socket.on("vendor:newOrder", handleNewOrderPayload);
+    socket.on("new_order", handleNewOrderPayload);
+    socket.on("ORDER_CREATED", handleNewOrderPayload);
+
+    socket.on("VENDOR_DASHBOARD_REFRESH", refreshDashboard);
+    socket.on("vendor:dashboardRefresh", refreshDashboard);
+    socket.on("ORDER_STATUS_UPDATED", refreshDashboard);
+    socket.on("vendor:orderStatusUpdated", refreshDashboard);
+    socket.on("RIDER_ASSIGNED", refreshDashboard);
+    socket.on("vendor:riderAssigned", refreshDashboard);
 
     return () => {
       Vibration.cancel();
+
+      socket.emit("vendor-offline", { vendorId: user.id });
       socket.emit("leaveVendorRoom", user.id);
-      socket.emit("leave_vendor_room", user.id);
-      socket.off("NEW_ORDER", handleNewOrder);
-      socket.off("new_order", handleNewOrder);
-      socket.off("ORDER_CREATED", handleNewOrder);
+      socket.emit("leave-vendor-room", user.id);
+
+      socket.off("NEW_ORDER", handleNewOrderPayload);
+      socket.off("vendor:newOrder", handleNewOrderPayload);
+      socket.off("new_order", handleNewOrderPayload);
+      socket.off("ORDER_CREATED", handleNewOrderPayload);
+
+      socket.off("VENDOR_DASHBOARD_REFRESH", refreshDashboard);
+      socket.off("vendor:dashboardRefresh", refreshDashboard);
+      socket.off("ORDER_STATUS_UPDATED", refreshDashboard);
+      socket.off("vendor:orderStatusUpdated", refreshDashboard);
+      socket.off("RIDER_ASSIGNED", refreshDashboard);
+      socket.off("vendor:riderAssigned", refreshDashboard);
+
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [user?.id, user?.role, loadDashboard, showToast]);
+  }, [user?.id, user?.role, accessToken, loadDashboard, showToast]);
 
   const recentOrders = dashboard?.recentOrders || [];
   const restaurant = dashboard?.restaurants?.[0];
 
-  const newOrderCount = useMemo(() => {
-    return recentOrders.filter((order) => isNewOrder(order.status)).length;
-  }, [recentOrders]);
+  const newOrderCount = useMemo(
+    () => recentOrders.filter((order) => isNewOrder(order.status)).length,
+    [recentOrders]
+  );
 
   const quickStats = useMemo(
     () => [
@@ -281,8 +311,13 @@ export default function VendorDashboardScreen({ navigation }: any) {
         value: money(dashboard?.todayRevenue),
       },
       {
+        icon: "time-outline",
+        label: "Pending",
+        value: dashboard?.pendingOrders || newOrderCount || 0,
+      },
+      {
         icon: "flame-outline",
-        label: "Active Orders",
+        label: "Active",
         value: dashboard?.activeOrders || 0,
       },
       {
@@ -290,8 +325,13 @@ export default function VendorDashboardScreen({ navigation }: any) {
         label: "Menu Items",
         value: dashboard?.totalMenuItems || 0,
       },
+      {
+        icon: "checkmark-done-outline",
+        label: "Completed",
+        value: dashboard?.completedOrders || 0,
+      },
     ],
-    [dashboard]
+    [dashboard, newOrderCount]
   );
 
   const closeAlert = () => {
@@ -332,13 +372,11 @@ export default function VendorDashboardScreen({ navigation }: any) {
     setDashboard((prev) => {
       if (!prev) return prev;
 
-      const updatedOrders = (prev.recentOrders || []).map((order) =>
-        order.id === data.id ? { ...order, ...data } : order
-      );
-
       return {
         ...prev,
-        recentOrders: updatedOrders,
+        recentOrders: (prev.recentOrders || []).map((order) =>
+          order.id === data.id ? { ...order, ...data } : order
+        ),
       };
     });
 
@@ -441,9 +479,13 @@ export default function VendorDashboardScreen({ navigation }: any) {
             </Text>
           </View>
 
-          <View style={[styles.openBadge, !restaurant?.isOpen && styles.closedBadge]}>
+          <View
+            style={[styles.openBadge, !restaurant?.isOpen && styles.closedBadge]}
+          >
             <View style={[styles.dot, !restaurant?.isOpen && styles.dotClosed]} />
-            <Text style={[styles.openText, !restaurant?.isOpen && styles.closedText]}>
+            <Text
+              style={[styles.openText, !restaurant?.isOpen && styles.closedText]}
+            >
               {restaurant?.isOpen ? "Open" : "Closed"}
             </Text>
           </View>
@@ -486,6 +528,11 @@ export default function VendorDashboardScreen({ navigation }: any) {
             icon="bar-chart-outline"
             title="Analytics"
             onPress={() => navigation.navigate("VendorAnalytics")}
+          />
+          <QuickAction
+            icon="notifications-outline"
+            title="Alerts"
+            onPress={() => navigation.navigate("VendorNotifications")}
           />
           <QuickAction
             icon="settings-outline"
@@ -579,7 +626,7 @@ function NewOrderModal({
             <View style={styles.alertInfoPill}>
               <Icon name="person-outline" size={14} color={THEME.yellow} />
               <Text style={styles.alertInfoText} numberOfLines={1}>
-                {order.user?.fullName || "Customer"}
+                {order.user?.fullName || order.user?.full_name || "Customer"}
               </Text>
             </View>
 
@@ -592,7 +639,8 @@ function NewOrderModal({
           <View style={styles.alertItemsBox}>
             {items.slice(0, 4).map((item: any) => (
               <Text key={item.id} style={styles.alertItemLine} numberOfLines={1}>
-                {item.quantity}x {item.menuItem?.name || item.itemName || "Item"}
+                {item.quantity}x{" "}
+                {item.menuItem?.name || item.itemName || item.item_name || "Item"}
               </Text>
             ))}
 
@@ -706,7 +754,8 @@ function OrderMiniCard({
       <View style={styles.orderInfo}>
         <Text style={styles.orderTitle}>#{orderNumber}</Text>
         <Text style={styles.orderMeta} numberOfLines={1}>
-          {order.user?.fullName || "Customer"} • {order.items?.length || 0} item(s)
+          {order.user?.fullName || order.user?.full_name || "Customer"} •{" "}
+          {order.items?.length || 0} item(s)
         </Text>
       </View>
 
@@ -947,7 +996,12 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   emptyTitle: { color: THEME.text, fontSize: 17, fontWeight: "900" },
-  emptyText: { color: THEME.muted, textAlign: "center", marginTop: 5, fontWeight: "700" },
+  emptyText: {
+    color: THEME.muted,
+    textAlign: "center",
+    marginTop: 5,
+    fontWeight: "700",
+  },
 
   orderCard: {
     backgroundColor: THEME.card,
@@ -981,9 +1035,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 18,
   },
-  alertBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
+  alertBackdrop: { ...StyleSheet.absoluteFillObject },
   alertCard: {
     backgroundColor: THEME.card,
     borderRadius: 32,
@@ -1029,34 +1081,52 @@ const styles = StyleSheet.create({
   alertInfoText: { color: THEME.text, fontWeight: "800", fontSize: 12 },
   alertItemsBox: {
     width: "100%",
-    backgroundColor: "#0B100B",
+    backgroundColor: THEME.card2,
     borderRadius: 18,
+    padding: 12,
+    marginTop: 14,
     borderWidth: 1,
     borderColor: THEME.border,
-    padding: 13,
-    marginTop: 14,
   },
-  alertItemLine: { color: THEME.text, fontWeight: "800", lineHeight: 22 },
-  alertMore: { color: THEME.green, fontWeight: "900", marginTop: 4 },
-  prepTitle: { color: THEME.text, fontWeight: "900", marginTop: 16, marginBottom: 10 },
-  prepGrid: { flexDirection: "row", flexWrap: "wrap", gap: 9, justifyContent: "center" },
+  alertItemLine: {
+    color: THEME.text,
+    fontWeight: "800",
+    marginBottom: 5,
+  },
+  alertMore: { color: THEME.yellow, fontWeight: "900", marginTop: 4 },
+  prepTitle: {
+    color: THEME.text,
+    fontWeight: "900",
+    alignSelf: "flex-start",
+    marginTop: 16,
+    marginBottom: 10,
+  },
+  prepGrid: {
+    width: "100%",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
   prepChip: {
-    width: "30%",
-    backgroundColor: "#0B100B",
+    width: "31.8%",
+    backgroundColor: THEME.green,
     borderRadius: 17,
-    borderWidth: 1,
-    borderColor: THEME.green,
-    paddingVertical: 13,
+    paddingVertical: 12,
     alignItems: "center",
   },
-  prepValue: { color: THEME.green, fontSize: 20, fontWeight: "900" },
-  prepLabel: { color: THEME.muted, fontSize: 11, fontWeight: "800" },
-  alertActions: { flexDirection: "row", gap: 10, width: "100%", marginTop: 16 },
+  prepValue: { color: THEME.bg, fontSize: 18, fontWeight: "900" },
+  prepLabel: { color: THEME.bg, fontSize: 11, fontWeight: "900", opacity: 0.75 },
+  alertActions: {
+    width: "100%",
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
   rejectBtn: {
     flex: 1,
-    height: 50,
-    borderRadius: 16,
     backgroundColor: THEME.danger,
+    borderRadius: 18,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
@@ -1065,13 +1135,19 @@ const styles = StyleSheet.create({
   rejectText: { color: THEME.text, fontWeight: "900" },
   viewBtn: {
     flex: 1,
-    height: 50,
-    borderRadius: 16,
     backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 18,
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
   },
   viewText: { color: THEME.text, fontWeight: "900" },
-  alertLoader: { marginTop: 12 },
-  disabledBtn: { opacity: 0.55 },
+  disabledBtn: { opacity: 0.6 },
+  alertLoader: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+  },
 });

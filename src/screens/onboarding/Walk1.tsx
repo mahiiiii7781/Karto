@@ -10,17 +10,22 @@ import {
   Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import { useNavigation } from "@react-navigation/native";
-import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { NativeStackScreenProps } from "@react-navigation/native-stack";
 
-type RootStackParamList = {
+type OnboardingStackParamList = {
+  WelcomeScreen: undefined;
+  Walk1: undefined;
   Walk2: undefined;
+  Walk3: undefined;
+};
+
+type Props = NativeStackScreenProps<OnboardingStackParamList, "Walk1"> & {
+  onDone?: () => void;
 };
 
 const THEME = {
   bg: "#070A08",
   card: "#101713",
-  card2: "#151F19",
   green: "#22C55E",
   yellow: "#FACC15",
   text: "#F8FAFC",
@@ -29,10 +34,7 @@ const THEME = {
   black: "#050807",
 };
 
-export default function Walk1() {
-  const navigation =
-    useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-
+export default function Walk1({ navigation }: Props) {
   const fade = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(24)).current;
   const scale = useRef(new Animated.Value(0.92)).current;
@@ -58,7 +60,7 @@ export default function Walk1() {
       }),
     ]).start();
 
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(imageFloat, {
           toValue: -10,
@@ -71,7 +73,11 @@ export default function Walk1() {
           useNativeDriver: true,
         }),
       ])
-    ).start();
+    );
+
+    loop.start();
+
+    return () => loop.stop();
   }, [fade, imageFloat, scale, slide]);
 
   return (
@@ -143,7 +149,6 @@ export default function Walk1() {
         ]}
       >
         <Text style={styles.kicker}>Fresh • Fast • Local</Text>
-
         <Text style={styles.title}>Order Food</Text>
 
         <Text style={styles.description}>

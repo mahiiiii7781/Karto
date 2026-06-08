@@ -8,17 +8,23 @@ export type Address = {
   address?: string | null;
   addressLine?: string | null;
   fullAddress?: string | null;
+  full_address?: string | null;
 
   landmark?: string | null;
 
   city?: string | null;
+  district?: string | null;
   state?: string | null;
+  stateName?: string | null;
+  state_name?: string | null;
   country?: string | null;
 
   pincode?: string | null;
+  pinCode?: string | null;
+  pin_code?: string | null;
 
-  latitude?: number | null;
-  longitude?: number | null;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 
   isDefault?: boolean;
   is_default?: boolean;
@@ -33,15 +39,17 @@ export type Address = {
 export type CreateAddressPayload = {
   label: string;
   address: string;
-  landmark: string;
+  landmark?: string | null;
   city: string;
   state?: string | null;
   country?: string | null;
-  pincode: string;
+  pincode?: string | null;
   latitude?: number | null;
   longitude?: number | null;
   isDefault?: boolean;
 };
+
+export type UpdateAddressPayload = Partial<CreateAddressPayload>;
 
 type ApiResult<T> = {
   data: T | null;
@@ -58,9 +66,7 @@ const normalizeData = (res: any) => {
   );
 };
 
-const safe = async <T>(
-  fn: () => Promise<any>
-): Promise<ApiResult<T>> => {
+const safe = async <T>(fn: () => Promise<any>): Promise<ApiResult<T>> => {
   try {
     const res = await fn();
 
@@ -69,10 +75,7 @@ const safe = async <T>(
       error: null,
     };
   } catch (error: any) {
-    console.log(
-      "ADDRESS API ERROR:",
-      error?.response?.data || error?.message
-    );
+    console.log("ADDRESS API ERROR:", error?.response?.data || error?.message);
 
     return {
       data: null,
@@ -83,43 +86,38 @@ const safe = async <T>(
 
 export const addressService = {
   getAddresses: async () => {
-    return safe<Address[]>(() =>
-      apiClient.get("/address")
-    );
+    return safe<Address[]>(() => apiClient.get("/address"));
+  },
+
+  getDefaultAddress: async () => {
+    return safe<Address>(() => apiClient.get("/address/default"));
   },
 
   getAddressById: async (id: string) => {
-    return safe<Address>(() =>
-      apiClient.get(`/address/${id}`)
-    );
+    return safe<Address>(() => apiClient.get(`/address/${id}`));
   },
 
-  createAddress: async (
-    payload: CreateAddressPayload
-  ) => {
-    return safe<Address>(() =>
-      apiClient.post("/address", payload)
-    );
+  createAddress: async (payload: CreateAddressPayload) => {
+    return safe<Address>(() => apiClient.post("/address", payload));
   },
 
-  updateAddress: async (
-    id: string,
-    payload: Partial<CreateAddressPayload>
-  ) => {
-    return safe<Address>(() =>
-      apiClient.put(`/address/${id}`, payload)
-    );
+  updateAddress: async (id: string, payload: UpdateAddressPayload) => {
+    return safe<Address>(() => apiClient.patch(`/address/${id}`, payload));
   },
 
   deleteAddress: async (id: string) => {
-    return safe<boolean>(() =>
+    return safe<{ id?: string; deletedId?: string; addresses?: Address[] }>(() =>
       apiClient.delete(`/address/${id}`)
     );
   },
 
   setDefaultAddress: async (id: string) => {
-    return safe<Address>(() =>
-      apiClient.patch(`/address/${id}/default`)
-    );
+    return safe<Address>(() => apiClient.patch(`/address/${id}/default`));
+  },
+
+  lookupPincode: async (pincode: string) => {
+    return safe<any>(() => apiClient.get(`/address/pincode/${pincode}`));
   },
 };
+
+export default addressService;

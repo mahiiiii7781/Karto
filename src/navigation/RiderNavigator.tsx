@@ -11,6 +11,9 @@ import RiderSupportScreen from "@/screens/rider/RiderSupportScreen";
 import RiderIncentivesScreen from "@/screens/rider/RiderIncentivesScreen";
 import RiderLiveTrackingScreen from "@/screens/rider/RiderLiveTrackingScreen";
 import RiderAnalyticsScreen from "@/screens/rider/RiderAnalyticsScreen";
+import RiderEarningsScreen from "@/screens/rider/RiderEarningsScreen";
+import RiderLeaderboardScreen from "@/screens/rider/RiderLeaderboardScreen";
+import RiderActiveOrdersScreen from "@/screens/rider/RiderActiveOrdersScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -24,14 +27,21 @@ export default function RiderNavigator() {
       }}
     >
       <Stack.Screen name="RiderHome" component={RiderBottomTabNavigator} />
+
       <Stack.Screen name="RiderOrderDetail" component={RiderOrderDetailScreen} />
+      <Stack.Screen name="RiderActiveOrders" component={RiderActiveOrdersScreen} />
+      <Stack.Screen name="RiderLiveTracking" component={RiderLiveTrackingScreen} />
+
       <Stack.Screen name="RiderWallet" component={RiderWalletScreen} />
+      <Stack.Screen name="RiderEarnings" component={RiderEarningsScreen} />
       <Stack.Screen name="RiderDeliveryHistory" component={RiderDeliveryHistoryScreen} />
+
+      <Stack.Screen name="RiderLeaderboard" component={RiderLeaderboardScreen} />
+      <Stack.Screen name="RiderAnalytics" component={RiderAnalyticsScreen} />
+      <Stack.Screen name="RiderIncentives" component={RiderIncentivesScreen} />
+
       <Stack.Screen name="RiderKyc" component={RiderKycScreen} />
       <Stack.Screen name="RiderSupport" component={RiderSupportScreen} />
-      <Stack.Screen name="RiderIncentives" component={RiderIncentivesScreen} />
-      <Stack.Screen name="RiderLiveTracking" component={RiderLiveTrackingScreen} />
-      <Stack.Screen name="RiderAnalytics" component={RiderAnalyticsScreen} />
     </Stack.Navigator>
   );
 }

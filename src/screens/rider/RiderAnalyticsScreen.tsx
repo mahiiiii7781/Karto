@@ -20,7 +20,9 @@ const T = {
   card2: "#0D120F",
   black: "#030504",
   green: "#22C55E",
+  greenDark: "#0F3D24",
   yellow: "#FACC15",
+  yellowDark: "#5B4708",
   text: "#F8FAFC",
   muted: "#9CA3AF",
   border: "#1E2A22",
@@ -29,16 +31,39 @@ const T = {
 
 const money = (v: any) => `₹${Number(v || 0).toFixed(0)}`;
 
+const safeNum = (v: any) => Number(v || 0);
+
+const getDateText = (value?: string) => {
+  if (!value) return "Today";
+
+  try {
+    return new Date(value).toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "Today";
+  }
+};
+
 export default function RiderAnalyticsScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const [toast, setToast] = useState("");
+  const [profile, setProfile] = useState<any>(null);
   const [analytics, setAnalytics] = useState<any>({});
   const [wallet, setWallet] = useState<any>({});
-  const [earnings, setEarnings] = useState<any[]>([]);
+  const [settlements, setSettlements] = useState<any[]>([]);
+  const [dailyEarnings, setDailyEarnings] = useState<any[]>([]);
+  const [weeklyEarnings, setWeeklyEarnings] = useState<any[]>([]);
+  const [monthlyEarnings, setMonthlyEarnings] = useState<any[]>([]);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
-  const [profile, setProfile] = useState<any>(null);
+  const [incentives, setIncentives] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [activeOrders, setActiveOrders] = useState<any[]>([]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -51,21 +76,41 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
         profileRes,
         analyticsRes,
         walletRes,
-        todayEarningsRes,
+        dailyEarningsRes,
+        weeklyEarningsRes,
+        monthlyEarningsRes,
         leaderboardRes,
+        incentivesRes,
+        notificationsRes,
+        activeOrdersRes,
       ] = await Promise.all([
         riderService.getProfile(),
         riderService.getAnalytics(),
         riderService.getWallet(),
-        riderService.getTodayEarnings(),
+        riderService.getTodayEarnings("daily"),
+        riderService.getTodayEarnings("weekly"),
+        riderService.getTodayEarnings("monthly"),
         riderService.getLeaderboard(),
+        riderService.getIncentives(),
+        riderService.getNotifications(),
+        riderService.getActiveOrders(),
       ]);
 
-      setProfile(profileRes?.rider || null);
-      setAnalytics(analyticsRes?.analytics || {});
-      setWallet(walletRes?.wallet || {});
-      setEarnings(todayEarningsRes?.earnings || []);
-      setLeaderboard(leaderboardRes?.leaderboard || []);
+      if (profileRes?.error) {
+        showToast(profileRes?.error?.message || "Profile load failed");
+      }
+
+      setProfile(profileRes?.data || null);
+      setAnalytics(analyticsRes?.data || {});
+      setWallet(walletRes?.data?.wallet || walletRes?.data || {});
+      setSettlements(walletRes?.data?.settlements || []);
+      setDailyEarnings(dailyEarningsRes?.data?.earnings || []);
+      setWeeklyEarnings(weeklyEarningsRes?.data?.earnings || []);
+      setMonthlyEarnings(monthlyEarningsRes?.data?.earnings || []);
+      setLeaderboard(leaderboardRes?.data || []);
+      setIncentives(incentivesRes?.data || []);
+      setNotifications(notificationsRes?.data || []);
+      setActiveOrders(activeOrdersRes?.data || []);
     } catch (e: any) {
       showToast(e?.message || "Analytics load failed");
     } finally {
@@ -84,27 +129,47 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
   };
 
   const rank = useMemo(() => {
-    return (
-      leaderboard?.find((x) => x?.rider?.id === profile?.id)?.rank || "-"
-    );
+    return leaderboard?.find((x) => x?.rider?.id === profile?.id)?.rank || "-";
   }, [leaderboard, profile]);
 
+  const todayEarnings = safeNum(analytics?.todayEarnings || wallet?.todayEarn);
+  const totalEarnings = safeNum(analytics?.totalEarnings || wallet?.totalEarn);
+  const walletBalance = safeNum(analytics?.walletBalance || wallet?.balance);
+  const deliveredOrders = safeNum(analytics?.deliveredOrders);
+  const activeOrderCount = safeNum(analytics?.activeOrders || activeOrders.length);
+  const todayOrders = safeNum(analytics?.todayOrders);
+  const couponCount = safeNum(analytics?.coupons);
+  const activeIncentives = incentives.filter((x) => !x?.isCompleted).length;
+  const unreadNotifications = notifications.filter((x) => !x?.isRead).length;
+
+  const weeklyTotal = weeklyEarnings.reduce(
+    (sum, item) => sum + safeNum(item?.amount),
+    0
+  );
+
+  const monthlyTotal = monthlyEarnings.reduce(
+    (sum, item) => sum + safeNum(item?.amount),
+    0
+  );
+
   const completionRate = useMemo(() => {
-    const delivered = Number(analytics?.deliveredOrders || 0);
-    const active = Number(analytics?.activeOrders || 0);
-    const total = delivered + active;
-
+    const total = deliveredOrders + activeOrderCount;
     if (!total) return 0;
-
-    return Math.round((delivered / total) * 100);
-  }, [analytics]);
+    return Math.round((deliveredOrders / total) * 100);
+  }, [deliveredOrders, activeOrderCount]);
 
   const todayTarget = 10;
-  const todayOrders = Number(analytics?.todayOrders || 0);
   const targetPercent = Math.min(
     100,
     Math.round((todayOrders / todayTarget) * 100)
   );
+
+  const earningLevel = useMemo(() => {
+    if (todayEarnings >= 1000) return "Excellent";
+    if (todayEarnings >= 500) return "Good";
+    if (todayEarnings > 0) return "Started";
+    return "Waiting";
+  }, [todayEarnings]);
 
   if (loading) {
     return (
@@ -128,16 +193,13 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
       )}
 
       <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          onPress={() => navigation?.goBack?.()}
-        >
+        <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack?.()}>
           <Icon name="arrow-back" size={22} color={T.text} />
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>Rider Analytics</Text>
-          <Text style={styles.sub}>Performance, earnings and delivery score</Text>
+          <Text style={styles.sub}>Performance, earnings, wallet and delivery score</Text>
         </View>
 
         <TouchableOpacity style={styles.refreshBtn} onPress={loadAnalytics}>
@@ -157,14 +219,24 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
         }
       >
         <View style={styles.heroCard}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.heroLabel}>Total Earnings</Text>
-            <Text style={styles.heroAmount}>
-              {money(analytics?.totalEarnings || wallet?.totalEarn)}
-            </Text>
+            <Text style={styles.heroAmount}>{money(totalEarnings)}</Text>
             <Text style={styles.heroSub}>
-              Wallet balance: {money(wallet?.balance)}
+              Wallet {money(walletBalance)} • Today {money(todayEarnings)}
             </Text>
+
+            <View style={styles.heroPills}>
+              <View style={styles.heroPill}>
+                <Text style={styles.heroPillText}>{earningLevel}</Text>
+              </View>
+
+              <View style={styles.heroPillDark}>
+                <Text style={styles.heroPillDarkText}>
+                  {profile?.isOnline ? "ONLINE" : "OFFLINE"}
+                </Text>
+              </View>
+            </View>
           </View>
 
           <View style={styles.rankCircle}>
@@ -177,25 +249,49 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
           <MetricCard
             icon="cash-outline"
             title="Today Earn"
-            value={money(analytics?.todayEarnings)}
+            value={money(todayEarnings)}
             accent="yellow"
+          />
+          <MetricCard
+            icon="calendar-outline"
+            title="Weekly"
+            value={money(weeklyTotal)}
+            accent="green"
+          />
+          <MetricCard
+            icon="bar-chart-outline"
+            title="Monthly"
+            value={money(monthlyTotal)}
+            accent="yellow"
+          />
+          <MetricCard
+            icon="wallet-outline"
+            title="Balance"
+            value={money(walletBalance)}
+            accent="green"
           />
           <MetricCard
             icon="cube-outline"
             title="Today Orders"
-            value={analytics?.todayOrders || 0}
+            value={todayOrders}
             accent="green"
           />
           <MetricCard
             icon="bicycle-outline"
             title="Active Trips"
-            value={analytics?.activeOrders || 0}
+            value={activeOrderCount}
             accent="green"
           />
           <MetricCard
             icon="checkmark-done-outline"
             title="Delivered"
-            value={analytics?.deliveredOrders || 0}
+            value={deliveredOrders}
+            accent="yellow"
+          />
+          <MetricCard
+            icon="ticket-outline"
+            title="Coupons"
+            value={couponCount}
             accent="yellow"
           />
         </View>
@@ -204,10 +300,10 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
 
         <View style={styles.scoreCard}>
           <View style={styles.scoreTop}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.scoreTitle}>Delivery Completion</Text>
               <Text style={styles.scoreSub}>
-                Based on delivered and active orders
+                Based on delivered and active deliveries
               </Text>
             </View>
 
@@ -217,18 +313,14 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
           <ProgressBar percent={completionRate} />
 
           <View style={styles.scoreFooter}>
-            <Text style={styles.scoreHint}>
-              Delivered: {analytics?.deliveredOrders || 0}
-            </Text>
-            <Text style={styles.scoreHint}>
-              Active: {analytics?.activeOrders || 0}
-            </Text>
+            <Text style={styles.scoreHint}>Delivered: {deliveredOrders}</Text>
+            <Text style={styles.scoreHint}>Active: {activeOrderCount}</Text>
           </View>
         </View>
 
         <View style={styles.scoreCard}>
           <View style={styles.scoreTop}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.scoreTitle}>Today Target</Text>
               <Text style={styles.scoreSub}>
                 Complete {todayTarget} orders to hit daily goal
@@ -244,17 +336,40 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
             <Text style={styles.scoreHint}>
               Orders: {todayOrders}/{todayTarget}
             </Text>
-            <Text style={styles.scoreHint}>
-              Earned: {money(analytics?.todayEarnings)}
-            </Text>
+            <Text style={styles.scoreHint}>Earned: {money(todayEarnings)}</Text>
           </View>
+        </View>
+
+        <Text style={styles.section}>Rider Activity</Text>
+
+        <View style={styles.activityGrid}>
+          <ActivityChip
+            icon="notifications-outline"
+            title="Notifications"
+            value={`${unreadNotifications} unread`}
+          />
+          <ActivityChip
+            icon="gift-outline"
+            title="Incentives"
+            value={`${activeIncentives} active`}
+          />
+          <ActivityChip
+            icon="receipt-outline"
+            title="Settlements"
+            value={`${settlements.length} records`}
+          />
+          <ActivityChip
+            icon="shield-checkmark-outline"
+            title="KYC"
+            value={profile?.kycStatus || "PENDING"}
+          />
         </View>
 
         <Text style={styles.section}>Today Earnings</Text>
 
         <View style={styles.listCard}>
-          {earnings.length > 0 ? (
-            earnings.slice(0, 6).map((item: any) => (
+          {dailyEarnings.length > 0 ? (
+            dailyEarnings.slice(0, 6).map((item: any) => (
               <View key={item.id} style={styles.earningRow}>
                 <View style={styles.earningIcon}>
                   <Icon name="cash" size={18} color={T.black} />
@@ -265,9 +380,9 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
                     {item.note || "Delivery earning"}
                   </Text>
                   <Text style={styles.earningSub}>
-                    {item.createdAt
-                      ? new Date(item.createdAt).toLocaleTimeString()
-                      : "Today"}
+                    {item?.order?.orderNumber
+                      ? `Order #${item.order.orderNumber}`
+                      : getDateText(item.createdAt)}
                   </Text>
                 </View>
 
@@ -275,67 +390,109 @@ export default function RiderAnalyticsScreen({ navigation }: any) {
               </View>
             ))
           ) : (
-            <View style={styles.emptyBox}>
-              <Icon name="analytics-outline" size={42} color={T.yellow} />
-              <Text style={styles.emptyTitle}>No earnings yet</Text>
-              <Text style={styles.emptyText}>
-                Complete deliveries to see earning analytics.
-              </Text>
-            </View>
+            <EmptyBox
+              icon="analytics-outline"
+              title="No earnings yet"
+              text="Complete deliveries to see earning analytics."
+            />
+          )}
+        </View>
+
+        <Text style={styles.section}>Settlement History</Text>
+
+        <View style={styles.listCard}>
+          {settlements.length > 0 ? (
+            settlements.slice(0, 5).map((item: any) => (
+              <View key={item.id} style={styles.settlementRow}>
+                <View style={styles.settlementIcon}>
+                  <Icon name="receipt" size={18} color={T.yellow} />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.earningTitle}>
+                    {item.status || "PENDING"} Settlement
+                  </Text>
+                  <Text style={styles.earningSub}>{getDateText(item.createdAt)}</Text>
+                </View>
+
+                <Text style={styles.earningAmount}>{money(item.amount)}</Text>
+              </View>
+            ))
+          ) : (
+            <EmptyBox
+              icon="receipt-outline"
+              title="No settlements"
+              text="Payout and settlement history will appear here."
+            />
           )}
         </View>
 
         <Text style={styles.section}>Leaderboard Preview</Text>
 
         <View style={styles.listCard}>
-          {leaderboard.slice(0, 5).map((item: any) => (
-            <View key={item?.rider?.id || item.rank} style={styles.leaderRow}>
-              <View
-                style={[
-                  styles.leaderRank,
-                  item?.rider?.id === profile?.id && styles.myRank,
-                ]}
-              >
-                <Text style={styles.leaderRankText}>{item.rank}</Text>
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.leaderName}>
-                  {item?.rider?.fullName || "Karto Rider"}
-                </Text>
-                <Text style={styles.leaderSub}>
-                  Today {money(item?.todayEarn)} • Total {money(item?.totalEarn)}
-                </Text>
-              </View>
-
-              {item?.rider?.id === profile?.id && (
-                <View style={styles.youBadge}>
-                  <Text style={styles.youText}>YOU</Text>
+          {leaderboard.length > 0 ? (
+            leaderboard.slice(0, 5).map((item: any) => (
+              <View key={item?.rider?.id || item.rank} style={styles.leaderRow}>
+                <View
+                  style={[
+                    styles.leaderRank,
+                    item?.rider?.id === profile?.id && styles.myRank,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.leaderRankText,
+                      item?.rider?.id === profile?.id && styles.myRankText,
+                    ]}
+                  >
+                    {item.rank}
+                  </Text>
                 </View>
-              )}
-            </View>
-          ))}
 
-          {leaderboard.length === 0 && (
-            <View style={styles.emptyBox}>
-              <Icon name="trophy-outline" size={42} color={T.yellow} />
-              <Text style={styles.emptyTitle}>No leaderboard data</Text>
-              <Text style={styles.emptyText}>
-                Rankings will appear after deliveries.
-              </Text>
-            </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.leaderName}>
+                    {item?.rider?.fullName || "Karto Rider"}
+                  </Text>
+                  <Text style={styles.leaderSub}>
+                    Today {money(item?.todayEarn)} • Total {money(item?.totalEarn)}
+                  </Text>
+                </View>
+
+                {item?.rider?.id === profile?.id && (
+                  <View style={styles.youBadge}>
+                    <Text style={styles.youText}>YOU</Text>
+                  </View>
+                )}
+              </View>
+            ))
+          ) : (
+            <EmptyBox
+              icon="trophy-outline"
+              title="No leaderboard data"
+              text="Rankings will appear after deliveries."
+            />
           )}
         </View>
 
-        <TouchableOpacity
-          style={styles.primaryBtn}
-          onPress={() => navigation?.navigate?.("RiderWallet")}
-        >
-          <Text style={styles.primaryBtnText}>Open Wallet</Text>
-          <Icon name="wallet" size={20} color={T.black} />
-        </TouchableOpacity>
+        <View style={styles.bottomActions}>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => navigation?.navigate?.("RiderLeaderboard")}
+          >
+            <Text style={styles.secondaryBtnText}>Leaderboard</Text>
+            <Icon name="trophy" size={18} color={T.yellow} />
+          </TouchableOpacity>
 
-        <View style={{ height: 40 }} />
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={() => navigation?.navigate?.("RiderWallet")}
+          >
+            <Text style={styles.primaryBtnText}>Open Wallet</Text>
+            <Icon name="wallet" size={20} color={T.black} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ height: 44 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -361,10 +518,34 @@ function MetricCard({ icon, title, value, accent }: any) {
   );
 }
 
+function ActivityChip({ icon, title, value }: any) {
+  return (
+    <View style={styles.activityChip}>
+      <Icon name={icon} size={19} color={T.yellow} />
+      <View style={{ flex: 1 }}>
+        <Text style={styles.activityTitle}>{title}</Text>
+        <Text style={styles.activityValue}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
 function ProgressBar({ percent }: any) {
+  const safePercent = Math.max(0, Math.min(Number(percent || 0), 100));
+
   return (
     <View style={styles.progressOuter}>
-      <View style={[styles.progressInner, { width: `${percent}%` }]} />
+      <View style={[styles.progressInner, { width: `${safePercent}%` }]} />
+    </View>
+  );
+}
+
+function EmptyBox({ icon, title, text }: any) {
+  return (
+    <View style={styles.emptyBox}>
+      <Icon name={icon} size={42} color={T.yellow} />
+      <Text style={styles.emptyTitle}>{title}</Text>
+      <Text style={styles.emptyText}>{text}</Text>
     </View>
   );
 }
@@ -438,8 +619,43 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   heroLabel: { color: T.muted, fontWeight: "800" },
-  heroAmount: { color: T.yellow, fontSize: 38, fontWeight: "900", marginTop: 4 },
+  heroAmount: {
+    color: T.yellow,
+    fontSize: 38,
+    fontWeight: "900",
+    marginTop: 4,
+  },
   heroSub: { color: T.green, marginTop: 6, fontWeight: "800" },
+  heroPills: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+    flexWrap: "wrap",
+  },
+  heroPill: {
+    backgroundColor: T.yellow,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  heroPillText: {
+    color: T.black,
+    fontSize: 11,
+    fontWeight: "900",
+  },
+  heroPillDark: {
+    backgroundColor: T.black,
+    borderRadius: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: T.border,
+  },
+  heroPillDarkText: {
+    color: T.green,
+    fontSize: 11,
+    fontWeight: "900",
+  },
   rankCircle: {
     width: 82,
     height: 82,
@@ -474,7 +690,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  metricValue: { color: T.text, fontSize: 22, fontWeight: "900", marginTop: 12 },
+  metricValue: {
+    color: T.text,
+    fontSize: 22,
+    fontWeight: "900",
+    marginTop: 12,
+  },
   metricTitle: { color: T.muted, fontSize: 12, marginTop: 4 },
 
   section: {
@@ -496,6 +717,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 10,
   },
   scoreTitle: { color: T.text, fontSize: 15, fontWeight: "900" },
   scoreSub: { color: T.muted, fontSize: 12, marginTop: 3 },
@@ -518,6 +740,30 @@ const styles = StyleSheet.create({
     marginTop: 11,
   },
   scoreHint: { color: T.muted, fontSize: 12, fontWeight: "700" },
+
+  activityGrid: {
+    gap: 10,
+  },
+  activityChip: {
+    backgroundColor: T.card,
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: T.border,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  activityTitle: {
+    color: T.text,
+    fontWeight: "900",
+  },
+  activityValue: {
+    color: T.muted,
+    fontSize: 12,
+    marginTop: 3,
+    fontWeight: "700",
+  },
 
   listCard: {
     backgroundColor: T.card,
@@ -546,6 +792,25 @@ const styles = StyleSheet.create({
   earningSub: { color: T.muted, fontSize: 12, marginTop: 3 },
   earningAmount: { color: T.yellow, fontWeight: "900" },
 
+  settlementRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: T.border,
+  },
+  settlementIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 17,
+    backgroundColor: T.black,
+    borderWidth: 1,
+    borderColor: T.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   leaderRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -569,6 +834,7 @@ const styles = StyleSheet.create({
     borderColor: T.yellow,
   },
   leaderRankText: { color: T.text, fontWeight: "900" },
+  myRankText: { color: T.black },
   leaderName: { color: T.text, fontWeight: "900" },
   leaderSub: { color: T.muted, fontSize: 12, marginTop: 3 },
   youBadge: {
@@ -588,15 +854,33 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
 
+  bottomActions: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 18,
+  },
   primaryBtn: {
+    flex: 1,
     backgroundColor: T.yellow,
     borderRadius: 18,
     height: 54,
-    marginTop: 18,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 8,
   },
   primaryBtnText: { color: T.black, fontSize: 15, fontWeight: "900" },
+  secondaryBtn: {
+    flex: 1,
+    backgroundColor: T.card,
+    borderColor: T.border,
+    borderWidth: 1,
+    borderRadius: 18,
+    height: 54,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+  secondaryBtnText: { color: T.yellow, fontSize: 15, fontWeight: "900" },
 });

@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -12,27 +12,29 @@ import {
   Platform,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import { CommonActions, useNavigation } from "@react-navigation/native";
+import { CommonActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Toast from "react-native-toast-message";
 
 import { useAuth } from "@/context/AuthContext";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
   green: "#22C55E",
-  greenDark: "#15803D",
-  yellow: "#FACC15",
-  orange: "#FB923C",
-  blue: "#38BDF8",
-  purple: "#A78BFA",
-  pink: "#F472B6",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
+  yellow: "#F59E0B",
+  purple: "#8B5CF6",
+  pink: "#EC4899",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
+  white: "#FFFFFF",
   black: "#050807",
 };
 
@@ -50,16 +52,35 @@ const showToast = (
   });
 };
 
-const MenuRow = ({ icon, title, subtitle, danger, badge, color, onPress }: any) => (
-  <TouchableOpacity style={styles.menuRow} activeOpacity={0.85} onPress={onPress}>
+const getInitials = (name?: string | null, email?: string | null) => {
+  const source = String(name || email || "Karto User").trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+
+  return source.charAt(0).toUpperCase() || "K";
+};
+
+const MenuRow = ({
+  icon,
+  title,
+  subtitle,
+  danger,
+  badge,
+  color = THEME.orange,
+  onPress,
+}: any) => (
+  <TouchableOpacity style={styles.menuRow} activeOpacity={0.86} onPress={onPress}>
     <View
       style={[
         styles.menuIconBox,
         danger && styles.dangerIconBox,
-        !!color && !danger && { borderColor: `${color}55`, backgroundColor: `${color}18` },
+        !danger && { backgroundColor: `${color}16` },
       ]}
     >
-      <Icon name={icon} size={21} color={danger ? THEME.danger : color || THEME.green} />
+      <Icon name={icon} size={21} color={danger ? THEME.danger : color} />
     </View>
 
     <View style={styles.menuTextBox}>
@@ -84,7 +105,7 @@ const MenuRow = ({ icon, title, subtitle, danger, badge, color, onPress }: any) 
 
 const StatCard = ({ icon, value, label, color }: any) => (
   <View style={styles.statCard}>
-    <View style={[styles.statIcon, { backgroundColor: `${color}18`, borderColor: `${color}55` }]}>
+    <View style={[styles.statIcon, { backgroundColor: `${color}16` }]}>
       <Icon name={icon} size={20} color={color} />
     </View>
     <Text style={styles.statValue}>{value}</Text>
@@ -93,8 +114,8 @@ const StatCard = ({ icon, value, label, color }: any) => (
 );
 
 const QuickAction = ({ icon, label, color, onPress }: any) => (
-  <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.85}>
-    <View style={[styles.quickIcon, { backgroundColor: `${color}18`, borderColor: `${color}55` }]}>
+  <TouchableOpacity style={styles.quickAction} onPress={onPress} activeOpacity={0.86}>
+    <View style={[styles.quickIcon, { backgroundColor: `${color}16` }]}>
       <Icon name={icon} size={23} color={color} />
     </View>
     <Text style={styles.quickText}>{label}</Text>
@@ -103,9 +124,10 @@ const QuickAction = ({ icon, label, color, onPress }: any) => (
 
 export default function ProfileScreen() {
   const navigation = useNavigation<any>();
-  const { user, signOut } = useAuth();
+  const { user, signOut, reloadUser } = useAuth();
 
   const [loggingOut, setLoggingOut] = useState(false);
+  const [refreshingUser, setRefreshingUser] = useState(false);
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
 
   const isLoggedIn = !!user?.id;
@@ -121,11 +143,34 @@ export default function ProfileScreen() {
       fullName,
       email: user?.email || "Login to manage your account",
       phone: (user as any)?.phone || "Add phone number",
-      avatarUrl: (user as any)?.avatarUrl || (user as any)?.avatar_url || "",
+      avatarUrl:
+        (user as any)?.avatarUrl ||
+        (user as any)?.avatar_url ||
+        (user as any)?.profileImage ||
+        "",
       role: user?.role || "GUEST",
       isActive: (user as any)?.isActive ?? (user as any)?.is_active ?? true,
     };
   }, [user]);
+
+  const refreshProfile = useCallback(async () => {
+    if (!isLoggedIn || !reloadUser) return;
+
+    try {
+      setRefreshingUser(true);
+      await reloadUser();
+    } catch {
+      // silent
+    } finally {
+      setRefreshingUser(false);
+    }
+  }, [isLoggedIn, reloadUser]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfile();
+    }, [refreshProfile])
+  );
 
   const requireAuth = useCallback(
     (message = "Please sign in to continue.") => {
@@ -156,12 +201,7 @@ export default function ProfileScreen() {
         console.log("SIGNOUT ERROR:", error);
       }
 
-      await AsyncStorage.multiRemove([
-        "accessToken",
-        "refreshToken",
-        "user",
-        "hasLaunched",
-      ]);
+      await AsyncStorage.multiRemove(["accessToken", "refreshToken", "user"]);
 
       setLogoutModalVisible(false);
       showToast("success", "Logged out", "You have been signed out successfully.");
@@ -178,20 +218,23 @@ export default function ProfileScreen() {
     navigation.navigate(screen, params);
   };
 
-  const openCoupons = () => {
-    navigation.navigate("Coupons");
-  };
-
   const openAuth = () => navigation.navigate("Auth");
+
+  const openCoupons = () => navigation.navigate("Coupons");
+
+  const openOrders = () => safeNavigate("Orders");
+
+  const openNotifications = () => safeNavigate("Notifications");
+
+  const openWallet = () => safeNavigate("Wallet");
+
+  const openFavorites = () => safeNavigate("Favorites");
 
   return (
     <View style={styles.screen}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
           <View style={styles.headerTextBox}>
             <Text style={styles.headerTitle}>Profile</Text>
@@ -201,11 +244,28 @@ export default function ProfileScreen() {
           </View>
 
           <TouchableOpacity
-            style={styles.editBtn}
-            onPress={() => safeNavigate("EditProfile")}
+            style={styles.refreshBtn}
+            onPress={refreshProfile}
+            disabled={!isLoggedIn || refreshingUser}
             activeOpacity={0.85}
           >
-            <Icon name={isLoggedIn ? "create-outline" : "log-in-outline"} size={22} color={THEME.black} />
+            {refreshingUser ? (
+              <ActivityIndicator size="small" color={THEME.white} />
+            ) : (
+              <Icon name="refresh" size={19} color={THEME.white} />
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.editBtn}
+            onPress={() => (isLoggedIn ? safeNavigate("EditProfile") : openAuth())}
+            activeOpacity={0.85}
+          >
+            <Icon
+              name={isLoggedIn ? "create-outline" : "log-in-outline"}
+              size={22}
+              color={THEME.white}
+            />
           </TouchableOpacity>
         </View>
 
@@ -223,24 +283,36 @@ export default function ProfileScreen() {
             {!isLoggedIn && (
               <TouchableOpacity style={styles.loginHeroBtn} onPress={openAuth} activeOpacity={0.9}>
                 <Text style={styles.loginHeroText}>Login / Signup</Text>
-                <Icon name="arrow-forward" size={16} color={THEME.black} />
+                <Icon name="arrow-forward" size={16} color={THEME.white} />
               </TouchableOpacity>
             )}
           </View>
 
           <View style={styles.heroIcon}>
-            <Icon name="sparkles" size={34} color={THEME.black} />
+            <Icon name="sparkles" size={34} color={THEME.white} />
           </View>
         </View>
 
         <View style={styles.profileCard}>
-          <View style={styles.avatarWrap}>
-            {profile.avatarUrl ? (
-              <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
-            ) : (
-              <Text style={styles.avatarText}>
-                {profile.fullName.charAt(0).toUpperCase()}
-              </Text>
+          <View style={styles.avatarOuter}>
+            <View style={styles.avatarWrap}>
+              {profile.avatarUrl ? (
+                <Image source={{ uri: profile.avatarUrl }} style={styles.avatar} />
+              ) : (
+                <Text style={styles.avatarText}>
+                  {getInitials(profile.fullName, profile.email)}
+                </Text>
+              )}
+            </View>
+
+            {isLoggedIn && (
+              <TouchableOpacity
+                style={styles.avatarEditDot}
+                onPress={() => safeNavigate("EditProfile")}
+                activeOpacity={0.85}
+              >
+                <Icon name="camera" size={15} color={THEME.white} />
+              </TouchableOpacity>
             )}
           </View>
 
@@ -261,7 +333,7 @@ export default function ProfileScreen() {
 
             <View style={styles.roleRow}>
               <View style={styles.rolePill}>
-                <Icon name="shield-checkmark-outline" size={14} color={THEME.green} />
+                <Icon name="shield-checkmark-outline" size={14} color={THEME.orange} />
                 <Text style={styles.roleText}>{profile.role}</Text>
               </View>
 
@@ -277,16 +349,16 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.statsRow}>
-          <StatCard icon="bag-check-outline" value="0" label="Orders" color={THEME.green} />
-          <StatCard icon="pricetag-outline" value="Live" label="Coupons" color={THEME.yellow} />
+          <StatCard icon="bag-check-outline" value="Live" label="Orders" color={THEME.orange} />
+          <StatCard icon="pricetag-outline" value="Hot" label="Coupons" color={THEME.yellow} />
           <StatCard icon="sparkles-outline" value="New" label="Rewards" color={THEME.purple} />
         </View>
 
         <View style={styles.quickCard}>
-          <QuickAction icon="receipt-outline" label="Orders" color={THEME.green} onPress={() => safeNavigate("Orders")} />
+          <QuickAction icon="receipt-outline" label="Orders" color={THEME.orange} onPress={openOrders} />
           <QuickAction icon="location-outline" label="Address" color={THEME.blue} onPress={() => safeNavigate("Address")} />
-          <QuickAction icon="pricetag-outline" label="Coupons" color={THEME.yellow} onPress={openCoupons} />
-          <QuickAction icon="headset-outline" label="Support" color={THEME.orange} onPress={() => safeNavigate("HelpSupport")} />
+          <QuickAction icon="notifications-outline" label="Alerts" color={THEME.pink} onPress={openNotifications} />
+          <QuickAction icon="headset-outline" label="Support" color={THEME.green} onPress={() => safeNavigate("HelpSupport")} />
         </View>
 
         <View style={styles.infoCard}>
@@ -296,7 +368,7 @@ export default function ProfileScreen() {
             icon="person-outline"
             title="Personal Information"
             subtitle="Manage name, phone and profile photo"
-            color={THEME.green}
+            color={THEME.orange}
             onPress={() => safeNavigate("EditProfile")}
           />
 
@@ -313,19 +385,24 @@ export default function ProfileScreen() {
             title="My Orders"
             subtitle="Track current and past orders"
             color={THEME.yellow}
-            onPress={() => safeNavigate("Orders")}
+            onPress={openOrders}
           />
 
-          {/* Coming soon hidden for final UI */}
-          {/*
+          <MenuRow
+            icon="notifications-outline"
+            title="Notifications"
+            subtitle="Order updates, offers and alerts"
+            color={THEME.pink}
+            onPress={openNotifications}
+          />
+
           <MenuRow
             icon="heart-outline"
             title="Favorites"
-            subtitle="Your saved stores and restaurants"
-            badge="Soon"
-            onPress={() => {}}
+            subtitle="Saved stores and favorite items"
+            color={THEME.danger}
+            onPress={openFavorites}
           />
-          */}
         </View>
 
         <View style={styles.infoCard}>
@@ -339,14 +416,12 @@ export default function ProfileScreen() {
             onPress={openCoupons}
           />
 
-          {/* Coming soon hidden for final UI */}
-          {/*
           <MenuRow
             icon="wallet-outline"
             title="Wallet"
             subtitle="Balance, refunds and credits"
-            badge="Soon"
-            onPress={() => {}}
+            color={THEME.green}
+            onPress={openWallet}
           />
 
           <MenuRow
@@ -354,9 +429,9 @@ export default function ProfileScreen() {
             title="Payment Methods"
             subtitle="UPI, cards and cash on delivery"
             badge="Soon"
-            onPress={() => {}}
+            color={THEME.blue}
+            onPress={() => showToast("info", "Coming soon", "Payment methods will be added soon.")}
           />
-          */}
         </View>
 
         <View style={styles.infoCard}>
@@ -366,26 +441,25 @@ export default function ProfileScreen() {
             icon="chatbubble-ellipses-outline"
             title="Help & Support"
             subtitle="Get help with orders and payments"
-            color={THEME.orange}
+            color={THEME.green}
             onPress={() => safeNavigate("HelpSupport")}
           />
 
-          {/* Coming soon hidden for final UI */}
-          {/*
           <MenuRow
             icon="document-text-outline"
             title="Terms & Policies"
             subtitle="Privacy policy, refund policy and terms"
-            onPress={() => {}}
+            color={THEME.purple}
+            onPress={() => showToast("info", "Coming soon", "Policies screen will be added soon.")}
           />
 
           <MenuRow
             icon="information-circle-outline"
             title="About Karto"
             subtitle="Fast local delivery for your city"
-            onPress={() => {}}
+            color={THEME.orange}
+            onPress={() => showToast("info", "Karto", "Fast local delivery experience.")}
           />
-          */}
         </View>
 
         {isLoggedIn ? (
@@ -398,18 +472,18 @@ export default function ProfileScreen() {
               onPress={loggingOut ? undefined : () => setLogoutModalVisible(true)}
             />
 
-            {loggingOut && <ActivityIndicator color={THEME.green} style={styles.logoutLoader} />}
+            {loggingOut && <ActivityIndicator color={THEME.orange} style={styles.logoutLoader} />}
           </View>
         ) : (
           <TouchableOpacity style={styles.guestLoginCard} onPress={openAuth} activeOpacity={0.9}>
             <View style={styles.guestIcon}>
-              <Icon name="log-in-outline" size={25} color={THEME.black} />
+              <Icon name="log-in-outline" size={25} color={THEME.white} />
             </View>
             <View style={styles.guestTextBox}>
               <Text style={styles.guestTitle}>Login to unlock your account</Text>
               <Text style={styles.guestSub}>Track orders, save addresses and use coupons.</Text>
             </View>
-            <Icon name="arrow-forward" size={20} color={THEME.green} />
+            <Icon name="arrow-forward" size={20} color={THEME.orange} />
           </TouchableOpacity>
         )}
 
@@ -448,7 +522,7 @@ export default function ProfileScreen() {
                 disabled={loggingOut}
               >
                 {loggingOut ? (
-                  <ActivityIndicator color={THEME.black} />
+                  <ActivityIndicator color={THEME.white} />
                 ) : (
                   <Text style={styles.logoutConfirmText}>Logout</Text>
                 )}
@@ -461,6 +535,14 @@ export default function ProfileScreen() {
   );
 }
 
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: THEME.bg },
   scrollContent: { paddingBottom: 35 },
@@ -471,10 +553,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 10,
   },
   headerTextBox: { flex: 1 },
   headerTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 32,
     fontWeight: "900",
   },
@@ -484,33 +567,41 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
   },
+  refreshBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: THEME.blue,
+    alignItems: "center",
+    justifyContent: "center",
+    ...shadow,
+  },
   editBtn: {
     width: 46,
     height: 46,
-    borderRadius: 18,
-    backgroundColor: THEME.green,
+    borderRadius: 16,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 12,
+    ...shadow,
   },
   heroBanner: {
     marginHorizontal: 20,
     marginBottom: 16,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 28,
+    borderRadius: 26,
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
+    ...shadow,
   },
   heroGlowOne: {
     position: "absolute",
     width: 130,
     height: 130,
     borderRadius: 70,
-    backgroundColor: "rgba(34,197,94,0.16)",
+    backgroundColor: "rgba(255,77,24,0.13)",
     right: -45,
     top: -35,
   },
@@ -519,19 +610,19 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 65,
-    backgroundColor: "rgba(250,204,21,0.13)",
+    backgroundColor: "rgba(245,158,11,0.10)",
     left: -40,
     bottom: -55,
   },
   heroContent: { flex: 1 },
   heroTag: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1,
   },
   heroTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
     marginTop: 5,
@@ -546,7 +637,7 @@ const styles = StyleSheet.create({
   loginHeroBtn: {
     marginTop: 14,
     alignSelf: "flex-start",
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     borderRadius: 99,
     paddingVertical: 10,
     paddingHorizontal: 14,
@@ -554,12 +645,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-  loginHeroText: { color: THEME.black, fontWeight: "900", fontSize: 13 },
+  loginHeroText: { color: THEME.white, fontWeight: "900", fontSize: 13 },
   heroIcon: {
     width: 62,
     height: 62,
     borderRadius: 22,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 14,
@@ -567,30 +658,43 @@ const styles = StyleSheet.create({
   profileCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderRadius: 28,
+    borderRadius: 26,
     padding: 18,
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: THEME.border,
     marginBottom: 14,
+    ...shadow,
+  },
+  avatarOuter: {
+    marginRight: 15,
+    position: "relative",
   },
   avatarWrap: {
     width: 82,
     height: 82,
     borderRadius: 30,
-    backgroundColor: THEME.card2,
-    borderWidth: 2,
-    borderColor: THEME.green,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 15,
     overflow: "hidden",
   },
   avatar: { width: "100%", height: "100%", borderRadius: 30 },
-  avatarText: { color: THEME.green, fontSize: 34, fontWeight: "900" },
+  avatarText: { color: THEME.orange, fontSize: 30, fontWeight: "900" },
+  avatarEditDot: {
+    position: "absolute",
+    right: -2,
+    bottom: -2,
+    width: 30,
+    height: 30,
+    borderRadius: 13,
+    backgroundColor: THEME.orange,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: THEME.card,
+  },
   profileInfo: { flex: 1 },
-  name: { color: THEME.text, fontSize: 21, fontWeight: "900" },
+  name: { color: THEME.blue, fontSize: 21, fontWeight: "900" },
   email: { color: THEME.muted, marginTop: 4, fontSize: 13, fontWeight: "700" },
   phone: { color: THEME.muted, marginTop: 3, fontSize: 13, fontWeight: "700" },
   roleRow: {
@@ -604,23 +708,19 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "#102116",
-    borderWidth: 1,
-    borderColor: "#20462C",
+    backgroundColor: THEME.orangeSoft,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
   },
-  roleText: { color: THEME.green, fontSize: 12, fontWeight: "900" },
+  roleText: { color: THEME.orange, fontSize: 12, fontWeight: "900" },
   statusPill: {
-    backgroundColor: "#102116",
-    borderWidth: 1,
-    borderColor: "#20462C",
+    backgroundColor: "#EAFBF1",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
   },
-  inactivePill: { backgroundColor: "#1B0E0E", borderColor: "#3F1717" },
+  inactivePill: { backgroundColor: "#FFF1F1" },
   statusText: { color: THEME.green, fontSize: 12, fontWeight: "900" },
   statsRow: {
     flexDirection: "row",
@@ -631,54 +731,49 @@ const styles = StyleSheet.create({
   statCard: {
     flex: 1,
     backgroundColor: THEME.card,
-    borderRadius: 20,
+    borderRadius: 18,
     paddingVertical: 14,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: THEME.border,
+    ...shadow,
   },
   statIcon: {
     width: 34,
     height: 34,
     borderRadius: 13,
-    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
-  statValue: { color: THEME.text, fontSize: 18, fontWeight: "900", marginTop: 7 },
+  statValue: { color: THEME.blue, fontSize: 18, fontWeight: "900", marginTop: 7 },
   statLabel: { color: THEME.muted, fontSize: 12, marginTop: 3, fontWeight: "700" },
   quickCard: {
     marginHorizontal: 20,
     marginBottom: 16,
     backgroundColor: THEME.card,
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 14,
-    borderWidth: 1,
-    borderColor: THEME.border,
     flexDirection: "row",
     justifyContent: "space-between",
+    ...shadow,
   },
   quickAction: { flex: 1, alignItems: "center", gap: 7 },
   quickIcon: {
     width: 44,
     height: 44,
     borderRadius: 16,
-    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
-  quickText: { color: THEME.text, fontSize: 12, fontWeight: "800" },
+  quickText: { color: THEME.blue, fontSize: 12, fontWeight: "900" },
   infoCard: {
     marginHorizontal: 20,
     marginBottom: 16,
     backgroundColor: THEME.card,
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 14,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    ...shadow,
   },
   sectionTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 15,
     fontWeight: "900",
     marginBottom: 8,
@@ -696,17 +791,14 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 15,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 12,
   },
-  dangerIconBox: { backgroundColor: "#1B0E0E", borderColor: "#3F1717" },
+  dangerIconBox: { backgroundColor: "#FFF1F1" },
   menuTextBox: { flex: 1 },
   menuTitleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  menuTitle: { color: THEME.text, fontSize: 15, fontWeight: "900" },
+  menuTitle: { color: THEME.blue, fontSize: 15, fontWeight: "900" },
   menuSubtitle: {
     color: THEME.muted,
     fontSize: 12,
@@ -714,30 +806,34 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: "700",
   },
-  badge: { backgroundColor: THEME.yellow, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 999 },
-  badgeText: { color: THEME.black, fontSize: 10, fontWeight: "900" },
+  badge: {
+    backgroundColor: THEME.orange,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  badgeText: { color: THEME.white, fontSize: 10, fontWeight: "900" },
   guestLoginCard: {
     marginHorizontal: 20,
     marginBottom: 16,
     backgroundColor: THEME.card,
-    borderRadius: 24,
+    borderRadius: 22,
     padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+    ...shadow,
   },
   guestIcon: {
     width: 50,
     height: 50,
     borderRadius: 18,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
   },
   guestTextBox: { flex: 1 },
-  guestTitle: { color: THEME.text, fontSize: 15, fontWeight: "900" },
+  guestTitle: { color: THEME.blue, fontSize: 15, fontWeight: "900" },
   guestSub: { color: THEME.muted, marginTop: 4, fontSize: 12, fontWeight: "700" },
   logoutLoader: { marginTop: 12 },
   footerText: {
@@ -749,15 +845,13 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.72)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     padding: 22,
   },
   confirmBox: {
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
@@ -765,14 +859,12 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 24,
-    backgroundColor: "#1B0E0E",
-    borderWidth: 1,
-    borderColor: "#3F1717",
+    backgroundColor: "#FFF1F1",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
-  confirmTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
+  confirmTitle: { color: THEME.blue, fontSize: 22, fontWeight: "900" },
   confirmText: {
     color: THEME.muted,
     textAlign: "center",
@@ -784,19 +876,17 @@ const styles = StyleSheet.create({
   keepBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
   },
-  keepText: { color: THEME.text, fontWeight: "900" },
+  keepText: { color: THEME.blue, fontWeight: "900" },
   logoutConfirmBtn: {
     flex: 1,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.danger,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
   },
-  logoutConfirmText: { color: THEME.black, fontWeight: "900" },
+  logoutConfirmText: { color: THEME.white, fontWeight: "900" },
 });

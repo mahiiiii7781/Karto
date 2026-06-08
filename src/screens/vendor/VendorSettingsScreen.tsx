@@ -2,6 +2,7 @@ import React, {
   ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -16,8 +17,13 @@ import {
   Switch,
   RefreshControl,
   KeyboardTypeOptions,
+  Image,
+  Alert,
+  Platform,
+  KeyboardAvoidingView,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
+import { launchCamera, launchImageLibrary,CameraOptions,ImageLibraryOptions, } from "react-native-image-picker";
 
 import apiClient from "@/api/apiClient";
 import vendorService, {
@@ -35,6 +41,7 @@ const THEME = {
   muted: "#A7B0A5",
   border: "#273027",
   danger: "#EF4444",
+  orange: "#FB923C",
 };
 
 type StoreForm = {
@@ -52,7 +59,28 @@ type StoreForm = {
   isOpen: boolean;
   isAcceptingOrders: boolean;
   busyMinutes: string;
+  imageUrl: string;
+  bannerUrl: string;
 };
+
+type UploadType = "logo" | "banner";
+
+const WEEK_DAYS = [
+  "None",
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const BUSY_PRESETS = [15, 30, 45, 60, 90];
+
+const DELIVERY_PRESETS = ["20-30 mins", "30-45 mins", "45-60 mins"];
+
+const PREP_PRESETS = [15, 20, 25, 30, 40];
 
 const defaultForm: StoreForm = {
   name: "",
@@ -68,6 +96,8 @@ const defaultForm: StoreForm = {
   isOpen: true,
   isAcceptingOrders: true,
   busyMinutes: "30",
+  imageUrl: "",
+  bannerUrl: "",
 };
 
 const unwrapData = (res: any) => {
@@ -75,7 +105,22 @@ const unwrapData = (res: any) => {
     res?.data?.data ||
     res?.data?.dashboard ||
     res?.data?.restaurant ||
+    res?.data?.profile ||
     res?.data ||
+    null
+  );
+};
+
+const getUploadedImageUrl = (res: any) => {
+  return (
+    res?.data?.imageUrl ||
+    res?.data?.url ||
+    res?.data?.secure_url ||
+    res?.data?.data?.imageUrl ||
+    res?.data?.data?.url ||
+    res?.data?.data?.secure_url ||
+    res?.data?.file?.url ||
+    res?.data?.result?.secure_url ||
     null
   );
 };
@@ -90,17 +135,16 @@ const normalizeErrorMessage = (error: any, fallback: string) => {
 };
 
 const toStringValue = (value: any, fallback = "") => {
-  if (value === null || value === undefined) {
-    return fallback;
-  }
-
+  if (value === null || value === undefined) return fallback;
   return String(value);
 };
 
+const onlyNumber = (value: string) => value.replace(/[^0-9]/g, "");
+
+const normalizePhone = (value: string) => value.replace(/[^0-9+]/g, "");
+
 const buildFormFromRestaurant = (restaurant?: VendorRestaurant | any): StoreForm => {
-  if (!restaurant) {
-    return defaultForm;
-  }
+  if (!restaurant) return defaultForm;
 
   const open = restaurant.isOpen ?? restaurant.is_open ?? true;
   const accepting =
@@ -153,6 +197,8 @@ const buildFormFromRestaurant = (restaurant?: VendorRestaurant | any): StoreForm
     isOpen: Boolean(open),
     isAcceptingOrders: Boolean(accepting),
     busyMinutes: "30",
+    imageUrl: restaurant.imageUrl || restaurant.image_url || "",
+    bannerUrl: restaurant.bannerUrl || restaurant.banner_url || "",
   };
 };
 
@@ -160,8 +206,25 @@ const validateTime = (value: string) => {
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(value.trim());
 };
 
-export default function VendorSettingsScreen() {
+const statusText = (form: StoreForm) => {
+  if (form.isOpen && form.isAcceptingOrders) return "Store is Live";
+  if (form.isOpen && !form.isAcceptingOrders) return "Open but Busy";
+  return "Store is Paused";
+};
+
+const statusSubText = (form: StoreForm) => {
+  if (form.isOpen && form.isAcceptingOrders) {
+    return "Customers can place new orders right now.";
+  }
+  if (form.isOpen && !form.isAcceptingOrders) {
+    return "Store is visible, but new orders are temporarily blocked.";
+  }
+  return "Customers cannot place orders until store is live.";
+};
+
+export default function VendorSettingsScreen({ navigation }: any) {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
 
   const [form, setForm] = useState<StoreForm>(defaultForm);
   const [dashboard, setDashboard] = useState<VendorDashboard | null>(null);
@@ -171,28 +234,28 @@ export default function VendorSettingsScreen() {
 
   const [statusSaving, setStatusSaving] = useState(false);
   const [busySaving, setBusySaving] = useState(false);
+  const [uploadingType, setUploadingType] = useState<UploadType | null>(null);
 
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
   const [errorText, setErrorText] = useState("");
 
   const showToast = useCallback((msg: string) => {
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-    }
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
 
     setToast(msg);
 
     toastTimerRef.current = setTimeout(() => {
       setToast("");
-    }, 2200);
+    }, 2300);
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
+
     return () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-      }
+      mountedRef.current = false;
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
   }, []);
 
@@ -206,19 +269,33 @@ export default function VendorSettingsScreen() {
   const loadSettings = useCallback(async () => {
     setErrorText("");
 
-    const { data, error } = await vendorService.getDashboard();
+    const [profileRes, dashboardRes] = await Promise.all([
+      vendorService.getProfile(),
+      vendorService.getDashboard(),
+    ]);
 
-    if (error || !data) {
-      setErrorText(error?.message || "Failed to load settings");
-      showToast(error?.message || "Failed to load settings");
+    if (!mountedRef.current) return;
+
+    if (dashboardRes.data) {
+      setDashboard(dashboardRes.data);
+    }
+
+    if (profileRes.error && dashboardRes.error) {
+      const msg =
+        profileRes.error?.message ||
+        dashboardRes.error?.message ||
+        "Failed to load settings";
+      setErrorText(msg);
+      showToast(msg);
       setLoading(false);
       setRefreshing(false);
       return;
     }
 
-    setDashboard(data);
-
-    const restaurant = data.restaurants?.[0];
+    const restaurant =
+      profileRes.data ||
+      dashboardRes.data?.restaurants?.[0] ||
+      null;
 
     if (restaurant) {
       setForm(buildFormFromRestaurant(restaurant));
@@ -231,83 +308,6 @@ export default function VendorSettingsScreen() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
-
-  const saveSettingsByRoute = async (restaurantId: string | undefined, payload: any) => {
-    const attempts = restaurantId
-      ? [
-          () => vendorService.updateRestaurant(restaurantId, payload),
-          () => apiClient.patch(`/vendors/restaurants/${restaurantId}`, payload),
-          () => apiClient.patch(`/vendors/settings/${restaurantId}`, payload),
-          () => apiClient.patch("/vendors/settings/me", payload),
-        ]
-      : [
-          () => apiClient.patch("/vendors/settings/me", payload),
-          () => apiClient.patch("/vendors/restaurants/me", payload),
-        ];
-
-    let lastError: any = null;
-
-    for (const attempt of attempts) {
-      try {
-        const res: any = await attempt();
-
-        if (res?.error) {
-          lastError = res.error;
-          continue;
-        }
-
-        return unwrapData(res) || res?.data || true;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw lastError || new Error("Failed to save settings");
-  };
-
-  const saveStatusByRoute = async (
-    restaurantId: string | undefined,
-    isOpen: boolean,
-    isAcceptingOrders: boolean
-  ) => {
-    const payload = {
-      isOpen,
-      is_open: isOpen,
-      isAcceptingOrders,
-      is_accepting_orders: isAcceptingOrders,
-    };
-
-    const attempts = restaurantId
-      ? [
-          () => vendorService.updateRestaurantStatus(restaurantId, isOpen),
-          () => apiClient.patch(`/vendors/restaurants/${restaurantId}/status`, payload),
-          () => apiClient.patch(`/vendors/settings/${restaurantId}/status`, payload),
-          () => apiClient.patch("/vendors/settings/status", payload),
-        ]
-      : [
-          () => apiClient.patch("/vendors/settings/status", payload),
-          () => apiClient.patch("/vendors/restaurants/me/status", payload),
-        ];
-
-    let lastError: any = null;
-
-    for (const attempt of attempts) {
-      try {
-        const res: any = await attempt();
-
-        if (res?.error) {
-          lastError = res.error;
-          continue;
-        }
-
-        return true;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    throw lastError || new Error("Failed to update store status");
-  };
 
   const validateForm = () => {
     const minimumOrder = Number(form.minimumOrder || 0);
@@ -323,7 +323,8 @@ export default function VendorSettingsScreen() {
       return false;
     }
 
-    if (form.phone.trim().length < 10) {
+    const digitPhone = form.phone.replace(/\D/g, "");
+    if (digitPhone.length < 10) {
       showToast("Enter valid phone number");
       return false;
     }
@@ -357,58 +358,48 @@ export default function VendorSettingsScreen() {
   };
 
   const saveSettings = async () => {
-    if (saving) {
-      return;
-    }
-
-    if (!validateForm()) {
-      return;
-    }
+    if (saving || !validateForm()) return;
 
     setSaving(true);
 
     const payload = {
       name: form.name.trim(),
-      restaurant_name: form.name.trim(),
-
       phone: form.phone.trim(),
       email: form.email.trim() || null,
-
       address: form.address.trim(),
-
       deliveryTime: form.deliveryTime.trim(),
-      delivery_time: form.deliveryTime.trim(),
-
       minimumOrder: Number(form.minimumOrder || 0),
-      minimum_order: Number(form.minimumOrder || 0),
-
       defaultPrepTime: Number(form.defaultPrepTime || 30),
-      default_prep_time: Number(form.defaultPrepTime || 30),
-
       openingTime: form.openingTime.trim(),
-      opening_time: form.openingTime.trim(),
-
       closingTime: form.closingTime.trim(),
-      closing_time: form.closingTime.trim(),
-
       weeklyOffDay: form.weeklyOffDay.trim() || "None",
-      weekly_off_day: form.weeklyOffDay.trim() || "None",
-
       isOpen: form.isOpen,
-      is_open: form.isOpen,
-
       isAcceptingOrders: form.isAcceptingOrders,
-      is_accepting_orders: form.isAcceptingOrders,
+      imageUrl: form.imageUrl || null,
+      bannerUrl: form.bannerUrl || null,
     };
 
     try {
-      const saved = await saveSettingsByRoute(form.id, payload);
+      const { data, error } = await vendorService.updateSettings(
+        payload as any,
+        form.id
+      );
 
-      if (saved && typeof saved === "object") {
-        setForm(buildFormFromRestaurant(saved));
+      if (error) {
+        showToast(error.message || "Failed to save settings");
+        setSaving(false);
+        return;
+      }
+
+      if (data) {
+        setForm((prev) => ({
+          ...buildFormFromRestaurant(data),
+          busyMinutes: prev.busyMinutes,
+        }));
       }
 
       showToast("Settings saved successfully");
+      loadSettings();
     } catch (error: any) {
       showToast(normalizeErrorMessage(error, "Failed to save settings"));
     } finally {
@@ -417,9 +408,7 @@ export default function VendorSettingsScreen() {
   };
 
   const toggleLiveStatus = async (next: boolean) => {
-    if (statusSaving) {
-      return;
-    }
+    if (statusSaving) return;
 
     const previousOpen = form.isOpen;
     const previousAccepting = form.isAcceptingOrders;
@@ -430,7 +419,20 @@ export default function VendorSettingsScreen() {
     setStatusSaving(true);
 
     try {
-      await saveStatusByRoute(form.id, next, next);
+      const { data, error } = await vendorService.toggleOpenClose(next);
+
+      if (error) {
+        throw error;
+      }
+
+      if (data) {
+        setForm((prev) => ({
+          ...prev,
+          ...buildFormFromRestaurant(data),
+          busyMinutes: prev.busyMinutes,
+        }));
+      }
+
       showToast(next ? "Store is live" : "Store paused");
     } catch (error: any) {
       update("isOpen", previousOpen);
@@ -442,9 +444,7 @@ export default function VendorSettingsScreen() {
   };
 
   const setBusyMode = async () => {
-    if (busySaving) {
-      return;
-    }
+    if (busySaving) return;
 
     const minutes = Number(form.busyMinutes || 30);
 
@@ -453,53 +453,173 @@ export default function VendorSettingsScreen() {
       return;
     }
 
+    const previousOpen = form.isOpen;
     const previousAccepting = form.isAcceptingOrders;
 
+    update("isOpen", false);
     update("isAcceptingOrders", false);
     setBusySaving(true);
 
-    const payload = {
-      minutes,
-      busyMinutes: minutes,
-      isAcceptingOrders: false,
-      is_accepting_orders: false,
-    };
+    try {
+      const { data, error } = await vendorService.setBusyMode(minutes);
 
-    const attempts = [
-      () => apiClient.patch("/vendors/settings/busy-mode", payload),
-      () => apiClient.patch("/vendors/restaurants/busy-mode", payload),
-      () =>
-        form.id
-          ? apiClient.patch(`/vendors/restaurants/${form.id}/busy-mode`, payload)
-          : Promise.reject(new Error("Restaurant id missing")),
-    ];
-
-    let saved = false;
-    let lastError: any = null;
-
-    for (const attempt of attempts) {
-      try {
-        await attempt();
-        saved = true;
-        break;
-      } catch (error) {
-        lastError = error;
+      if (error) {
+        throw error;
       }
-    }
 
-    if (saved) {
+      const restaurant = data?.restaurant || data;
+      if (restaurant?.id) {
+        setForm((prev) => ({
+          ...prev,
+          ...buildFormFromRestaurant(restaurant),
+          busyMinutes: String(minutes),
+        }));
+      }
+
       showToast(`Busy mode enabled for ${minutes} min`);
-    } else {
+    } catch (error: any) {
+      update("isOpen", previousOpen);
       update("isAcceptingOrders", previousAccepting);
-      showToast(normalizeErrorMessage(lastError, "Busy mode API not available"));
+      showToast(normalizeErrorMessage(error, "Busy mode failed"));
+    } finally {
+      setBusySaving(false);
     }
-
-    setBusySaving(false);
   };
 
-  const restaurantCount = dashboard?.totalRestaurants || dashboard?.restaurants?.length || 0;
+  const uploadImageToServer = async (asset: any, type: UploadType) => {
+    if (!asset?.uri) return null;
+
+    setUploadingType(type);
+
+    try {
+      const file: any = {
+        uri: asset.uri,
+        name:
+          asset.fileName ||
+          `vendor-${type}-${Date.now()}.${asset.type?.includes("png") ? "png" : "jpg"}`,
+        type: asset.type || "image/jpeg",
+      };
+
+      const formData = new FormData();
+      formData.append("image", file);
+      formData.append("folder", "vendor");
+
+      let res: any;
+
+      try {
+        res = await apiClient.post("/upload/image", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      } catch {
+        res = await apiClient.post("/upload", formData, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+      }
+
+      const url = getUploadedImageUrl(res);
+
+      if (!url) {
+        showToast("Image uploaded but URL not found");
+        return null;
+      }
+
+      update(type === "banner" ? "bannerUrl" : "imageUrl", url);
+
+      if (form.id) {
+        const payload =
+          type === "banner"
+            ? ({ bannerUrl: url } as any)
+            : ({ imageUrl: url } as any);
+
+        await vendorService.updateSettings(payload, form.id);
+      }
+
+      showToast(type === "banner" ? "Banner updated" : "Logo updated");
+      return url;
+    } catch (error: any) {
+      showToast(normalizeErrorMessage(error, "Image upload failed"));
+      return null;
+    } finally {
+      setUploadingType(null);
+    }
+  };
+
+const pickImage = async (source: "camera" | "gallery", type: UploadType) => {
+  const cameraOptions: CameraOptions = {
+    mediaType: "photo",
+    quality: 0.8,
+    includeBase64: false,
+    cameraType: "back",
+    saveToPhotos: false,
+  };
+
+  const galleryOptions: ImageLibraryOptions = {
+    mediaType: "photo",
+    quality: 0.8,
+    selectionLimit: 1,
+    includeBase64: false,
+  };
+
+  const result =
+    source === "camera"
+      ? await launchCamera(cameraOptions)
+      : await launchImageLibrary(galleryOptions);
+
+  if (result.didCancel) return;
+
+  if (result.errorCode) {
+    showToast(result.errorMessage || "Image picker error");
+    return;
+  }
+
+  const asset = result.assets?.[0];
+
+  if (!asset?.uri) {
+    showToast("Image not selected");
+    return;
+  }
+
+  await uploadImageToServer(asset, type);
+};
+
+  const showImageOptions = (type: UploadType) => {
+    Alert.alert(
+      type === "banner" ? "Store Banner" : "Store Logo",
+      "Choose image source",
+      [
+        { text: "Camera", onPress: () => pickImage("camera", type) },
+        { text: "Gallery", onPress: () => pickImage("gallery", type) },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => update(type === "banner" ? "bannerUrl" : "imageUrl", ""),
+        },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const restaurantCount =
+    dashboard?.totalRestaurants || dashboard?.restaurants?.length || 0;
   const menuCount = dashboard?.totalMenuItems || 0;
   const todayOrders = dashboard?.todayOrders || 0;
+  const activeOrders = dashboard?.activeOrders || 0;
+
+  const profileCompleteness = useMemo(() => {
+    const checks = [
+      form.name,
+      form.phone,
+      form.address,
+      form.deliveryTime,
+      form.openingTime,
+      form.closingTime,
+      form.imageUrl,
+      form.bannerUrl,
+    ];
+
+    const done = checks.filter((item) => String(item || "").trim()).length;
+    return Math.round((done / checks.length) * 100);
+  }, [form]);
 
   if (loading) {
     return (
@@ -519,208 +639,280 @@ export default function VendorSettingsScreen() {
         </View>
       )}
 
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            tintColor={THEME.green}
-            colors={[THEME.green]}
-            onRefresh={() => {
-              setRefreshing(true);
-              loadSettings();
-            }}
-          />
-        }
+      <KeyboardAvoidingView
+        style={styles.keyboardRoot}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <View style={styles.header}>
-          <Text style={styles.kicker}>Vendor Panel</Text>
-          <Text style={styles.title}>Store Settings</Text>
-          <Text style={styles.subtitle}>Timing, availability and profile.</Text>
-        </View>
+        <ScrollView
+          style={styles.container}
+          contentContainerStyle={styles.content}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              tintColor={THEME.green}
+              colors={[THEME.green]}
+              onRefresh={() => {
+                setRefreshing(true);
+                loadSettings();
+              }}
+            />
+          }
+        >
+          <View style={styles.header}>
+            <TouchableOpacity
+              style={styles.backBtn}
+              activeOpacity={0.85}
+              onPress={() => navigation?.goBack?.()}
+            >
+              <Icon name="arrow-back" size={21} color={THEME.text} />
+            </TouchableOpacity>
 
-        {!!errorText && (
-          <View style={styles.errorBox}>
-            <Icon name="alert-circle-outline" size={20} color={THEME.danger} />
-            <Text style={styles.errorText}>{errorText}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.kicker}>Vendor Panel</Text>
+              <Text style={styles.title}>Store Settings</Text>
+              <Text style={styles.subtitle}>Timing, availability and profile.</Text>
+            </View>
           </View>
-        )}
 
-        <View style={styles.statusCard}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.statusLabel}>Accepting Orders</Text>
+          {!!errorText && (
+            <View style={styles.errorBox}>
+              <Icon name="alert-circle-outline" size={20} color={THEME.danger} />
+              <Text style={styles.errorText}>{errorText}</Text>
+            </View>
+          )}
 
-            <Text style={styles.statusTitle}>
-              {form.isOpen && form.isAcceptingOrders
-                ? "Store is Live"
-                : "Store is Paused"}
-            </Text>
+          <View style={[styles.statusCard, !(form.isOpen && form.isAcceptingOrders) && styles.pausedStatusCard]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statusLabel}>Accepting Orders</Text>
+              <Text style={styles.statusTitle}>{statusText(form)}</Text>
+              <Text style={styles.statusSub}>{statusSubText(form)}</Text>
+            </View>
 
-            <Text style={styles.statusSub}>
-              Customers can order only when store is open.
-            </Text>
+            <View style={styles.statusSwitchBox}>
+              {statusSaving ? (
+                <ActivityIndicator color={THEME.bg} />
+              ) : (
+                <Switch
+                  value={form.isOpen && form.isAcceptingOrders}
+                  onValueChange={toggleLiveStatus}
+                  thumbColor={
+                    form.isOpen && form.isAcceptingOrders
+                      ? THEME.green
+                      : THEME.muted
+                  }
+                  trackColor={{
+                    false: "#293029",
+                    true: "rgba(34,197,94,0.35)",
+                  }}
+                />
+              )}
+            </View>
           </View>
 
-          <View style={styles.statusSwitchBox}>
-            {statusSaving ? (
-              <ActivityIndicator color={THEME.bg} />
-            ) : (
-              <Switch
-                value={form.isOpen && form.isAcceptingOrders}
-                onValueChange={toggleLiveStatus}
-                thumbColor={
-                  form.isOpen && form.isAcceptingOrders
-                    ? THEME.green
-                    : THEME.muted
-                }
-                trackColor={{
-                  false: "#293029",
-                  true: "rgba(34,197,94,0.35)",
-                }}
+          <View style={styles.statsRow}>
+            <MiniStat label="Stores" value={restaurantCount} icon="storefront-outline" />
+            <MiniStat label="Menu" value={menuCount} icon="fast-food-outline" />
+            <MiniStat label="Today" value={todayOrders} icon="receipt-outline" />
+            <MiniStat label="Active" value={activeOrders} icon="flame-outline" />
+          </View>
+
+          <View style={styles.profileCard}>
+            <View>
+              <Text style={styles.sectionTitle}>Profile Completion</Text>
+              <Text style={styles.sectionSub}>
+                Add logo, banner and store details for better trust.
+              </Text>
+            </View>
+
+            <View style={styles.completionCircle}>
+              <Text style={styles.completionText}>{profileCompleteness}%</Text>
+            </View>
+
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  { width: `${profileCompleteness}%` },
+                ]}
               />
-            )}
+            </View>
           </View>
-        </View>
 
-        <View style={styles.statsRow}>
-          <MiniStat label="Stores" value={restaurantCount} icon="storefront-outline" />
-          <MiniStat label="Menu" value={menuCount} icon="fast-food-outline" />
-          <MiniStat label="Today" value={todayOrders} icon="receipt-outline" />
-        </View>
+          <Section title="Store Media" icon="image-outline">
+            <ImagePickerCard
+              type="banner"
+              title="Store Banner"
+              subtitle="Best for store header and customer trust"
+              imageUrl={form.bannerUrl}
+              uploading={uploadingType === "banner"}
+              onPress={() => showImageOptions("banner")}
+            />
 
-        <Section title="Store Profile" icon="storefront-outline">
-          <Field
-            label="Store Name"
-            value={form.name}
-            onChange={(v: string) => update("name", v)}
-          />
+            <ImagePickerCard
+              type="logo"
+              title="Store Logo"
+              subtitle="Shown in restaurant cards and profile"
+              imageUrl={form.imageUrl}
+              uploading={uploadingType === "logo"}
+              onPress={() => showImageOptions("logo")}
+            />
+          </Section>
 
-          <Field
-            label="Phone"
-            value={form.phone}
-            onChange={(v: string) => update("phone", v)}
-            keyboardType="phone-pad"
-          />
-
-          <Field
-            label="Email"
-            value={form.email}
-            onChange={(v: string) => update("email", v)}
-            keyboardType="email-address"
-          />
-
-          <Field
-            label="Address"
-            value={form.address}
-            onChange={(v: string) => update("address", v)}
-            multiline
-          />
-
-          <Field
-            label="Delivery Time Text"
-            value={form.deliveryTime}
-            onChange={(v: string) => update("deliveryTime", v)}
-          />
-
-          <Field
-            label="Minimum Order"
-            value={form.minimumOrder}
-            onChange={(v: string) => update("minimumOrder", v)}
-            keyboardType="numeric"
-          />
-        </Section>
-
-        <Section title="Timing & Prep Time" icon="time-outline">
-          <View style={styles.twoCol}>
+          <Section title="Store Profile" icon="storefront-outline">
             <Field
-              label="Opening Time"
-              value={form.openingTime}
-              onChange={(v: string) => update("openingTime", v)}
+              label="Store Name"
+              value={form.name}
+              onChange={(v: string) => update("name", v)}
             />
 
             <Field
-              label="Closing Time"
-              value={form.closingTime}
-              onChange={(v: string) => update("closingTime", v)}
+              label="Phone"
+              value={form.phone}
+              onChange={(v: string) => update("phone", normalizePhone(v))}
+              keyboardType="phone-pad"
             />
+
+            <Field
+              label="Email"
+              value={form.email}
+              onChange={(v: string) => update("email", v)}
+              keyboardType="email-address"
+            />
+
+            <Field
+              label="Address"
+              value={form.address}
+              onChange={(v: string) => update("address", v)}
+              multiline
+            />
+
+            <Field
+              label="Delivery Time Text"
+              value={form.deliveryTime}
+              onChange={(v: string) => update("deliveryTime", v)}
+            />
+
+            <ChipRow
+              items={DELIVERY_PRESETS}
+              active={form.deliveryTime}
+              onSelect={(value) => update("deliveryTime", value)}
+            />
+
+            <Field
+              label="Minimum Order"
+              value={form.minimumOrder}
+              onChange={(v: string) => update("minimumOrder", onlyNumber(v))}
+              keyboardType="numeric"
+            />
+          </Section>
+
+          <Section title="Timing & Prep Time" icon="time-outline">
+            <View style={styles.twoCol}>
+              <Field
+                label="Opening Time"
+                value={form.openingTime}
+                onChange={(v: string) => update("openingTime", v)}
+              />
+
+              <Field
+                label="Closing Time"
+                value={form.closingTime}
+                onChange={(v: string) => update("closingTime", v)}
+              />
+            </View>
+
+            <Text style={styles.fieldHint}>
+              Use 24-hour format, example 10:00 or 23:30.
+            </Text>
+
+            <Text style={styles.fieldLabel}>Weekly Off Day</Text>
+            <ChipRow
+              items={WEEK_DAYS}
+              active={form.weeklyOffDay}
+              onSelect={(value) => update("weeklyOffDay", value)}
+            />
+
+            <Field
+              label="Default Prep Time"
+              value={form.defaultPrepTime}
+              onChange={(v: string) => update("defaultPrepTime", onlyNumber(v))}
+              keyboardType="number-pad"
+            />
+
+            <ChipRow
+              items={PREP_PRESETS.map(String)}
+              active={form.defaultPrepTime}
+              onSelect={(value) => update("defaultPrepTime", value)}
+              suffix=" min"
+            />
+          </Section>
+
+          <Section title="Busy Mode" icon="flash-outline">
+            <Text style={styles.helperText}>
+              Busy mode stops new orders for selected minutes. Existing orders stay active.
+            </Text>
+
+            <Field
+              label="Busy Minutes"
+              value={form.busyMinutes}
+              onChange={(v: string) => update("busyMinutes", onlyNumber(v))}
+              keyboardType="number-pad"
+            />
+
+            <ChipRow
+              items={BUSY_PRESETS.map(String)}
+              active={form.busyMinutes}
+              onSelect={(value) => update("busyMinutes", value)}
+              suffix=" min"
+            />
+
+            <TouchableOpacity
+              style={[styles.busyBtn, busySaving && styles.disabledBtn]}
+              activeOpacity={0.85}
+              disabled={busySaving}
+              onPress={setBusyMode}
+            >
+              {busySaving ? (
+                <ActivityIndicator color={THEME.bg} />
+              ) : (
+                <>
+                  <Icon name="pause-circle-outline" size={18} color={THEME.bg} />
+                  <Text style={styles.busyBtnText}>Enable Busy Mode</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </Section>
+
+          <View style={styles.noteCard}>
+            <Icon name="shield-checkmark-outline" size={22} color={THEME.yellow} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.noteTitle}>Safe Vendor Controls</Text>
+              <Text style={styles.noteText}>
+                These settings are connected with backend vendor APIs. Image URL input
+                is removed; camera and gallery upload are used instead.
+              </Text>
+            </View>
           </View>
-
-          <Text style={styles.fieldHint}>Use 24-hour format, example 10:00 or 23:30.</Text>
-
-          <Field
-            label="Weekly Off Day"
-            value={form.weeklyOffDay}
-            onChange={(v: string) => update("weeklyOffDay", v)}
-          />
-
-          <Field
-            label="Default Prep Time"
-            value={form.defaultPrepTime}
-            onChange={(v: string) => update("defaultPrepTime", v)}
-            keyboardType="number-pad"
-          />
-        </Section>
-
-        <Section title="Busy Mode" icon="flash-outline">
-          <Text style={styles.helperText}>
-            Busy mode stops new orders for selected minutes. Existing orders stay active.
-          </Text>
-
-          <Field
-            label="Busy Minutes"
-            value={form.busyMinutes}
-            onChange={(v: string) => update("busyMinutes", v)}
-            keyboardType="number-pad"
-          />
 
           <TouchableOpacity
-            style={[styles.busyBtn, busySaving && styles.disabledBtn]}
+            style={[styles.saveBtn, saving && styles.disabledBtn]}
             activeOpacity={0.85}
-            disabled={busySaving}
-            onPress={setBusyMode}
+            disabled={saving || uploadingType !== null}
+            onPress={saveSettings}
           >
-            {busySaving ? (
+            {saving ? (
               <ActivityIndicator color={THEME.bg} />
             ) : (
               <>
-                <Icon name="pause-circle-outline" size={18} color={THEME.bg} />
-                <Text style={styles.busyBtnText}>Enable Busy Mode</Text>
+                <Icon name="save-outline" size={18} color={THEME.bg} />
+                <Text style={styles.saveText}>Save Settings</Text>
               </>
             )}
           </TouchableOpacity>
-        </Section>
-
-        <View style={styles.mediaCard}>
-          <View style={styles.mediaIcon}>
-            <Icon name="image-outline" size={24} color={THEME.yellow} />
-          </View>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.mediaTitle}>Logo & Banner</Text>
-            <Text style={styles.mediaText}>
-              Image upload is handled separately with gallery/camera. No image URL input.
-            </Text>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.saveBtn, saving && styles.disabledBtn]}
-          activeOpacity={0.85}
-          disabled={saving}
-          onPress={saveSettings}
-        >
-          {saving ? (
-            <ActivityIndicator color={THEME.bg} />
-          ) : (
-            <>
-              <Icon name="save-outline" size={18} color={THEME.bg} />
-              <Text style={styles.saveText}>Save Settings</Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
@@ -771,17 +963,111 @@ function Field({
         onChangeText={onChange}
         keyboardType={keyboardType}
         multiline={multiline}
+        autoCapitalize={keyboardType === "email-address" ? "none" : "sentences"}
         placeholder={label}
         placeholderTextColor={THEME.muted}
-        style={[
-          styles.input,
-          multiline && {
-            minHeight: 76,
-            textAlignVertical: "top",
-          },
-        ]}
+        style={[styles.input, multiline && styles.multilineInput]}
       />
     </View>
+  );
+}
+
+function ChipRow({
+  items,
+  active,
+  onSelect,
+  suffix = "",
+}: {
+  items: string[];
+  active: string;
+  onSelect: (value: string) => void;
+  suffix?: string;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.chipRow}
+    >
+      {items.map((item) => {
+        const selected = item === active;
+
+        return (
+          <TouchableOpacity
+            key={item}
+            style={[styles.chip, selected && styles.chipActive]}
+            activeOpacity={0.85}
+            onPress={() => onSelect(item)}
+          >
+            <Text style={[styles.chipText, selected && styles.chipTextActive]}>
+              {item}
+              {suffix}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+function ImagePickerCard({
+  type,
+  title,
+  subtitle,
+  imageUrl,
+  uploading,
+  onPress,
+}: {
+  type: UploadType;
+  title: string;
+  subtitle: string;
+  imageUrl: string;
+  uploading: boolean;
+  onPress: () => void;
+}) {
+  const isBanner = type === "banner";
+
+  return (
+    <TouchableOpacity
+      style={isBanner ? styles.bannerPicker : styles.logoPicker}
+      activeOpacity={0.85}
+      onPress={onPress}
+      disabled={uploading}
+    >
+      {imageUrl ? (
+        <Image source={{ uri: imageUrl }} style={StyleSheet.absoluteFillObject} />
+      ) : (
+        <View style={styles.imageEmpty}>
+          <Icon
+            name={isBanner ? "images-outline" : "camera-outline"}
+            size={isBanner ? 34 : 28}
+            color={THEME.yellow}
+          />
+        </View>
+      )}
+
+      <View style={styles.imageShade} />
+
+      <View style={styles.imagePickerContent}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.imageTitle}>{title}</Text>
+          <Text style={styles.imageSubtitle}>{subtitle}</Text>
+        </View>
+
+        <View style={styles.imageAction}>
+          {uploading ? (
+            <ActivityIndicator color={THEME.bg} />
+          ) : (
+            <>
+              <Icon name="camera-outline" size={16} color={THEME.bg} />
+              <Text style={styles.imageActionText}>
+                {imageUrl ? "Change" : "Add"}
+              </Text>
+            </>
+          )}
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 }
 
@@ -811,13 +1097,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: THEME.bg,
   },
+  keyboardRoot: {
+    flex: 1,
+    backgroundColor: THEME.bg,
+  },
   container: {
     flex: 1,
     backgroundColor: THEME.bg,
   },
   content: {
     padding: 16,
-    paddingBottom: 40,
+    paddingBottom: 42,
   },
   center: {
     flex: 1,
@@ -852,8 +1142,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "center",
     marginTop: 8,
     marginBottom: 18,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
   kicker: {
     color: THEME.green,
@@ -897,6 +1200,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
+  },
+  pausedStatusCard: {
+    backgroundColor: THEME.orange,
   },
   statusLabel: {
     color: THEME.bg,
@@ -957,6 +1263,42 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 2,
   },
+  profileCard: {
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 24,
+    padding: 16,
+    marginBottom: 14,
+  },
+  completionCircle: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    width: 62,
+    height: 62,
+    borderRadius: 23,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  completionText: {
+    color: THEME.bg,
+    fontWeight: "900",
+    fontSize: 18,
+  },
+  progressTrack: {
+    marginTop: 16,
+    height: 10,
+    borderRadius: 999,
+    overflow: "hidden",
+    backgroundColor: THEME.card2,
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: THEME.green,
+    borderRadius: 999,
+  },
   section: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -984,6 +1326,12 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "900",
   },
+  sectionSub: {
+    color: THEME.muted,
+    fontWeight: "700",
+    marginTop: 4,
+    paddingRight: 80,
+  },
   fieldBox: {
     marginBottom: 11,
     flex: 1,
@@ -1004,6 +1352,10 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     fontWeight: "800",
   },
+  multilineInput: {
+    minHeight: 78,
+    textAlignVertical: "top",
+  },
   twoCol: {
     flexDirection: "row",
     gap: 10,
@@ -1021,6 +1373,32 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     lineHeight: 20,
   },
+  chipRow: {
+    gap: 8,
+    paddingBottom: 10,
+  },
+  chip: {
+    height: 36,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipActive: {
+    backgroundColor: THEME.yellow,
+    borderColor: THEME.yellow,
+  },
+  chipText: {
+    color: THEME.muted,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  chipTextActive: {
+    color: THEME.bg,
+  },
   busyBtn: {
     height: 50,
     borderRadius: 16,
@@ -1029,12 +1407,74 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     flexDirection: "row",
     gap: 7,
+    marginTop: 2,
   },
   busyBtnText: {
     color: THEME.bg,
     fontWeight: "900",
   },
-  mediaCard: {
+  bannerPicker: {
+    height: 145,
+    borderRadius: 22,
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    overflow: "hidden",
+    marginBottom: 12,
+  },
+  logoPicker: {
+    height: 108,
+    borderRadius: 22,
+    backgroundColor: "#0B100B",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    overflow: "hidden",
+    marginBottom: 8,
+  },
+  imageEmpty: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  imageShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  imagePickerContent: {
+    flex: 1,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 10,
+  },
+  imageTitle: {
+    color: THEME.text,
+    fontWeight: "900",
+    fontSize: 16,
+  },
+  imageSubtitle: {
+    color: THEME.muted,
+    fontWeight: "700",
+    marginTop: 3,
+    fontSize: 12,
+  },
+  imageAction: {
+    minWidth: 82,
+    height: 38,
+    borderRadius: 999,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 5,
+    paddingHorizontal: 10,
+  },
+  imageActionText: {
+    color: THEME.bg,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  noteCard: {
     backgroundColor: "rgba(246,195,67,0.08)",
     borderWidth: 1,
     borderColor: "rgba(246,195,67,0.3)",
@@ -1044,19 +1484,11 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 14,
   },
-  mediaIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
-    backgroundColor: THEME.card2,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  mediaTitle: {
+  noteTitle: {
     color: THEME.yellow,
     fontWeight: "900",
   },
-  mediaText: {
+  noteText: {
     color: THEME.text,
     marginTop: 4,
     fontWeight: "700",

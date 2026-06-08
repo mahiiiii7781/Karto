@@ -17,12 +17,21 @@ const formHeaders = {
   headers: { "Content-Type": "multipart/form-data" },
 };
 
+const clean = (value: any) => value !== undefined && value !== null && value !== "";
+
 const toFormData = (data: any) => {
   const form = new FormData();
 
-  Object.keys(data).forEach((key) => {
-    if (data[key] !== undefined && data[key] !== null) {
-      form.append(key, data[key]);
+  Object.keys(data || {}).forEach((key) => {
+    const value = data[key];
+
+    if (!clean(value)) return;
+
+    if (Array.isArray(value) || typeof value === "object") {
+      if (value?.uri) form.append(key, value as any);
+      else form.append(key, JSON.stringify(value));
+    } else {
+      form.append(key, String(value));
     }
   });
 
@@ -30,25 +39,61 @@ const toFormData = (data: any) => {
 };
 
 const filePart = (file: any) => {
-  if (!file?.uri) return null;
+  if (!file?.uri) return undefined;
 
   return {
     uri: file.uri,
     type: file.type || "image/jpeg",
-    name: file.fileName || `image-${Date.now()}.jpg`,
+    name: file.fileName || file.name || `image-${Date.now()}.jpg`,
   } as any;
 };
 
 const fail = (error: any, emptyData: any = null) => ({
   data: emptyData,
-  error: error.response?.data || error,
+  error: error?.response?.data || error,
 });
+
+const queryString = (params?: Record<string, any>) => {
+  const query = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (clean(value) && value !== "ALL") query.append(key, String(value));
+  });
+
+  const text = query.toString();
+  return text ? `?${text}` : "";
+};
 
 export const adminService = {
   getDashboard: async () => {
     try {
       const res = await apiClient.get("/admin/dashboard");
       return { data: res.data.data as AdminDashboardData, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  dashboard: async () => {
+    try {
+      const res = await apiClient.get("/admin/dashboard");
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateProfile: async (data: any) => {
+    try {
+      const form = toFormData({
+        fullName: data.fullName,
+        phone: data.phone,
+        password: data.password,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.patch("/auth/profile", form, formHeaders);
+      return { data: res.data.user || res.data.data || res.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
@@ -65,7 +110,30 @@ export const adminService = {
 
   createRoleUser: async (data: any) => {
     try {
-      const res = await apiClient.post("/admin/users/create-role-user", data);
+      const form = toFormData({
+        fullName: data.fullName,
+        email: data.email,
+        phone: data.phone,
+        password: data.password,
+        role: data.role,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.post(
+        "/admin/users/create-role-user",
+        form,
+        formHeaders
+      );
+
+      return { data: res.data.user || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateUserRole: async (id: string, role: string) => {
+    try {
+      const res = await apiClient.patch(`/admin/users/${id}/role`, { role });
       return { data: res.data.user || res.data.data, error: null };
     } catch (error: any) {
       return fail(error);
@@ -74,16 +142,29 @@ export const adminService = {
 
   updateUserStatus: async (id: string, isActive: boolean) => {
     try {
-      const res = await apiClient.patch(`/admin/users/${id}/status`, { isActive });
+      const res = await apiClient.patch(`/admin/users/${id}/status`, {
+        isActive,
+      });
       return { data: res.data.user || res.data.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
   },
 
-  getCities: async () => {
+  deleteUser: async (id: string) => {
     try {
-      const res = await apiClient.get("/admin/cities");
+      const res = await apiClient.delete(`/admin/users/${id}`);
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  getCities: async (includeInactive = false) => {
+    try {
+      const res = await apiClient.get(
+        `/admin/cities${includeInactive ? "?includeInactive=true" : ""}`
+      );
       return { data: res.data.cities || res.data.data || [], error: null };
     } catch (error: any) {
       return fail(error, []);
@@ -99,14 +180,30 @@ export const adminService = {
     }
   },
 
-  vendors: async (categoryId?: string) => {
+  updateCity: async (
+    id: string,
+    data: { name?: string; code?: string; isActive?: boolean }
+  ) => {
     try {
-      const url =
-        categoryId && categoryId !== "ALL"
-          ? `/admin/vendors?categoryId=${categoryId}`
-          : "/admin/vendors";
+      const res = await apiClient.patch(`/admin/cities/${id}`, data);
+      return { data: res.data.city || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
 
-      const res = await apiClient.get(url);
+  deleteCity: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/cities/${id}`);
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  vendors: async (params?: { cityId?: string; categoryId?: string }) => {
+    try {
+      const res = await apiClient.get(`/admin/vendors${queryString(params)}`);
       return { data: res.data.vendors || res.data.data || [], error: null };
     } catch (error: any) {
       return fail(error, []);
@@ -118,7 +215,30 @@ export const adminService = {
       const form = toFormData({
         cityId: data.cityId,
         categoryId: data.categoryId,
-        role: "VENDOR",
+        name: data.name,
+        ownerName: data.ownerName,
+        ownerMobileNo: data.ownerMobileNo,
+        phone: data.phone,
+        email: data.email,
+        password: data.password,
+        address: data.address,
+        type: data.type || "RESTAURANT",
+        commission: data.commission,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.post("/admin/vendors", form, formHeaders);
+      return { data: res.data.vendor || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateVendor: async (id: string, data: any) => {
+    try {
+      const form = toFormData({
+        cityId: data.cityId,
+        categoryId: data.categoryId,
         name: data.name,
         ownerName: data.ownerName,
         ownerMobileNo: data.ownerMobileNo,
@@ -128,11 +248,13 @@ export const adminService = {
         address: data.address,
         type: data.type,
         commission: data.commission,
+        isOpen: data.isOpen,
+        isActive: data.isActive,
         image: filePart(data.image),
       });
 
-      const res = await apiClient.post("/admin/vendors", form, formHeaders);
-      return { data: res.data.data, error: null };
+      const res = await apiClient.patch(`/admin/vendors/${id}`, form, formHeaders);
+      return { data: res.data.vendor || res.data.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
@@ -151,18 +273,46 @@ export const adminService = {
 
   toggleRestaurant: async (id: string, isActive: boolean) => {
     try {
-      const res = await apiClient.patch(`/admin/restaurants/${id}/status`, {
+      const res = await apiClient.patch(`/admin/vendors/${id}/status`, {
         isActive,
       });
-      return { data: res.data.restaurant || res.data.data, error: null };
+      return {
+        data: res.data.vendor || res.data.restaurant || res.data.data,
+        error: null,
+      };
     } catch (error: any) {
       return fail(error);
     }
   },
 
-  riders: async () => {
+  toggleVendorStatus: async (id: string, isActive: boolean) => {
     try {
-      const res = await apiClient.get("/admin/riders");
+      const res = await apiClient.patch(`/admin/vendors/${id}/status`, {
+        isActive,
+      });
+      return {
+        data: res.data.vendor || res.data.restaurant || res.data.data,
+        error: null,
+      };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteVendor: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/vendors/${id}`);
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  riders: async (cityId?: string) => {
+    try {
+      const res = await apiClient.get(
+        `/admin/riders${queryString({ cityId })}`
+      );
       return { data: res.data.riders || res.data.data || [], error: null };
     } catch (error: any) {
       return fail(error, []);
@@ -178,14 +328,55 @@ export const adminService = {
         password: data.password,
         phone: data.phone,
         vehicleNo: data.vehicleNo,
-        vehicleType: data.vehicleType,
+        vehicleType: data.vehicleType || "BIKE",
         address: data.address,
-        role: "RIDER",
         image: filePart(data.image),
       });
 
       const res = await apiClient.post("/admin/riders", form, formHeaders);
       return { data: res.data.rider || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateRider: async (id: string, data: any) => {
+    try {
+      const form = toFormData({
+        cityId: data.cityId,
+        fullName: data.fullName,
+        email: data.email,
+        password: data.password,
+        phone: data.phone,
+        vehicleNo: data.vehicleNo,
+        vehicleType: data.vehicleType,
+        address: data.address,
+        isActive: data.isActive,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.patch(`/admin/riders/${id}`, form, formHeaders);
+      return { data: res.data.rider || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateRiderStatus: async (id: string, isActive: boolean) => {
+    try {
+      const res = await apiClient.patch(`/admin/riders/${id}/status`, {
+        isActive,
+      });
+      return { data: res.data.user || res.data.rider || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteRider: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/riders/${id}`);
+      return { data: res.data.data || res.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
@@ -200,11 +391,11 @@ export const adminService = {
     }
   },
 
-  createCategory: async (data: { name: string; description?: string; image?: any }) => {
+  createCategory: async (data: any) => {
     try {
       const form = toFormData({
         name: data.name,
-        description: data.description || "",
+        description: data.description,
         image: filePart(data.image),
       });
 
@@ -215,10 +406,7 @@ export const adminService = {
     }
   },
 
-  updateCategory: async (
-    id: string,
-    data: { name?: string; description?: string; image?: any }
-  ) => {
+  updateCategory: async (id: string, data: any) => {
     try {
       const form = toFormData({
         name: data.name,
@@ -236,7 +424,7 @@ export const adminService = {
   deleteCategory: async (id: string) => {
     try {
       const res = await apiClient.delete(`/admin/categories/${id}`);
-      return { data: res.data, error: null };
+      return { data: res.data.data || res.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
@@ -244,29 +432,21 @@ export const adminService = {
 
   subCategories: async (categoryId?: string) => {
     try {
-      const url =
-        categoryId && categoryId !== "ALL"
-          ? `/admin/subcategories?categoryId=${categoryId}`
-          : "/admin/subcategories";
-
-      const res = await apiClient.get(url);
+      const res = await apiClient.get(
+        `/admin/subcategories${queryString({ categoryId })}`
+      );
       return { data: res.data.subCategories || res.data.data || [], error: null };
     } catch (error: any) {
       return fail(error, []);
     }
   },
 
-  createSubCategory: async (data: {
-    categoryId: string;
-    name: string;
-    description?: string;
-    image?: any;
-  }) => {
+  createSubCategory: async (data: any) => {
     try {
       const form = toFormData({
         categoryId: data.categoryId,
         name: data.name,
-        description: data.description || "",
+        description: data.description,
         image: filePart(data.image),
       });
 
@@ -277,10 +457,7 @@ export const adminService = {
     }
   },
 
-  updateSubCategory: async (
-    id: string,
-    data: { categoryId?: string; name?: string; description?: string; image?: any }
-  ) => {
+  updateSubCategory: async (id: string, data: any) => {
     try {
       const form = toFormData({
         categoryId: data.categoryId,
@@ -289,7 +466,11 @@ export const adminService = {
         image: filePart(data.image),
       });
 
-      const res = await apiClient.patch(`/admin/subcategories/${id}`, form, formHeaders);
+      const res = await apiClient.patch(
+        `/admin/subcategories/${id}`,
+        form,
+        formHeaders
+      );
       return { data: res.data.subCategory || res.data.data, error: null };
     } catch (error: any) {
       return fail(error);
@@ -299,7 +480,190 @@ export const adminService = {
   deleteSubCategory: async (id: string) => {
     try {
       const res = await apiClient.delete(`/admin/subcategories/${id}`);
-      return { data: res.data, error: null };
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  vendorCategories: async (restaurantId?: string) => {
+    try {
+      const res = await apiClient.get(
+        `/admin/vendor-categories${queryString({ restaurantId })}`
+      );
+      return { data: res.data.categories || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
+
+  getVendorCategories: async (
+    params?: string | { restaurantId?: string; vendorId?: string }
+  ) => {
+    try {
+      const query =
+        typeof params === "string"
+          ? { restaurantId: params }
+          : {
+              restaurantId: params?.restaurantId || params?.vendorId,
+            };
+
+      const res = await apiClient.get(
+        `/admin/vendor-categories${queryString(query)}`
+      );
+
+      return { data: res.data.categories || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
+
+  createVendorCategory: async (data: any) => {
+    try {
+      const form = toFormData({
+        restaurantId: data.restaurantId,
+        name: data.name,
+        description: data.description,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.post(
+        "/admin/vendor-categories",
+        form,
+        formHeaders
+      );
+      return { data: res.data.category || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateVendorCategory: async (id: string, data: any) => {
+    try {
+      const form = toFormData({
+        name: data.name,
+        description: data.description,
+        isActive: data.isActive,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.patch(
+        `/admin/vendor-categories/${id}`,
+        form,
+        formHeaders
+      );
+      return { data: res.data.category || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteVendorCategory: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/vendor-categories/${id}`);
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  vendorSubCategories: async (params?: {
+    vendorCategoryId?: string;
+    categoryId?: string;
+    restaurantId?: string;
+  }) => {
+    try {
+      const query = {
+        restaurantId: params?.restaurantId,
+        vendorCategoryId: params?.vendorCategoryId || params?.categoryId,
+      };
+
+      const res = await apiClient.get(
+        `/admin/vendor-subcategories${queryString(query)}`
+      );
+
+      return {
+        data: res.data.subCategories || res.data.data || [],
+        error: null,
+      };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
+
+  getVendorSubCategories: async (params?: {
+    vendorCategoryId?: string;
+    categoryId?: string;
+    restaurantId?: string;
+  }) => {
+    try {
+      const query = {
+        restaurantId: params?.restaurantId,
+        vendorCategoryId: params?.vendorCategoryId || params?.categoryId,
+      };
+
+      const res = await apiClient.get(
+        `/admin/vendor-subcategories${queryString(query)}`
+      );
+
+      return {
+        data: res.data.subCategories || res.data.data || [],
+        error: null,
+      };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
+
+  createVendorSubCategory: async (data: any) => {
+    try {
+      const form = toFormData({
+        vendorCategoryId: data.vendorCategoryId || data.categoryId,
+        categoryId: data.categoryId || data.vendorCategoryId,
+        restaurantId: data.restaurantId,
+        name: data.name,
+        description: data.description,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.post(
+        "/admin/vendor-subcategories",
+        form,
+        formHeaders
+      );
+      return { data: res.data.subCategory || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateVendorSubCategory: async (id: string, data: any) => {
+    try {
+      const form = toFormData({
+        vendorCategoryId: data.vendorCategoryId || data.categoryId,
+        categoryId: data.categoryId || data.vendorCategoryId,
+        restaurantId: data.restaurantId,
+        name: data.name,
+        description: data.description,
+        isActive: data.isActive,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.patch(
+        `/admin/vendor-subcategories/${id}`,
+        form,
+        formHeaders
+      );
+      return { data: res.data.subCategory || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteVendorSubCategory: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/vendor-subcategories/${id}`);
+      return { data: res.data.data || res.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
@@ -311,23 +675,7 @@ export const adminService = {
     subCategoryId?: string;
   }) => {
     try {
-      const query = new URLSearchParams();
-
-      if (params?.restaurantId && params.restaurantId !== "ALL") {
-        query.append("restaurantId", params.restaurantId);
-      }
-      if (params?.categoryId && params.categoryId !== "ALL") {
-        query.append("categoryId", params.categoryId);
-      }
-      if (params?.subCategoryId && params.subCategoryId !== "ALL") {
-        query.append("subCategoryId", params.subCategoryId);
-      }
-
-      const url = query.toString()
-        ? `/admin/menu-items?${query.toString()}`
-        : "/admin/menu-items";
-
-      const res = await apiClient.get(url);
+      const res = await apiClient.get(`/admin/menu-items${queryString(params)}`);
       return { data: res.data.menuItems || res.data.data || [], error: null };
     } catch (error: any) {
       return fail(error, []);
@@ -341,11 +689,19 @@ export const adminService = {
         categoryId: data.categoryId,
         subCategoryId: data.subCategoryId,
         name: data.name,
-        description: data.description || "",
+        description: data.description,
         price: data.price,
-        isVegetarian: String(data.isVegetarian || false),
-        isPopular: String(data.isPopular || false),
-        isAvailable: String(data.isAvailable ?? true),
+        isVegetarian: data.isVegetarian,
+        isVeg: data.isVeg,
+        isPopular: data.isPopular,
+        isAvailable: data.isAvailable ?? true,
+        isBestSeller: data.isBestSeller,
+        calories: data.calories,
+        servingInfo: data.servingInfo,
+        prepTimeMin: data.prepTimeMin,
+        spiceLevel: data.spiceLevel,
+        addons: data.addons,
+        customizations: data.customizations,
         image: filePart(data.image),
       });
 
@@ -364,11 +720,17 @@ export const adminService = {
         name: data.name,
         description: data.description,
         price: data.price,
-        isVegetarian:
-          data.isVegetarian !== undefined ? String(data.isVegetarian) : undefined,
-        isPopular: data.isPopular !== undefined ? String(data.isPopular) : undefined,
-        isAvailable:
-          data.isAvailable !== undefined ? String(data.isAvailable) : undefined,
+        isVegetarian: data.isVegetarian,
+        isVeg: data.isVeg,
+        isPopular: data.isPopular,
+        isAvailable: data.isAvailable,
+        isBestSeller: data.isBestSeller,
+        calories: data.calories,
+        servingInfo: data.servingInfo,
+        prepTimeMin: data.prepTimeMin,
+        spiceLevel: data.spiceLevel,
+        addons: data.addons,
+        customizations: data.customizations,
         image: filePart(data.image),
       });
 
@@ -382,7 +744,92 @@ export const adminService = {
   deleteMenuItem: async (id: string) => {
     try {
       const res = await apiClient.delete(`/admin/menu-items/${id}`);
-      return { data: res.data, error: null };
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  createMenuItemAddon: async (menuItemId: string, data: any) => {
+    try {
+      const form = toFormData({
+        title: data.title,
+        price: data.price,
+        isActive: data.isActive ?? true,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.post(
+        `/admin/menu-items/${menuItemId}/addons`,
+        form,
+        formHeaders
+      );
+      return { data: res.data.addon || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateMenuItemAddon: async (id: string, data: any) => {
+    try {
+      const form = toFormData({
+        title: data.title,
+        price: data.price,
+        isActive: data.isActive,
+        image: filePart(data.image),
+      });
+
+      const res = await apiClient.patch(`/admin/menu-addons/${id}`, form, formHeaders);
+      return { data: res.data.addon || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteMenuItemAddon: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/menu-addons/${id}`);
+      return { data: res.data.data || res.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  createMenuItemCustomization: async (menuItemId: string, data: any) => {
+    try {
+      const res = await apiClient.post(
+        `/admin/menu-items/${menuItemId}/customizations`,
+        {
+          title: data.title,
+          price: data.price,
+          isRequired: data.isRequired ?? false,
+          isActive: data.isActive ?? true,
+        }
+      );
+      return { data: res.data.customization || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateMenuItemCustomization: async (id: string, data: any) => {
+    try {
+      const res = await apiClient.patch(`/admin/menu-customizations/${id}`, {
+        title: data.title,
+        price: data.price,
+        isRequired: data.isRequired,
+        isActive: data.isActive,
+      });
+      return { data: res.data.customization || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteMenuItemCustomization: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/menu-customizations/${id}`);
+      return { data: res.data.data || res.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
@@ -394,17 +841,7 @@ export const adminService = {
     vendorId?: string;
   }) => {
     try {
-      const query = new URLSearchParams();
-
-      if (params?.status && params.status !== "ALL") query.append("status", params.status);
-      if (params?.cityId) query.append("cityId", params.cityId);
-      if (params?.vendorId) query.append("vendorId", params.vendorId);
-
-      const url = query.toString()
-        ? `/admin/orders?${query.toString()}`
-        : "/admin/orders";
-
-      const res = await apiClient.get(url);
+      const res = await apiClient.get(`/admin/orders${queryString(params)}`);
       return { data: res.data.orders || res.data.data || [], error: null };
     } catch (error: any) {
       return fail(error, []);
@@ -426,7 +863,6 @@ export const adminService = {
         status,
         note,
       });
-
       return { data: res.data.order || res.data.data, error: null };
     } catch (error: any) {
       return fail(error);
@@ -438,14 +874,13 @@ export const adminService = {
       const res = await apiClient.patch(`/admin/orders/${orderId}/assign-rider`, {
         riderId,
       });
-
       return { data: res.data.order || res.data.data, error: null };
     } catch (error: any) {
       return fail(error);
     }
   },
 
-  riderBilling: async (id: string, type: "daily" | "monthly") => {
+  riderBilling: async (id: string, type: "daily" | "monthly" = "daily") => {
     try {
       const res = await apiClient.get(`/admin/riders/${id}/billing?type=${type}`);
       return { data: res.data.data, error: null };
@@ -458,6 +893,67 @@ export const adminService = {
     try {
       const res = await apiClient.get("/admin/billing/monthly");
       return { data: res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  coupons: async () => {
+    try {
+      const res = await apiClient.get("/admin/coupons");
+      return { data: res.data.coupons || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
+
+  getCoupons: async () => {
+    try {
+      const res = await apiClient.get("/admin/coupons");
+      return { data: res.data.coupons || res.data.data || [], error: null };
+    } catch (error: any) {
+      return fail(error, []);
+    }
+  },
+getNotifications: async () => {
+  try {
+    const res = await apiClient.get("/admin/notifications");
+    return { data: res.data?.data || res.data?.notifications || [], error: null };
+  } catch (error: any) {
+    return { data: [], error: error.response?.data || error };
+  }
+},
+
+sendNotification: async (payload: any) => {
+  try {
+    const res = await apiClient.post("/admin/notifications/send", payload);
+    return { data: res.data?.data || res.data, error: null };
+  } catch (error: any) {
+    return { data: null, error: error.response?.data || error };
+  }
+},
+  createCoupon: async (data: any) => {
+    try {
+      const res = await apiClient.post("/admin/coupons", data);
+      return { data: res.data.coupon || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  updateCoupon: async (id: string, data: any) => {
+    try {
+      const res = await apiClient.patch(`/admin/coupons/${id}`, data);
+      return { data: res.data.coupon || res.data.data, error: null };
+    } catch (error: any) {
+      return fail(error);
+    }
+  },
+
+  deleteCoupon: async (id: string) => {
+    try {
+      const res = await apiClient.delete(`/admin/coupons/${id}`);
+      return { data: res.data.data || res.data, error: null };
     } catch (error: any) {
       return fail(error);
     }

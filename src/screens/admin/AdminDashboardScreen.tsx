@@ -85,6 +85,18 @@ export default function AdminDashboardScreen({ navigation }: any) {
     loadDashboard();
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("RoleSelection");
+  };
+
+  const handleLogout = () => {
+    Alert.alert("Logout", "Admin account se logout karna hai?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Logout", style: "destructive", onPress: signOut },
+    ]);
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -111,16 +123,51 @@ export default function AdminDashboardScreen({ navigation }: any) {
           />
         }
       >
+        <View style={styles.topBar}>
+          <TouchableOpacity style={styles.backBtn} onPress={goBack}>
+            <Icon name="chevron-back" size={24} color={THEME.text} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.profileBox}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate("AdminProfile")}
+          >
+            <View style={styles.profileAvatar}>
+              <Icon name="person" size={18} color="#000" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {user?.fullName || "Admin"}
+              </Text>
+              <Text style={styles.profileEmail} numberOfLines={1}>
+                {user?.email || "Karto Control"}
+              </Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+  style={styles.notificationBtn}
+  onPress={() => navigation.navigate("AdminNotifications")}
+>
+  <Icon
+    name="notifications-outline"
+    size={22}
+    color="#000"
+  />
+
+  <View style={styles.notificationDot} />
+</TouchableOpacity>
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+            <Icon name="log-out-outline" size={23} color="#000" />
+          </TouchableOpacity>
+        </View>
+
         <View style={styles.header}>
           <View style={{ flex: 1 }}>
             <Text style={styles.smallLabel}>KARTO ADMIN</Text>
             <Text style={styles.title}>Control Center</Text>
             <Text style={styles.subtitle}>{user?.fullName || user?.email}</Text>
           </View>
-
-          <TouchableOpacity style={styles.logoutBtn} onPress={signOut}>
-            <Icon name="log-out-outline" size={23} color="#000" />
-          </TouchableOpacity>
         </View>
 
         <View style={styles.heroCard}>
@@ -162,6 +209,13 @@ export default function AdminDashboardScreen({ navigation }: any) {
           <RailItem icon="add-circle-outline" label="Add Vendor" onPress={() => navigation.navigate("AdminVendorCreate")} />
           <RailItem icon="receipt-outline" label="Orders" onPress={() => navigation.navigate("AdminOrders")} />
           <RailItem icon="bicycle-outline" label="Riders" onPress={() => navigation.navigate("AdminRiders")} />
+        </View>
+
+        <View style={styles.quickRail}>
+          <RailItem icon="person-add-outline" label="Add Rider" onPress={() => navigation.navigate("AdminRiderCreate")} />
+          <RailItem icon="ticket-outline" label="Coupons" onPress={() => navigation.navigate("AdminCoupons")} />
+          <RailItem icon="fast-food-outline" label="Menu" onPress={() => navigation.navigate("AdminMenuItems")} />
+          <RailItem icon="person-circle-outline" label="Profile" onPress={() => navigation.navigate("AdminProfile")} />
         </View>
 
         <View style={styles.kpiGrid}>
@@ -227,16 +281,36 @@ export default function AdminDashboardScreen({ navigation }: any) {
           <ReportCard title="Karto Net" value={money(derived.netKartoIncome)} />
           <ReportCard title="Payout Due" value={money(data?.vendorIncome)} />
         </View>
-
-        <SectionTitle title="Management Suite" />
+		        <SectionTitle title="Management Suite" />
 
         <View style={styles.menuGrid}>
+          <MenuCard title="Dashboard" icon="speedometer-outline" onPress={() => navigation.navigate("AdminDashboard")} />
+          <MenuCard title="Users" icon="people-outline" onPress={() => navigation.navigate("AdminUsers")} />
           <MenuCard title="Cities" icon="business-outline" onPress={() => navigation.navigate("AdminCities")} />
+
           <MenuCard title="Categories" icon="grid-outline" onPress={() => navigation.navigate("AdminCategories")} />
+          <MenuCard title="Subcategories" icon="list-outline" onPress={() => navigation.navigate("AdminSubCategories")} />
           <MenuCard title="Vendors" icon="storefront-outline" onPress={() => navigation.navigate("AdminVendors")} />
+
+          <MenuCard title="Add Vendor" icon="add-circle-outline" onPress={() => navigation.navigate("AdminVendorCreate")} />
+          <MenuCard title="Vendor Categories" icon="albums-outline" onPress={() => navigation.navigate("AdminVendorCategories")} />
+          <MenuCard title="Vendor Subcategories" icon="layers-outline" onPress={() => navigation.navigate("AdminVendorSubCategories")} />
+
           <MenuCard title="Riders" icon="bicycle-outline" onPress={() => navigation.navigate("AdminRiders")} />
+          <MenuCard title="Add Rider" icon="person-add-outline" onPress={() => navigation.navigate("AdminRiderCreate")} />
+          <MenuCard title="Menu Items" icon="fast-food-outline" onPress={() => navigation.navigate("AdminMenuItems")} />
+
+          <MenuCard title="Addons" icon="add-outline" onPress={() => navigation.navigate("AdminMenuAddons")} />
+          <MenuCard title="Customizations" icon="options-outline" onPress={() => navigation.navigate("AdminMenuCustomizations")} />
           <MenuCard title="Orders" icon="receipt-outline" onPress={() => navigation.navigate("AdminOrders")} />
+
+          <MenuCard title="Assign Rider" icon="navigate-outline" onPress={() => navigation.navigate("AdminOrders")} />
           <MenuCard title="Billing" icon="card-outline" onPress={() => navigation.navigate("AdminAnalytics")} />
+          <MenuCard title="Coupons" icon="ticket-outline" onPress={() => navigation.navigate("AdminCoupons")} />
+<MenuCard title="Notifications" icon="notifications-outline" onPress={() => navigation.navigate("AdminNotifications")} />
+          <MenuCard title="Monthly Report" icon="bar-chart-outline" onPress={() => navigation.navigate("AdminAnalytics")} />
+          <MenuCard title="Profile" icon="person-circle-outline" onPress={() => navigation.navigate("AdminProfile")} />
+          <MenuCard title="Logout" icon="log-out-outline" danger onPress={handleLogout} />
         </View>
 
         <SectionTitle title="Recent Orders" action="All Orders" onPress={() => navigation.navigate("AdminOrders")} />
@@ -253,10 +327,15 @@ export default function AdminDashboardScreen({ navigation }: any) {
             const karto = (total * commission) / 100;
 
             return (
-              <View key={order.id} style={styles.orderCard}>
+              <TouchableOpacity
+                key={order.id}
+                style={styles.orderCard}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate("AdminOrderDetail", { orderId: order.id })}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.orderTitle}>
-                    #{order.orderNumber || order.id.slice(0, 8)}
+                    #{order.orderNumber || order.id?.slice?.(0, 8) || "ORDER"}
                   </Text>
                   <Text style={styles.orderMeta}>
                     {order.user?.fullName || "Customer"} • {order.restaurant?.name || "Vendor"}
@@ -268,7 +347,7 @@ export default function AdminDashboardScreen({ navigation }: any) {
                   <Text style={styles.orderAmount}>{money(total)}</Text>
                   <Text style={styles.orderStatus}>{order.status}</Text>
                 </View>
-              </View>
+              </TouchableOpacity>
             );
           })
         )}
@@ -347,13 +426,17 @@ function ReportCard({ title, value }: any) {
   );
 }
 
-function MenuCard({ icon, title, onPress }: any) {
+function MenuCard({ icon, title, onPress, danger }: any) {
   return (
-    <TouchableOpacity style={styles.menuCard} onPress={onPress} activeOpacity={0.86}>
-      <View style={styles.menuIconBox}>
-        <Icon name={icon} size={27} color={THEME.yellow} />
+    <TouchableOpacity
+      style={[styles.menuCard, danger && styles.menuDanger]}
+      onPress={onPress}
+      activeOpacity={0.86}
+    >
+      <View style={[styles.menuIconBox, danger && styles.menuDangerIcon]}>
+        <Icon name={icon} size={27} color={danger ? THEME.danger : THEME.yellow} />
       </View>
-      <Text style={styles.menuText}>{title}</Text>
+      <Text style={[styles.menuText, danger && { color: THEME.danger }]}>{title}</Text>
     </TouchableOpacity>
   );
 }
@@ -383,8 +466,62 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
+  topBar: {
+    paddingTop: 18,
+    paddingBottom: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+
+  backBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  profileBox: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 18,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    gap: 10,
+  },
+
+  profileAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 13,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  profileName: {
+    color: THEME.text,
+    fontWeight: "900",
+    fontSize: 13,
+  },
+
+  profileEmail: {
+    color: THEME.muted,
+    fontWeight: "700",
+    fontSize: 10,
+    marginTop: 2,
+  },
+
   header: {
-    paddingTop: 24,
+    paddingTop: 14,
     paddingBottom: 18,
     flexDirection: "row",
     justifyContent: "space-between",
@@ -412,9 +549,9 @@ const styles = StyleSheet.create({
   },
 
   logoutBtn: {
-    width: 47,
-    height: 47,
-    borderRadius: 24,
+    width: 42,
+    height: 42,
+    borderRadius: 16,
     backgroundColor: THEME.yellow,
     alignItems: "center",
     justifyContent: "center",
@@ -768,9 +905,9 @@ const styles = StyleSheet.create({
 
   menuCard: {
     width: "31.5%",
-    minHeight: 98,
+    minHeight: 104,
     backgroundColor: THEME.card,
-    borderRadius: 20,
+    borderRadius: 21,
     justifyContent: "center",
     alignItems: "center",
     padding: 10,
@@ -778,10 +915,15 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
   },
 
+  menuDanger: {
+    borderColor: "#4C1D1D",
+    backgroundColor: "#160B0B",
+  },
+
   menuIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 15,
+    width: 44,
+    height: 44,
+    borderRadius: 16,
     backgroundColor: "#1C190D",
     alignItems: "center",
     justifyContent: "center",
@@ -789,11 +931,16 @@ const styles = StyleSheet.create({
     borderColor: "#5D4D0B",
   },
 
+  menuDangerIcon: {
+    backgroundColor: "#2A1111",
+    borderColor: "#4C1D1D",
+  },
+
   menuText: {
     color: THEME.text,
     fontWeight: "900",
     marginTop: 8,
-    fontSize: 12,
+    fontSize: 11.5,
     textAlign: "center",
   },
 
@@ -845,4 +992,25 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "900",
   },
+  notificationBtn: {
+  width: 42,
+  height: 42,
+  borderRadius: 16,
+  backgroundColor: THEME.green,
+  alignItems: "center",
+  justifyContent: "center",
+  position: "relative",
+},
+
+notificationDot: {
+  position: "absolute",
+  top: 8,
+  right: 8,
+  width: 8,
+  height: 8,
+  borderRadius: 4,
+  backgroundColor: THEME.yellow,
+  borderWidth: 1,
+  borderColor: "#000",
+},
 });

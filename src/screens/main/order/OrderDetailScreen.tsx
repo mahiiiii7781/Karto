@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -17,17 +17,29 @@ import Toast from "react-native-toast-message";
 
 import { orderService, Order } from "@/services/api/orderService";
 import { useAuth } from "@/context/AuthContext";
+import {
+  connectSocket,
+  joinOrderRoom,
+  leaveOrderRoom,
+  onOrderUpdated,
+  onRiderLocationUpdated,
+} from "@/api/socketClient";
 
 const THEME = {
-  bg: "#070A08",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
   green: "#22C55E",
-  yellow: "#FACC15",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
+  yellow: "#F59E0B",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
+  white: "#FFFFFF",
   black: "#050807",
 };
 
@@ -44,11 +56,13 @@ const STEPS = [
 
 const STATUS_ALIASES: Record<string, string> = {
   ACCEPTED: "ACCEPTED_BY_VENDOR",
+  VENDOR_ACCEPTED: "ACCEPTED_BY_VENDOR",
   READY: "READY_FOR_PICKUP",
   READY_FOR_DELIVERY: "READY_FOR_PICKUP",
   RIDER_ASSIGNED: "ASSIGNED_TO_RIDER",
   ASSIGNED: "ASSIGNED_TO_RIDER",
   PICKED: "PICKED_UP",
+  PICKUP_DONE: "PICKED_UP",
   ON_THE_WAY: "OUT_FOR_DELIVERY",
   COMPLETED: "DELIVERED",
 };
@@ -59,14 +73,59 @@ const normalizeStatus = (value: any) => {
 };
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(2)}`;
-const labelFromStatus = (status: string) => String(status || "").replaceAll("_", " ");
+
+const labelFromStatus = (status: string) =>
+  String(status || "")
+    .replaceAll("_", " ")
+    .toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+
+const getOrderFromResponse = (value: any) =>
+  value?.order || value?.data?.order || value?.data?.data?.order || value?.data || value;
+
+const formatAddressText = (addr: any) => {
+  if (!addr) return "Delivery address not available";
+
+  const address = String(
+    addr.address || addr.addressLine || addr.fullAddress || addr.full_address || ""
+  ).trim();
+
+  const landmark = String(addr.landmark || "").trim();
+  const city = String(addr.city || addr.district || "").trim();
+  const state = String(addr.state || addr.stateName || addr.state_name || "").trim();
+  const pincode = String(addr.pincode || addr.pinCode || addr.pin_code || "").trim();
+
+  const first = [address, landmark].filter(Boolean).join(", ");
+  const tail = [city, state].filter(Boolean).join(", ");
+
+  if (first && tail && pincode) return `${first}, ${tail} - ${pincode}`;
+  if (first && tail) return `${first}, ${tail}`;
+  if (first && pincode) return `${first} - ${pincode}`;
+  if (first) return first;
+  if (tail && pincode) return `${tail} - ${pincode}`;
+
+  return "Delivery address not available";
+};
+
+const getOrderIdFromSocketPayload = (payload: any) =>
+  payload?.orderId ||
+  payload?.id ||
+  payload?.order?.id ||
+  payload?.data?.orderId ||
+  payload?.data?.order?.id;
+
+const getStatusFromSocketPayload = (payload: any) =>
+  payload?.status ||
+  payload?.order?.status ||
+  payload?.data?.status ||
+  payload?.data?.order?.status;
 
 export default function OrderDetailScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const { user } = useAuth();
 
-  const orderId = route.params?.orderId;
+  const orderId = route.params?.orderId || route.params?.order?.id;
   const initialOrder = route.params?.order;
 
   const [order, setOrder] = useState<Order | any>(initialOrder || null);
@@ -77,6 +136,7 @@ export default function OrderDetailScreen() {
   const [billModalVisible, setBillModalVisible] = useState(false);
   const [taxModalVisible, setTaxModalVisible] = useState(false);
   const [riderModalVisible, setRiderModalVisible] = useState(false);
+  const [lastRiderLocation, setLastRiderLocation] = useState<any>(null);
 
   const showToast = (
     type: "success" | "error" | "info",
@@ -99,6 +159,29 @@ export default function OrderDetailScreen() {
     return false;
   };
 
+  const loadOrder = async (isRefresh = false) => {
+    if (!orderId) return;
+
+    isRefresh ? setRefreshing(true) : setLoading(true);
+
+    try {
+      const { data, error } = await orderService.getOrderById(orderId);
+
+      if (error) {
+        showToast("error", "Unable to load order", error?.message || "Please try again.");
+        return;
+      }
+
+      const nextOrder = getOrderFromResponse(data);
+      setOrder(nextOrder || null);
+    } catch {
+      showToast("error", "Unable to load order", "Please try again.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       if (!user?.id) {
@@ -115,28 +198,40 @@ export default function OrderDetailScreen() {
     }, [orderId, user?.id])
   );
 
-  const loadOrder = async (isRefresh = false) => {
-    if (!orderId) return;
+  useEffect(() => {
+    if (!user?.id || !orderId) return;
 
-    isRefresh ? setRefreshing(true) : setLoading(true);
+    connectSocket().catch(() => {});
+    joinOrderRoom(orderId);
 
-    try {
-      const { data, error } = await orderService.getOrderById(orderId);
+    const cleanupOrder = onOrderUpdated((payload: any) => {
+      const payloadOrderId = getOrderIdFromSocketPayload(payload);
+      const nextStatus = getStatusFromSocketPayload(payload);
 
-      if (error) {
-        showToast("error", "Unable to load order", error?.message || "Please try again.");
-        return;
-      }
+      if (payloadOrderId !== orderId) return;
 
-      const nextOrder = (data as any)?.data || (data as any)?.order || data;
-      setOrder(nextOrder || null);
-    } catch {
-      showToast("error", "Unable to load order", "Please try again.");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
+      setOrder((prev: any) => ({
+        ...(prev || {}),
+        ...(payload?.order || {}),
+        status: nextStatus ? normalizeStatus(nextStatus) : prev?.status,
+        updatedAt: payload?.updatedAt || prev?.updatedAt,
+      }));
+    });
+
+    const cleanupLocation = onRiderLocationUpdated((payload: any) => {
+      const payloadOrderId = getOrderIdFromSocketPayload(payload);
+
+      if (payloadOrderId !== orderId) return;
+
+      setLastRiderLocation(payload?.location || payload);
+    });
+
+    return () => {
+      cleanupOrder?.();
+      cleanupLocation?.();
+      leaveOrderRoom(orderId);
+    };
+  }, [user?.id, orderId]);
 
   const status = normalizeStatus(order?.status);
 
@@ -228,6 +323,7 @@ export default function OrderDetailScreen() {
           label: "Order Placed",
           short: "Placed",
           color: THEME.yellow,
+          bg: "#FFF7E8",
           icon: "receipt-outline",
           banner: "Waiting for store confirmation",
           location: "Order received by Karto",
@@ -238,6 +334,7 @@ export default function OrderDetailScreen() {
           label: "Accepted by Store",
           short: "Accepted",
           color: THEME.green,
+          bg: "#EAFBF1",
           icon: "checkmark-done-outline",
           banner: "Store accepted your order",
           location: "At the store",
@@ -248,6 +345,7 @@ export default function OrderDetailScreen() {
           label: "Preparing",
           short: "Preparing",
           color: THEME.yellow,
+          bg: "#FFF7E8",
           icon: "restaurant-outline",
           banner: "Food is being prepared",
           location: "Inside store kitchen",
@@ -258,6 +356,7 @@ export default function OrderDetailScreen() {
           label: "Ready for Pickup",
           short: "Ready",
           color: THEME.green,
+          bg: "#EAFBF1",
           icon: "bag-check-outline",
           banner: "Order is packed and ready",
           location: "Packed at store counter",
@@ -268,6 +367,7 @@ export default function OrderDetailScreen() {
           label: "Rider Assigned",
           short: "Assigned",
           color: THEME.green,
+          bg: "#EAFBF1",
           icon: "person-add-outline",
           banner: "Delivery partner assigned",
           location: "Rider is heading to the store",
@@ -278,6 +378,7 @@ export default function OrderDetailScreen() {
           label: "Picked Up",
           short: "Picked",
           color: THEME.green,
+          bg: "#EAFBF1",
           icon: "cube-outline",
           banner: "Order picked up",
           location: "With delivery partner",
@@ -287,7 +388,8 @@ export default function OrderDetailScreen() {
         return {
           label: "Out for Delivery",
           short: "On the way",
-          color: THEME.green,
+          color: THEME.orange,
+          bg: THEME.orangeSoft,
           icon: "bicycle-outline",
           banner: "Arriving soon",
           location: "On the way to your address",
@@ -298,6 +400,7 @@ export default function OrderDetailScreen() {
           label: "Delivered",
           short: "Delivered",
           color: THEME.green,
+          bg: "#EAFBF1",
           icon: "checkmark-circle-outline",
           banner: "Order delivered",
           location: "Delivered to your address",
@@ -308,6 +411,7 @@ export default function OrderDetailScreen() {
           label: "Cancelled",
           short: "Cancelled",
           color: THEME.danger,
+          bg: "#FFF1F1",
           icon: "close-circle-outline",
           banner: "Order cancelled",
           location: "Order is no longer active",
@@ -318,6 +422,7 @@ export default function OrderDetailScreen() {
           label: labelFromStatus(status),
           short: labelFromStatus(status),
           color: THEME.muted,
+          bg: THEME.card2,
           icon: "time-outline",
           banner: "Order status updated",
           location: "Status updated",
@@ -389,8 +494,10 @@ export default function OrderDetailScreen() {
 
     showToast(
       "info",
-      "Live tracking coming soon",
-      "You will be able to track rider movement here."
+      lastRiderLocation ? "Rider location updated" : "Live tracking",
+      lastRiderLocation
+        ? "Latest rider location received. Map screen will be connected next."
+        : "Rider movement will appear after pickup."
     );
   };
 
@@ -414,16 +521,7 @@ export default function OrderDetailScreen() {
 
   const getAddressText = () => {
     const addr = order?.address || order?.deliveryAddress || order?.delivery_address;
-
-    if (!addr) return "Delivery address not available";
-
-    return (
-      addr.address ||
-      addr.fullAddress ||
-      addr.full_address ||
-      `${addr.houseNo || ""} ${addr.street || ""} ${addr.city || ""}`.trim() ||
-      "Delivery address not available"
-    );
+    return formatAddressText(addr);
   };
 
   const getStepState = (step: string, index: number) => {
@@ -437,19 +535,18 @@ export default function OrderDetailScreen() {
     };
   };
 
-
   if (!user?.id) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
         <Text style={styles.emptyTitle}>Login required</Text>
         <Text style={styles.emptySub}>Please sign in to view your order details.</Text>
-        <TouchableOpacity style={styles.loginBtn} onPress={() => navigation.navigate("Auth")}>
-          <Text style={styles.loginBtnText}>Login / Signup</Text>
-          <Icon name="arrow-forward" size={18} color={THEME.black} />
+        <TouchableOpacity style={styles.primaryBtn} onPress={() => navigation.navigate("Auth")}>
+          <Text style={styles.primaryBtnText}>Login / Signup</Text>
+          <Icon name="arrow-forward" size={18} color={THEME.white} />
         </TouchableOpacity>
       </View>
     );
@@ -458,14 +555,14 @@ export default function OrderDetailScreen() {
   if (!orderId && !order) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
         <Text style={styles.emptyTitle}>Order unavailable</Text>
         <Text style={styles.emptySub}>We could not find details for this order.</Text>
-        <TouchableOpacity style={styles.loginBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.loginBtnText}>Go Back</Text>
+        <TouchableOpacity style={styles.primaryBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.primaryBtnText}>Go Back</Text>
         </TouchableOpacity>
       </View>
     );
@@ -474,11 +571,11 @@ export default function OrderDetailScreen() {
   if (loading || !order) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.loadingText}>Loading order details...</Text>
       </View>
     );
@@ -486,12 +583,12 @@ export default function OrderDetailScreen() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 35 }}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.iconBtn} onPress={() => navigation.goBack()}>
-            <Icon name="chevron-back" size={24} color={THEME.text} />
+            <Icon name="chevron-back" size={24} color={THEME.blue} />
           </TouchableOpacity>
 
           <View style={{ flex: 1 }}>
@@ -501,9 +598,9 @@ export default function OrderDetailScreen() {
 
           <TouchableOpacity style={styles.refreshBtn} onPress={() => loadOrder(true)} disabled={refreshing}>
             {refreshing ? (
-              <ActivityIndicator size="small" color={THEME.black} />
+              <ActivityIndicator size="small" color={THEME.white} />
             ) : (
-              <Icon name="refresh" size={19} color={THEME.black} />
+              <Icon name="refresh" size={19} color={THEME.white} />
             )}
           </TouchableOpacity>
         </View>
@@ -511,7 +608,7 @@ export default function OrderDetailScreen() {
         <View style={styles.liveBanner}>
           <View style={styles.liveBannerTop}>
             <View style={[styles.liveIconBox, { backgroundColor: meta.color }]}>
-              <Icon name={meta.icon as any} size={25} color={THEME.black} />
+              <Icon name={meta.icon as any} size={25} color={THEME.white} />
             </View>
 
             <View style={{ flex: 1 }}>
@@ -526,7 +623,7 @@ export default function OrderDetailScreen() {
                 {["DELIVERED", "CANCELLED"].includes(status) ? "--" : etaMinutes}
               </Text>
               <Text style={styles.timerLabel}>
-                {["DELIVERED", "CANCELLED"].includes(status) ? "Completed" : "min ETA"}
+                {["DELIVERED", "CANCELLED"].includes(status) ? "Done" : "min ETA"}
               </Text>
             </View>
 
@@ -547,7 +644,7 @@ export default function OrderDetailScreen() {
 
         <TouchableOpacity style={styles.whereCard} activeOpacity={0.88} onPress={trackLiveOrder}>
           <View style={styles.mapPreview}>
-            <Icon name="navigate" size={30} color={THEME.yellow} />
+            <Icon name="navigate" size={30} color={THEME.orange} />
           </View>
 
           <View style={{ flex: 1 }}>
@@ -555,7 +652,7 @@ export default function OrderDetailScreen() {
             <Text style={styles.whereSub}>{meta.location}</Text>
           </View>
 
-          <Icon name="chevron-forward" size={20} color={THEME.green} />
+          <Icon name="chevron-forward" size={20} color={THEME.orange} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -564,7 +661,7 @@ export default function OrderDetailScreen() {
           onPress={() => setRiderModalVisible(true)}
         >
           <View style={styles.riderAvatar}>
-            <Icon name="person" size={24} color={THEME.black} />
+            <Icon name="person" size={24} color={THEME.white} />
           </View>
 
           <View style={{ flex: 1 }}>
@@ -579,12 +676,12 @@ export default function OrderDetailScreen() {
           </View>
 
           <TouchableOpacity style={styles.callSmallBtn} onPress={callRider}>
-            <Icon name="call" size={17} color={THEME.black} />
+            <Icon name="call" size={17} color={THEME.white} />
           </TouchableOpacity>
         </TouchableOpacity>
 
         <View style={styles.statusHero}>
-          <View style={[styles.heroIcon, { borderColor: meta.color }]}>
+          <View style={[styles.heroIcon, { backgroundColor: meta.bg }]}>
             <Icon name={meta.icon as any} size={34} color={meta.color} />
           </View>
 
@@ -593,7 +690,7 @@ export default function OrderDetailScreen() {
 
           <View style={styles.heroMetaRow}>
             <View style={styles.heroMetaChip}>
-              <Icon name="time-outline" size={15} color={THEME.yellow} />
+              <Icon name="time-outline" size={15} color={THEME.orange} />
               <Text style={styles.heroMetaText}>{getDate()}</Text>
             </View>
 
@@ -626,10 +723,10 @@ export default function OrderDetailScreen() {
                     style={[
                       styles.timelineDot,
                       done && styles.timelineDotDone,
-                      active && { borderColor: THEME.yellow },
+                      active && { borderColor: THEME.orange },
                     ]}
                   >
-                    {done && <Icon name="checkmark" size={13} color={THEME.black} />}
+                    {done && <Icon name="checkmark" size={13} color={THEME.white} />}
                   </View>
 
                   {index !== STEPS.length - 1 && (
@@ -638,7 +735,7 @@ export default function OrderDetailScreen() {
                 </View>
 
                 <View style={styles.timelineContent}>
-                  <Text style={[styles.timelineTitle, active && { color: THEME.green }]}>
+                  <Text style={[styles.timelineTitle, active && { color: THEME.orange }]}>
                     {labelFromStatus(step)}
                   </Text>
                   <Text style={styles.timelineSub}>
@@ -655,7 +752,7 @@ export default function OrderDetailScreen() {
 
           <View style={styles.infoRow}>
             <View style={styles.infoIcon}>
-              <Icon name="storefront-outline" size={22} color={THEME.green} />
+              <Icon name="storefront-outline" size={22} color={THEME.orange} />
             </View>
 
             <View style={{ flex: 1 }}>
@@ -680,7 +777,7 @@ export default function OrderDetailScreen() {
                 ]}
               >
                 <View style={styles.foodIcon}>
-                  <Icon name="fast-food-outline" size={22} color={THEME.green} />
+                  <Icon name="fast-food-outline" size={22} color={THEME.orange} />
                 </View>
 
                 <View style={{ flex: 1 }}>
@@ -699,7 +796,7 @@ export default function OrderDetailScreen() {
 
           <View style={styles.infoRow}>
             <View style={styles.infoIcon}>
-              <Icon name="location-outline" size={22} color={THEME.green} />
+              <Icon name="location-outline" size={22} color={THEME.orange} />
             </View>
 
             <View style={{ flex: 1 }}>
@@ -739,7 +836,7 @@ export default function OrderDetailScreen() {
             <View style={styles.taxLeft}>
               <Text style={styles.billLabel}>Tax</Text>
               <TouchableOpacity onPress={() => setTaxModalVisible(true)}>
-                <Icon name="information-circle-outline" size={17} color={THEME.yellow} />
+                <Icon name="information-circle-outline" size={17} color={THEME.orange} />
               </TouchableOpacity>
             </View>
 
@@ -756,7 +853,7 @@ export default function OrderDetailScreen() {
 
         <View style={styles.actionWrapper}>
           <TouchableOpacity style={styles.trackFullBtn} onPress={trackLiveOrder}>
-            <Icon name="navigate-circle-outline" size={21} color={THEME.black} />
+            <Icon name="navigate-circle-outline" size={21} color={THEME.white} />
             <Text style={styles.trackFullText}>Track Live Order</Text>
           </TouchableOpacity>
 
@@ -797,6 +894,7 @@ export default function OrderDetailScreen() {
         order={order}
         onCall={callRider}
         status={status}
+        lastRiderLocation={lastRiderLocation}
       />
     </View>
   );
@@ -838,7 +936,7 @@ const CancelModal = ({ visible, onClose, onConfirm, loading, orderNumber }: any)
 
           <TouchableOpacity style={styles.cancelConfirmBtn} onPress={onConfirm} disabled={loading}>
             {loading ? (
-              <ActivityIndicator color={THEME.black} />
+              <ActivityIndicator color={THEME.white} />
             ) : (
               <Text style={styles.cancelConfirmText}>Cancel Order</Text>
             )}
@@ -854,7 +952,7 @@ const TaxModal = ({ visible, onClose, bill }: any) => (
     <View style={styles.modalOverlay}>
       <View style={styles.taxModal}>
         <View style={styles.taxIconBox}>
-          <Icon name="receipt-outline" size={30} color={THEME.yellow} />
+          <Icon name="receipt-outline" size={30} color={THEME.orange} />
         </View>
 
         <Text style={styles.taxTitle}>Tax Details</Text>
@@ -886,7 +984,7 @@ const BillModal = ({ visible, onClose, bill }: any) => (
     <View style={styles.modalOverlay}>
       <View style={styles.taxModal}>
         <View style={styles.taxIconBox}>
-          <Icon name="document-text-outline" size={30} color={THEME.yellow} />
+          <Icon name="document-text-outline" size={30} color={THEME.orange} />
         </View>
 
         <Text style={styles.taxTitle}>Complete Bill</Text>
@@ -914,17 +1012,27 @@ const BillModal = ({ visible, onClose, bill }: any) => (
   </Modal>
 );
 
-const RiderModal = ({ visible, onClose, order, onCall, status }: any) => {
+const RiderModal = ({ visible, onClose, order, onCall, status, lastRiderLocation }: any) => {
   const rider = order?.rider;
   const phone =
     rider?.phone || rider?.mobile || rider?.phoneNumber || rider?.phone_number || "Not available";
+
+  const locationText = lastRiderLocation
+    ? "Latest rider location received"
+    : status === "OUT_FOR_DELIVERY"
+    ? "On the way to your address"
+    : status === "PICKED_UP"
+    ? "Order picked up from store"
+    : rider
+    ? "Heading to store"
+    : "Not available yet";
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalOverlay}>
         <View style={styles.riderModal}>
           <View style={styles.riderModalAvatar}>
-            <Icon name="person" size={34} color={THEME.black} />
+            <Icon name="person" size={34} color={THEME.white} />
           </View>
 
           <Text style={styles.riderModalTitle}>
@@ -940,19 +1048,7 @@ const RiderModal = ({ visible, onClose, order, onCall, status }: any) => {
           <View style={styles.riderInfoBox}>
             <InfoLine icon="call-outline" label="Phone Number" value={phone} />
             <InfoLine icon="bicycle-outline" label="Delivery Status" value={labelFromStatus(status)} />
-            <InfoLine
-              icon="cube-outline"
-              label="Current Location"
-              value={
-                status === "OUT_FOR_DELIVERY"
-                  ? "On the way to your address"
-                  : status === "PICKED_UP"
-                  ? "Order picked up from store"
-                  : rider
-                  ? "Heading to store"
-                  : "Not available yet"
-              }
-            />
+            <InfoLine icon="cube-outline" label="Current Location" value={locationText} />
           </View>
 
           <View style={styles.riderModalActions}>
@@ -961,7 +1057,7 @@ const RiderModal = ({ visible, onClose, order, onCall, status }: any) => {
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.callModalBtn} onPress={onCall}>
-              <Icon name="call" size={18} color={THEME.black} />
+              <Icon name="call" size={18} color={THEME.white} />
               <Text style={styles.callModalText}>Call</Text>
             </TouchableOpacity>
           </View>
@@ -974,7 +1070,7 @@ const RiderModal = ({ visible, onClose, order, onCall, status }: any) => {
 const InfoLine = ({ icon, label, value }: any) => (
   <View style={styles.infoLine}>
     <View style={styles.infoLineIcon}>
-      <Icon name={icon} size={18} color={THEME.green} />
+      <Icon name={icon} size={18} color={THEME.orange} />
     </View>
 
     <View style={{ flex: 1 }}>
@@ -983,6 +1079,14 @@ const InfoLine = ({ icon, label, value }: any) => (
     </View>
   </View>
 );
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: THEME.bg },
@@ -997,14 +1101,13 @@ const styles = StyleSheet.create({
     height: 74,
     borderRadius: 25,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 18,
+    ...shadow,
   },
   loadingLogoText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 38,
     fontWeight: "900",
   },
@@ -1014,7 +1117,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   emptyTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
     marginTop: 16,
@@ -1028,18 +1131,19 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     paddingHorizontal: 26,
   },
-  loginBtn: {
+  primaryBtn: {
     marginTop: 22,
-    backgroundColor: THEME.green,
-    borderRadius: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
     paddingVertical: 14,
     paddingHorizontal: 22,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    ...shadow,
   },
-  loginBtnText: {
-    color: THEME.black,
+  primaryBtnText: {
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -1054,32 +1158,31 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 44,
     height: 44,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   refreshBtn: {
     width: 42,
     height: 42,
-    borderRadius: 17,
-    backgroundColor: THEME.green,
+    borderRadius: 16,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
-  title: { color: THEME.text, fontSize: 27, fontWeight: "900" },
+  title: { color: THEME.blue, fontSize: 27, fontWeight: "900" },
   subtitle: { color: THEME.muted, marginTop: 2, fontWeight: "700" },
 
   liveBanner: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 28,
+    borderRadius: 24,
     padding: 18,
     marginBottom: 14,
+    ...shadow,
   },
   liveBannerTop: {
     flexDirection: "row",
@@ -1089,18 +1192,18 @@ const styles = StyleSheet.create({
   liveIconBox: {
     width: 54,
     height: 54,
-    borderRadius: 20,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
   },
   liveBannerLabel: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1,
   },
   liveBannerTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 22,
     fontWeight: "900",
     marginTop: 4,
@@ -1109,10 +1212,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginTop: 16,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 22,
+    backgroundColor: THEME.surface,
+    borderRadius: 20,
     padding: 14,
     gap: 13,
   },
@@ -1120,24 +1221,24 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 24,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
   },
   timerValue: {
-    color: THEME.black,
+    color: THEME.white,
     fontSize: 28,
     fontWeight: "900",
   },
   timerLabel: {
-    color: THEME.black,
+    color: THEME.white,
     fontSize: 11,
     fontWeight: "900",
     marginTop: -2,
   },
   timerTextBox: { flex: 1 },
   timerTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 15,
   },
@@ -1152,27 +1253,24 @@ const styles = StyleSheet.create({
   whereCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     marginBottom: 14,
+    ...shadow,
   },
   mapPreview: {
     width: 58,
     height: 58,
     borderRadius: 20,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
   },
   whereTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 16,
     fontWeight: "900",
   },
@@ -1186,25 +1284,24 @@ const styles = StyleSheet.create({
   riderCard: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     marginBottom: 14,
+    ...shadow,
   },
   riderAvatar: {
     width: 56,
     height: 56,
     borderRadius: 20,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
   },
   riderName: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 15,
     fontWeight: "900",
   },
@@ -1218,7 +1315,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 16,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1226,19 +1323,16 @@ const styles = StyleSheet.create({
   statusHero: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
-    borderRadius: 26,
+    borderRadius: 24,
     padding: 22,
     alignItems: "center",
     marginBottom: 16,
+    ...shadow,
   },
   heroIcon: {
     width: 74,
     height: 74,
     borderRadius: 26,
-    borderWidth: 1,
-    backgroundColor: THEME.card2,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1258,9 +1352,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   heroMetaChip: {
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.surface,
     borderRadius: 99,
     paddingHorizontal: 10,
     paddingVertical: 7,
@@ -1268,32 +1360,29 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
   },
-  heroMetaText: { color: THEME.text, fontSize: 12, fontWeight: "800" },
+  heroMetaText: { color: THEME.blue, fontSize: 12, fontWeight: "800" },
 
   card: {
     marginHorizontal: 20,
     backgroundColor: THEME.card,
-    borderRadius: 22,
+    borderRadius: 20,
     padding: 15,
-    borderWidth: 1,
-    borderColor: THEME.border,
     marginBottom: 15,
+    ...shadow,
   },
   sectionTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
     marginBottom: 14,
   },
   sectionTitleNoMargin: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 17,
     fontWeight: "900",
   },
   cancelledBanner: {
-    backgroundColor: "#1B0E0E",
-    borderWidth: 1,
-    borderColor: "#3F1717",
+    backgroundColor: "#FFF1F1",
     borderRadius: 15,
     padding: 12,
     flexDirection: "row",
@@ -1314,17 +1403,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  timelineDotDone: { backgroundColor: THEME.green, borderColor: THEME.green },
+  timelineDotDone: { backgroundColor: THEME.orange, borderColor: THEME.orange },
   timelineLine: {
     flex: 1,
     width: 2,
     backgroundColor: THEME.border,
     marginTop: 4,
   },
-  timelineLineDone: { backgroundColor: "#173923" },
+  timelineLineDone: { backgroundColor: "#FFD6C8" },
   timelineContent: { flex: 1, paddingLeft: 10, paddingBottom: 18 },
   timelineTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 14,
     textTransform: "capitalize",
@@ -1341,13 +1430,11 @@ const styles = StyleSheet.create({
     width: 46,
     height: 46,
     borderRadius: 16,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
   },
-  infoTitle: { color: THEME.text, fontWeight: "900", fontSize: 15 },
+  infoTitle: { color: THEME.blue, fontWeight: "900", fontSize: 15 },
   infoSub: { color: THEME.muted, marginTop: 4, lineHeight: 19, fontWeight: "700" },
 
   itemRow: {
@@ -1362,16 +1449,14 @@ const styles = StyleSheet.create({
     width: 48,
     height: 48,
     borderRadius: 16,
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
     marginRight: 11,
   },
-  itemName: { color: THEME.text, fontWeight: "900" },
+  itemName: { color: THEME.blue, fontWeight: "900" },
   itemQty: { color: THEME.muted, marginTop: 3, fontSize: 12, fontWeight: "700" },
-  itemPrice: { color: THEME.green, fontWeight: "900", fontSize: 15 },
+  itemPrice: { color: THEME.orange, fontWeight: "900", fontSize: 15 },
   muted: { color: THEME.muted, fontWeight: "700" },
 
   paymentHeader: {
@@ -1380,17 +1465,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 10,
   },
-  linkText: { color: THEME.green, fontWeight: "900" },
+  linkText: { color: THEME.orange, fontWeight: "900" },
   billRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 8,
     gap: 12,
   },
-  billLabel: { color: THEME.muted, flex: 1, fontWeight: "700" },
-  billValue: { color: THEME.text, fontWeight: "800", textAlign: "right" },
-  billBold: { color: THEME.text, fontWeight: "900", fontSize: 16 },
-  billTotal: { color: THEME.green, fontWeight: "900", fontSize: 18 },
+  billLabel: { color: THEME.muted, flex: 1, fontWeight: "800" },
+  billValue: { color: THEME.blue, fontWeight: "900", textAlign: "right" },
+  billBold: { color: THEME.blue, fontWeight: "900", fontSize: 16 },
+  billTotal: { color: THEME.orange, fontWeight: "900", fontSize: 18 },
   greenText: { color: THEME.green },
   dangerText: { color: THEME.danger },
   taxRow: {
@@ -1403,20 +1488,19 @@ const styles = StyleSheet.create({
 
   actionWrapper: { marginHorizontal: 20, marginBottom: 24, gap: 12 },
   trackFullBtn: {
-    backgroundColor: THEME.green,
-    borderRadius: 18,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
     paddingVertical: 15,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 8,
+    ...shadow,
   },
-  trackFullText: { color: THEME.black, fontSize: 16, fontWeight: "900" },
+  trackFullText: { color: THEME.white, fontSize: 16, fontWeight: "900" },
   cancelFullBtn: {
-    backgroundColor: "#1B0E0E",
-    borderWidth: 1,
-    borderColor: "#3F1717",
-    borderRadius: 18,
+    backgroundColor: "#FFF1F1",
+    borderRadius: 16,
     paddingVertical: 15,
     alignItems: "center",
     justifyContent: "center",
@@ -1427,15 +1511,13 @@ const styles = StyleSheet.create({
 
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.72)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     padding: 22,
   },
   confirmBox: {
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
@@ -1443,14 +1525,12 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 24,
-    backgroundColor: "#1B0E0E",
-    borderWidth: 1,
-    borderColor: "#3F1717",
+    backgroundColor: "#FFF1F1",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
-  confirmTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
+  confirmTitle: { color: THEME.blue, fontSize: 22, fontWeight: "900" },
   confirmText: {
     color: THEME.muted,
     textAlign: "center",
@@ -1462,27 +1542,23 @@ const styles = StyleSheet.create({
   keepBtn: {
     flex: 1,
     backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
   },
-  keepText: { color: THEME.text, fontWeight: "900" },
+  keepText: { color: THEME.blue, fontWeight: "900" },
   cancelConfirmBtn: {
     flex: 1,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.danger,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
   },
-  cancelConfirmText: { color: THEME.black, fontWeight: "900" },
+  cancelConfirmText: { color: THEME.white, fontWeight: "900" },
 
   taxModal: {
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
@@ -1490,14 +1566,12 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 24,
-    backgroundColor: "#252109",
-    borderWidth: 1,
-    borderColor: "#57470A",
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
-  taxTitle: { color: THEME.text, fontSize: 22, fontWeight: "900" },
+  taxTitle: { color: THEME.blue, fontSize: 22, fontWeight: "900" },
   taxSub: {
     color: THEME.muted,
     textAlign: "center",
@@ -1507,27 +1581,23 @@ const styles = StyleSheet.create({
   },
   taxBreakBox: {
     alignSelf: "stretch",
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
-    borderWidth: 1,
-    borderColor: THEME.border,
     padding: 14,
     marginTop: 18,
   },
   modalBtn: {
     marginTop: 18,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     paddingHorizontal: 24,
     paddingVertical: 13,
     borderRadius: 16,
   },
-  modalBtnText: { color: THEME.black, fontWeight: "900" },
+  modalBtnText: { color: THEME.white, fontWeight: "900" },
 
   riderModal: {
     backgroundColor: THEME.card,
-    borderRadius: 26,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    borderRadius: 24,
     padding: 20,
     alignItems: "center",
   },
@@ -1535,13 +1605,13 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 28,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 14,
   },
   riderModalTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 21,
     fontWeight: "900",
     textAlign: "center",
@@ -1555,10 +1625,8 @@ const styles = StyleSheet.create({
   },
   riderInfoBox: {
     alignSelf: "stretch",
-    backgroundColor: THEME.card2,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
-    borderWidth: 1,
-    borderColor: THEME.border,
     padding: 14,
     marginTop: 18,
     gap: 12,
@@ -1572,9 +1640,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 14,
-    backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.orangeSoft,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1584,7 +1650,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   infoLineValue: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 14,
     fontWeight: "900",
     marginTop: 2,
@@ -1596,7 +1662,7 @@ const styles = StyleSheet.create({
   },
   callModalBtn: {
     flex: 1,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     borderRadius: 16,
     paddingVertical: 13,
     alignItems: "center",
@@ -1605,7 +1671,7 @@ const styles = StyleSheet.create({
     gap: 7,
   },
   callModalText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
   },
 });

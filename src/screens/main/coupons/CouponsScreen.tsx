@@ -12,25 +12,31 @@ import {
 } from "react-native";
 import Clipboard from "@react-native-clipboard/clipboard";
 import Icon from "react-native-vector-icons/Ionicons";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import Toast from "react-native-toast-message";
 
 import { couponService, Coupon } from "@/services/api/couponService";
 
 const THEME = {
-  bg: "#050807",
-  card: "#0D1511",
-  card2: "#101C15",
+  bg: "#F5F6FA",
+  card: "#FFFFFF",
+  card2: "#EEF2F7",
+  surface: "#F9FAFC",
+  orange: "#FF4D18",
+  orangeSoft: "#FFF0EA",
+  blue: "#0D4563",
   green: "#22C55E",
-  yellow: "#FACC15",
-  text: "#F8FAFC",
-  muted: "#9CA3AF",
-  border: "#1E2A22",
+  yellow: "#F59E0B",
+  text: "#123047",
+  muted: "#748494",
+  border: "#E4E8EF",
   danger: "#EF4444",
-  black: "#041008",
+  white: "#FFFFFF",
+  black: "#050807",
 };
 
 type ToastType = "success" | "error" | "info";
+type TabType = "ACTIVE" | "EXPIRED";
 
 const showToast = (type: ToastType, text1: string, text2?: string) => {
   Toast.show({
@@ -48,39 +54,57 @@ const normalizeCoupons = (payload: any): Coupon[] => {
     payload?.data?.coupons ||
     payload?.data?.data ||
     payload?.data ||
+    payload?.coupons ||
     payload;
 
   return Array.isArray(list) ? list.filter(Boolean) : [];
 };
 
 const getCouponId = (coupon: Coupon, index: number) =>
-  String(coupon.id || coupon.code || `coupon-${index}`);
+  String((coupon as any).id || (coupon as any).code || `coupon-${index}`);
 
-const getCouponCode = (coupon: Coupon) => String(coupon.code || "").trim();
+const getCouponCode = (coupon: Coupon) =>
+  String((coupon as any).code || (coupon as any).couponCode || (coupon as any).coupon_code || "")
+    .trim()
+    .toUpperCase();
 
 const getCouponTitle = (coupon: Coupon) =>
-  coupon.title  || "Karto Offer";
+  (coupon as any).title || (coupon as any).name || "Karto Offer";
 
 const getCouponDescription = (coupon: Coupon) =>
-  coupon.description || "Use this coupon to save more on your order.";
+  (coupon as any).description || "Use this coupon to save more on your order.";
+
+const getDiscountType = (coupon: Coupon) =>
+  String(
+    (coupon as any).discountType ||
+      (coupon as any).discount_type ||
+      (coupon as any).type ||
+      "FLAT"
+  ).toUpperCase();
+
+const getDiscountValue = (coupon: Coupon) =>
+  Number((coupon as any).discountValue ?? (coupon as any).discount_value ?? (coupon as any).value ?? 0);
 
 const getDiscountText = (coupon: Coupon) => {
-  const type = String(coupon.discountType || coupon.discount_type || "FLAT").toUpperCase();
-  const value = Number(coupon.discountValue ?? coupon.discount_value ?? 0);
+  const type = getDiscountType(coupon);
+  const value = getDiscountValue(coupon);
 
-  if (type === "PERCENTAGE") return `${value}% OFF`;
+  if (type === "PERCENTAGE" || type === "PERCENT") return `${value}% OFF`;
   return `₹${value} OFF`;
 };
 
 const getMinOrder = (coupon: Coupon) =>
-  Number(coupon.minOrderAmount ?? coupon.min_order_amount ?? 0);
+  Number((coupon as any).minOrderAmount ?? (coupon as any).min_order_amount ?? (coupon as any).minimumOrderAmount ?? 0);
 
 const getMaxDiscount = (coupon: Coupon) =>
-  Number(coupon.maxDiscount ?? coupon.max_discount ?? 0);
+  Number((coupon as any).maxDiscount ?? (coupon as any).max_discount ?? (coupon as any).maximumDiscount ?? 0);
+
+const getUsageLimit = (coupon: Coupon) =>
+  Number((coupon as any).usageLimit ?? (coupon as any).usage_limit ?? 0);
 
 const isCouponActive = (coupon: Coupon) => {
-  const active = Boolean(coupon.isActive ?? coupon.is_active ?? true);
-  const expiry = coupon.expiresAt || coupon.expires_at;
+  const active = Boolean((coupon as any).isActive ?? (coupon as any).is_active ?? true);
+  const expiry = (coupon as any).expiresAt || (coupon as any).expires_at || (coupon as any).validTill || (coupon as any).valid_till;
 
   if (!active) return false;
   if (!expiry) return true;
@@ -92,7 +116,12 @@ const isCouponActive = (coupon: Coupon) => {
 };
 
 const getExpiry = (coupon: Coupon) => {
-  const date = coupon.expiresAt || coupon.expires_at;
+  const date =
+    (coupon as any).expiresAt ||
+    (coupon as any).expires_at ||
+    (coupon as any).validTill ||
+    (coupon as any).valid_till;
+
   if (!date) return "Limited time";
 
   const parsed = new Date(date);
@@ -105,18 +134,36 @@ const getExpiry = (coupon: Coupon) => {
   });
 };
 
+const canUseWithCart = (coupon: Coupon, cartTotal?: number) => {
+  if (!isCouponActive(coupon)) return false;
+  if (!cartTotal && cartTotal !== 0) return true;
+  return Number(cartTotal || 0) >= getMinOrder(coupon);
+};
+
 export default function CouponsScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute<any>();
+
+  const fromCheckout = Boolean(route.params?.fromCheckout);
+  const cartTotal = Number(route.params?.cartTotal ?? route.params?.subtotal ?? 0);
 
   const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [activeTab, setActiveTab] = useState<TabType>("ACTIVE");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState("");
 
-  const activeCount = useMemo(
-    () => coupons.filter(coupon => isCouponActive(coupon)).length,
+  const activeCoupons = useMemo(
+    () => coupons.filter(coupon => isCouponActive(coupon)),
     [coupons]
   );
+
+  const expiredCoupons = useMemo(
+    () => coupons.filter(coupon => !isCouponActive(coupon)),
+    [coupons]
+  );
+
+  const filteredCoupons = activeTab === "ACTIVE" ? activeCoupons : expiredCoupons;
 
   const loadCoupons = useCallback(async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
@@ -132,7 +179,7 @@ export default function CouponsScreen() {
       }
     } catch (error: any) {
       setCoupons([]);
-      setErrorText(error?.message || "Unable to load coupons right now.");
+      setErrorText(error?.response?.data?.message || error?.message || "Unable to load coupons right now.");
       showToast("error", "Unable to load coupons", "Please try again.");
     } finally {
       setLoading(false);
@@ -156,17 +203,61 @@ export default function CouponsScreen() {
     showToast("success", "Coupon copied", `${code} is ready to use.`);
   };
 
+  const applyCoupon = (coupon: Coupon) => {
+    const code = getCouponCode(coupon);
+
+    if (!code) {
+      showToast("info", "Code unavailable", "This coupon has no code.");
+      return;
+    }
+
+    if (!isCouponActive(coupon)) {
+      showToast("info", "Coupon expired", "Please choose an active offer.");
+      return;
+    }
+
+    if (!canUseWithCart(coupon, cartTotal)) {
+      showToast(
+        "info",
+        "Minimum order required",
+        `Add items worth ₹${Math.max(getMinOrder(coupon) - cartTotal, 0).toFixed(0)} more.`
+      );
+      return;
+    }
+
+    Clipboard.setString(code);
+
+    if (fromCheckout) {
+      navigation.navigate({
+        name: "Checkout",
+        params: {
+          appliedCoupon: coupon,
+          couponCode: code,
+        },
+        merge: true,
+      } as never);
+      return;
+    }
+
+    showToast("success", "Coupon ready", `${code} copied. Apply it during checkout.`);
+  };
+
   const renderCoupon = ({ item, index }: { item: Coupon; index: number }) => {
     const active = isCouponActive(item);
     const minOrder = getMinOrder(item);
     const maxDiscount = getMaxDiscount(item);
+    const usageLimit = getUsageLimit(item);
     const code = getCouponCode(item);
+    const usable = canUseWithCart(item, cartTotal);
 
     return (
       <View style={[styles.couponCard, !active && styles.disabledCard]}>
+        <View style={styles.ticketCutLeft} />
+        <View style={styles.ticketCutRight} />
+
         <View style={styles.couponTop}>
           <View style={[styles.discountBadge, !active && styles.discountBadgeDisabled]}>
-            <Icon name="pricetag" size={17} color={THEME.black} />
+            <Icon name="pricetag" size={17} color={THEME.white} />
             <Text style={styles.discountText}>{getDiscountText(item)}</Text>
           </View>
 
@@ -186,43 +277,108 @@ export default function CouponsScreen() {
         </Text>
 
         <View style={styles.rulesBox}>
-          <Rule icon="cart-outline" text={minOrder > 0 ? `Min order ₹${minOrder}` : "No minimum order"} />
+          <Rule
+            icon="cart-outline"
+            text={minOrder > 0 ? `Min order ₹${minOrder}` : "No minimum order"}
+          />
           <Rule
             icon="cash-outline"
             text={maxDiscount > 0 ? `Max discount ₹${maxDiscount}` : "No max cap"}
           />
           <Rule icon="time-outline" text={`Valid till ${getExpiry(item)}`} />
+          {usageLimit > 0 && <Rule icon="repeat-outline" text={`Usage limit ${usageLimit}`} />}
         </View>
 
-        <View style={styles.codeRow}>
-          <View style={styles.codeBox}>
-            <Text style={styles.codeText} numberOfLines={1}>
-              {code || "NO CODE"}
+        {fromCheckout && active && !usable && (
+          <View style={styles.warningBox}>
+            <Icon name="alert-circle-outline" size={15} color={THEME.danger} />
+            <Text style={styles.warningText}>
+              Add ₹{Math.max(minOrder - cartTotal, 0).toFixed(0)} more to use this coupon.
             </Text>
           </View>
+        )}
+
+        <View style={styles.codeRow}>
+          <TouchableOpacity
+            style={styles.codeBox}
+            activeOpacity={0.85}
+            onPress={() => copyCode(code)}
+          >
+            <Icon name="copy-outline" size={15} color={active ? THEME.orange : THEME.muted} />
+            <Text
+              style={[styles.codeText, !active && { color: THEME.muted }]}
+              numberOfLines={1}
+            >
+              {code || "NO CODE"}
+            </Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.copyBtn, !active && styles.copyBtnDisabled]}
-            disabled={!active}
-            onPress={() => copyCode(code)}
+            style={[
+              styles.copyBtn,
+              (!active || (fromCheckout && !usable)) && styles.copyBtnDisabled,
+            ]}
+            disabled={!active || (fromCheckout && !usable)}
+            onPress={() => applyCoupon(item)}
             activeOpacity={0.85}
           >
-            <Text style={styles.copyText}>{active ? "Copy" : "Expired"}</Text>
-            {active && <Icon name="copy-outline" size={16} color={THEME.black} />}
+            <Text style={styles.copyText}>
+              {!active ? "Expired" : fromCheckout ? "Apply" : "Copy"}
+            </Text>
+            {active && (
+              <Icon
+                name={fromCheckout ? "checkmark-circle-outline" : "copy-outline"}
+                size={16}
+                color={THEME.white}
+              />
+            )}
           </TouchableOpacity>
         </View>
       </View>
     );
   };
 
+  const EmptyState = () => (
+    <View style={styles.emptyBox}>
+      <View style={styles.emptyIcon}>
+        <Icon
+          name={errorText ? "cloud-offline-outline" : "pricetag-outline"}
+          size={54}
+          color={THEME.orange}
+        />
+      </View>
+
+      <Text style={styles.emptyTitle}>
+        {errorText
+          ? "Coupons unavailable"
+          : activeTab === "ACTIVE"
+          ? "No active coupons"
+          : "No expired coupons"}
+      </Text>
+
+      <Text style={styles.emptyText}>
+        {errorText || "New offers and rewards will appear here soon."}
+      </Text>
+
+      <TouchableOpacity
+        style={styles.retryBtn}
+        onPress={() => loadCoupons(false)}
+        activeOpacity={0.9}
+      >
+        <Text style={styles.retryText}>Refresh</Text>
+        <Icon name="refresh" size={17} color={THEME.white} />
+      </TouchableOpacity>
+    </View>
+  );
+
   if (loading) {
     return (
       <View style={styles.center}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>%</Text>
         </View>
-        <ActivityIndicator size="large" color={THEME.green} />
+        <ActivityIndicator size="large" color={THEME.orange} />
         <Text style={styles.loadingText}>Finding best offers...</Text>
       </View>
     );
@@ -230,7 +386,7 @@ export default function CouponsScreen() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <View style={styles.header}>
         <TouchableOpacity
@@ -238,14 +394,14 @@ export default function CouponsScreen() {
           onPress={() => navigation.goBack()}
           activeOpacity={0.85}
         >
-          <Icon name="chevron-back" size={24} color={THEME.text} />
+          <Icon name="chevron-back" size={24} color={THEME.blue} />
         </TouchableOpacity>
 
         <View style={styles.headerCopy}>
           <Text style={styles.title}>Coupons</Text>
           <Text style={styles.subtitle}>
             {coupons.length > 0
-              ? `${activeCount} active offer${activeCount === 1 ? "" : "s"} available`
+              ? `${activeCoupons.length} active offer${activeCoupons.length === 1 ? "" : "s"} available`
               : "Fresh rewards will appear here"}
           </Text>
         </View>
@@ -257,9 +413,9 @@ export default function CouponsScreen() {
           activeOpacity={0.85}
         >
           {refreshing ? (
-            <ActivityIndicator size="small" color={THEME.black} />
+            <ActivityIndicator size="small" color={THEME.white} />
           ) : (
-            <Icon name="refresh" size={18} color={THEME.black} />
+            <Icon name="refresh" size={18} color={THEME.white} />
           )}
         </TouchableOpacity>
       </View>
@@ -269,17 +425,58 @@ export default function CouponsScreen() {
           <Text style={styles.heroTag}>KARTO SAVINGS</Text>
           <Text style={styles.heroTitle}>Unlock better deals</Text>
           <Text style={styles.heroSub}>
-            Copy a valid code and apply it during checkout.
+            {fromCheckout
+              ? "Apply a valid code to reduce your checkout amount."
+              : "Copy a valid code and apply it during checkout."}
           </Text>
         </View>
 
         <View style={styles.heroIcon}>
-          <Icon name="ticket-outline" size={31} color={THEME.black} />
+          <Icon name="ticket-outline" size={31} color={THEME.white} />
         </View>
       </View>
 
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{coupons.length}</Text>
+          <Text style={styles.statLabel}>Total</Text>
+        </View>
+
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{activeCoupons.length}</Text>
+          <Text style={styles.statLabel}>Active</Text>
+        </View>
+
+        <View style={styles.statCard}>
+          <Text style={styles.statValue}>{expiredCoupons.length}</Text>
+          <Text style={styles.statLabel}>Expired</Text>
+        </View>
+      </View>
+
+      <View style={styles.tabs}>
+        <TouchableOpacity
+          style={[styles.tabBtn, activeTab === "ACTIVE" && styles.tabBtnActive]}
+          onPress={() => setActiveTab("ACTIVE")}
+          activeOpacity={0.85}
+        >
+          <Text style={[styles.tabText, activeTab === "ACTIVE" && styles.tabTextActive]}>
+            Active
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.tabBtn, activeTab === "EXPIRED" && styles.tabBtnActive]}
+          onPress={() => setActiveTab("EXPIRED")}
+          activeOpacity={0.85}
+        >
+          <Text style={[styles.tabText, activeTab === "EXPIRED" && styles.tabTextActive]}>
+            Expired
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <FlatList
-        data={coupons}
+        data={filteredCoupons}
         keyExtractor={getCouponId}
         renderItem={renderCoupon}
         showsVerticalScrollIndicator={false}
@@ -287,39 +484,12 @@ export default function CouponsScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => loadCoupons(true)}
-            tintColor={THEME.green}
-            colors={[THEME.green]}
+            tintColor={THEME.orange}
+            colors={[THEME.orange]}
           />
         }
-        contentContainerStyle={coupons.length === 0 ? styles.emptyList : styles.list}
-        ListEmptyComponent={
-          <View style={styles.emptyBox}>
-            <View style={styles.emptyIcon}>
-              <Icon
-                name={errorText ? "cloud-offline-outline" : "pricetag-outline"}
-                size={54}
-                color={THEME.yellow}
-              />
-            </View>
-
-            <Text style={styles.emptyTitle}>
-              {errorText ? "Coupons unavailable" : "No coupons available"}
-            </Text>
-
-            <Text style={styles.emptyText}>
-              {errorText || "New offers and rewards will appear here soon."}
-            </Text>
-
-            <TouchableOpacity
-              style={styles.retryBtn}
-              onPress={() => loadCoupons(false)}
-              activeOpacity={0.9}
-            >
-              <Text style={styles.retryText}>Refresh</Text>
-              <Icon name="refresh" size={17} color={THEME.black} />
-            </TouchableOpacity>
-          </View>
-        }
+        contentContainerStyle={filteredCoupons.length === 0 ? styles.emptyList : styles.list}
+        ListEmptyComponent={<EmptyState />}
       />
     </View>
   );
@@ -327,12 +497,20 @@ export default function CouponsScreen() {
 
 const Rule = ({ icon, text }: { icon: string; text: string }) => (
   <View style={styles.ruleRow}>
-    <Icon name={icon} size={15} color={THEME.green} />
+    <Icon name={icon as any} size={15} color={THEME.orange} />
     <Text style={styles.ruleText} numberOfLines={1}>
       {text}
     </Text>
   </View>
 );
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   screen: {
@@ -351,14 +529,13 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 24,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 18,
+    ...shadow,
   },
   loadingLogoText: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 36,
     fontWeight: "900",
   },
@@ -381,23 +558,23 @@ const styles = StyleSheet.create({
   backBtn: {
     width: 44,
     height: 44,
-    borderRadius: 18,
+    borderRadius: 16,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   refreshBtn: {
     width: 42,
     height: 42,
-    borderRadius: 17,
-    backgroundColor: THEME.green,
+    borderRadius: 16,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   title: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 27,
     fontWeight: "900",
   },
@@ -409,26 +586,25 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     marginHorizontal: 20,
-    marginBottom: 16,
+    marginBottom: 14,
     backgroundColor: THEME.card,
     borderRadius: 24,
     padding: 17,
-    borderWidth: 1,
-    borderColor: THEME.border,
     flexDirection: "row",
     alignItems: "center",
+    ...shadow,
   },
   heroTextBox: {
     flex: 1,
   },
   heroTag: {
-    color: THEME.yellow,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
     letterSpacing: 1,
   },
   heroTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontWeight: "900",
     fontSize: 21,
     marginTop: 5,
@@ -444,10 +620,60 @@ const styles = StyleSheet.create({
     width: 62,
     height: 62,
     borderRadius: 22,
-    backgroundColor: THEME.yellow,
+    backgroundColor: THEME.orange,
     alignItems: "center",
     justifyContent: "center",
     marginLeft: 14,
+  },
+  statsRow: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 20,
+    marginBottom: 14,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderRadius: 17,
+    paddingVertical: 12,
+    alignItems: "center",
+    ...shadow,
+  },
+  statValue: {
+    color: THEME.orange,
+    fontSize: 20,
+    fontWeight: "900",
+  },
+  statLabel: {
+    color: THEME.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  tabs: {
+    marginHorizontal: 20,
+    backgroundColor: THEME.card,
+    borderRadius: 16,
+    padding: 5,
+    flexDirection: "row",
+    marginBottom: 14,
+    ...shadow,
+  },
+  tabBtn: {
+    flex: 1,
+    borderRadius: 13,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  tabBtnActive: {
+    backgroundColor: THEME.orange,
+  },
+  tabText: {
+    color: THEME.muted,
+    fontWeight: "900",
+  },
+  tabTextActive: {
+    color: THEME.white,
   },
   list: {
     paddingHorizontal: 20,
@@ -464,9 +690,27 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.card,
     borderRadius: 24,
     padding: 16,
-    borderWidth: 1,
-    borderColor: THEME.border,
     marginBottom: 15,
+    overflow: "hidden",
+    ...shadow,
+  },
+  ticketCutLeft: {
+    position: "absolute",
+    left: -12,
+    top: "52%",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: THEME.bg,
+  },
+  ticketCutRight: {
+    position: "absolute",
+    right: -12,
+    top: "52%",
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: THEME.bg,
   },
   disabledCard: {
     opacity: 0.62,
@@ -478,7 +722,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   discountBadge: {
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -490,24 +734,21 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.muted,
   },
   discountText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
     fontSize: 13,
   },
   statusPill: {
-    backgroundColor: "#07150D",
-    borderWidth: 1,
-    borderColor: "#173923",
+    backgroundColor: THEME.orangeSoft,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
   inactivePill: {
-    backgroundColor: "#1B0E0E",
-    borderColor: "#3F1717",
+    backgroundColor: "#FFF1F1",
   },
   statusText: {
-    color: THEME.green,
+    color: THEME.orange,
     fontSize: 11,
     fontWeight: "900",
   },
@@ -515,7 +756,7 @@ const styles = StyleSheet.create({
     color: THEME.danger,
   },
   couponTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 18,
     fontWeight: "900",
     marginTop: 16,
@@ -527,9 +768,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   rulesBox: {
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.surface,
     borderRadius: 18,
     padding: 12,
     marginTop: 14,
@@ -546,6 +785,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
+  warningBox: {
+    backgroundColor: "#FFF1F1",
+    borderRadius: 14,
+    padding: 10,
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  warningText: {
+    flex: 1,
+    color: THEME.danger,
+    fontSize: 12,
+    fontWeight: "800",
+  },
   codeRow: {
     marginTop: 14,
     flexDirection: "row",
@@ -556,21 +810,24 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderStyle: "dashed",
-    borderColor: THEME.green,
-    backgroundColor: "#07150D",
+    borderColor: THEME.orange,
+    backgroundColor: THEME.orangeSoft,
     borderRadius: 16,
     paddingVertical: 13,
     paddingHorizontal: 12,
     alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
   },
   codeText: {
-    color: THEME.green,
+    color: THEME.orange,
     fontWeight: "900",
     letterSpacing: 1.5,
   },
   copyBtn: {
     minWidth: 91,
-    backgroundColor: THEME.green,
+    backgroundColor: THEME.orange,
     borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 13,
@@ -580,12 +837,10 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   copyBtnDisabled: {
-    backgroundColor: THEME.card2,
-    borderWidth: 1,
-    borderColor: THEME.border,
+    backgroundColor: THEME.muted,
   },
   copyText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
   },
   emptyBox: {
@@ -596,13 +851,12 @@ const styles = StyleSheet.create({
     height: 104,
     borderRadius: 36,
     backgroundColor: THEME.card,
-    borderWidth: 1,
-    borderColor: THEME.border,
     alignItems: "center",
     justifyContent: "center",
+    ...shadow,
   },
   emptyTitle: {
-    color: THEME.text,
+    color: THEME.blue,
     fontSize: 20,
     fontWeight: "900",
     marginTop: 16,
@@ -616,16 +870,17 @@ const styles = StyleSheet.create({
   },
   retryBtn: {
     marginTop: 20,
-    backgroundColor: THEME.green,
-    borderRadius: 17,
+    backgroundColor: THEME.orange,
+    borderRadius: 16,
     paddingVertical: 13,
     paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+    ...shadow,
   },
   retryText: {
-    color: THEME.black,
+    color: THEME.white,
     fontWeight: "900",
   },
 });

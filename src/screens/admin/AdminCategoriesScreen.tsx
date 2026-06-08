@@ -6,17 +6,21 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   TextInput,
   Modal,
   Image,
   ScrollView,
   StatusBar,
   RefreshControl,
+  PermissionsAndroid,
+  Platform,
 } from "react-native";
 import { launchCamera, launchImageLibrary } from "react-native-image-picker";
 import Icon from "react-native-vector-icons/Ionicons";
 import { adminService } from "@/services/api/adminService";
+import KartoMessageModal, {
+  KartoMessageType,
+} from "@/components/common/KartoMessageModal";
 
 const THEME = {
   bg: "#080A08",
@@ -31,10 +35,38 @@ const THEME = {
   danger: "#FF4D4D",
 };
 
+type MessageState = {
+  visible: boolean;
+  type: KartoMessageType;
+  title: string;
+  message: string;
+  primaryText?: string;
+  secondaryText?: string;
+  loading?: boolean;
+  onPrimary?: () => void;
+  onSecondary?: () => void;
+};
+
+const emptyCatForm = {
+  name: "",
+  description: "",
+  image: null,
+  existingImageUrl: "",
+};
+
+const emptySubForm = {
+  categoryId: "",
+  name: "",
+  description: "",
+  image: null,
+  existingImageUrl: "",
+};
+
 export default function AdminCategoriesScreen({ navigation }: any) {
   const [categories, setCategories] = useState<any[]>([]);
   const [subCategories, setSubCategories] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState("ALL");
+  const [search, setSearch] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -48,18 +80,40 @@ export default function AdminCategoriesScreen({ navigation }: any) {
   const [savingCat, setSavingCat] = useState(false);
   const [savingSub, setSavingSub] = useState(false);
 
-  const [catForm, setCatForm] = useState<any>({
-    name: "",
-    description: "",
-    image: null,
+  const [catForm, setCatForm] = useState<any>(emptyCatForm);
+  const [subForm, setSubForm] = useState<any>(emptySubForm);
+
+  const [message, setMessage] = useState<MessageState>({
+    visible: false,
+    type: "info",
+    title: "",
+    message: "",
   });
 
-  const [subForm, setSubForm] = useState<any>({
-    categoryId: "",
-    name: "",
-    description: "",
-    image: null,
-  });
+  const showMessage = (
+    type: KartoMessageType,
+    title: string,
+    msg: string,
+    primaryText = "Done",
+    onPrimary?: () => void,
+    secondaryText?: string,
+    onSecondary?: () => void
+  ) => {
+    setMessage({
+      visible: true,
+      type,
+      title,
+      message: msg,
+      primaryText,
+      secondaryText,
+      onPrimary,
+      onSecondary,
+    });
+  };
+
+  const closeMessage = () => {
+    setMessage((prev) => ({ ...prev, visible: false, loading: false }));
+  };
 
   const loadData = useCallback(async () => {
     const [catRes, subRes] = await Promise.all([
@@ -68,13 +122,21 @@ export default function AdminCategoriesScreen({ navigation }: any) {
     ]);
 
     if (catRes.error) {
-      Alert.alert("Error", catRes.error.message || "Failed to load categories");
+      showMessage(
+        "error",
+        "Category Load Failed",
+        catRes.error.message || "Failed to load categories"
+      );
     } else {
       setCategories(catRes.data || []);
     }
 
     if (subRes.error) {
-      Alert.alert("Error", subRes.error.message || "Failed to load subcategories");
+      showMessage(
+        "error",
+        "Subcategory Load Failed",
+        subRes.error.message || "Failed to load subcategories"
+      );
     } else {
       setSubCategories(subRes.data || []);
     }
@@ -92,6 +154,11 @@ export default function AdminCategoriesScreen({ navigation }: any) {
     loadData();
   };
 
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
+
   const stats = useMemo(() => {
     return {
       totalCategories: categories.length,
@@ -100,98 +167,128 @@ export default function AdminCategoriesScreen({ navigation }: any) {
         (sum, item) => sum + Number(item.restaurants?.length || 0),
         0
       ),
+      totalItems: categories.reduce(
+        (sum, item) => sum + Number(item.menuItems?.length || 0),
+        0
+      ),
     };
   }, [categories, subCategories]);
 
-  const pickImage = (setter: any, fromCamera = false) => {
-    const fn = fromCamera ? launchCamera : launchImageLibrary;
+  const filteredCategories = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return categories;
 
-    fn(
+    return categories.filter((item) => {
+      return (
+        item.name?.toLowerCase().includes(q) ||
+        item.description?.toLowerCase().includes(q)
+      );
+    });
+  }, [categories, search]);
+
+  const filteredSubCategories = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return subCategories;
+
+    return subCategories.filter((item) => {
+      return (
+        item.name?.toLowerCase().includes(q) ||
+        item.description?.toLowerCase().includes(q) ||
+        item.category?.name?.toLowerCase().includes(q)
+      );
+    });
+  }, [subCategories, search]);
+
+  const requestCameraPermission = async () => {
+    if (Platform.OS !== "android") return true;
+
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.CAMERA,
       {
+        title: "Camera Permission",
+        message: "Karto needs camera access to capture category images.",
+        buttonPositive: "Allow",
+        buttonNegative: "Cancel",
+      }
+    );
+
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  };
+
+  const pickImage = async (setter: any, fromCamera = false) => {
+    try {
+      if (fromCamera) {
+        const granted = await requestCameraPermission();
+
+        if (!granted) {
+          showMessage(
+            "warning",
+            "Camera Permission Required",
+            "Camera permission allow karo, tabhi camera open hoga."
+          );
+          return;
+        }
+      }
+
+      const fn = fromCamera ? launchCamera : launchImageLibrary;
+
+      const result = await fn({
         mediaType: "photo",
         quality: 0.8,
         selectionLimit: 1,
-      },
-      (res) => {
-        if (res.didCancel) return;
+        includeBase64: false,
+        saveToPhotos: fromCamera,
+        cameraType: "back",
+      });
 
-        if (res.errorCode) {
-          Alert.alert("Image Error", res.errorMessage || "Unable to pick image");
-          return;
-        }
+      if (result.didCancel) return;
 
-        const asset = res.assets?.[0];
-
-        if (asset?.uri) {
-          setter((prev: any) => ({ ...prev, image: asset }));
-        }
+      if (result.errorCode) {
+        showMessage(
+          "error",
+          "Image Error",
+          result.errorMessage || "Unable to pick image"
+        );
+        return;
       }
-    );
+
+      const asset = result.assets?.[0];
+
+      if (!asset?.uri) {
+        showMessage("warning", "No Image Found", "Please select a valid image.");
+        return;
+      }
+
+      setter((prev: any) => ({
+        ...prev,
+        image: {
+          uri: asset.uri,
+          type: asset.type || "image/jpeg",
+          fileName: asset.fileName || `category-${Date.now()}.jpg`,
+          name: asset.fileName || `category-${Date.now()}.jpg`,
+        },
+      }));
+    } catch (error: any) {
+      showMessage(
+        "error",
+        "Image Error",
+        error?.message || "Camera/gallery open nahi ho paya."
+      );
+    }
   };
 
   const closeCatModal = () => {
     setCatModal(false);
     setEditingCat(null);
-    setCatForm({ name: "", description: "", image: null });
+    setSavingCat(false);
+    setCatForm(emptyCatForm);
   };
 
   const closeSubModal = () => {
     setSubModal(false);
     setEditingSub(null);
-    setSubForm({ categoryId: "", name: "", description: "", image: null });
-  };
-
-  const saveCategory = async () => {
-    if (!catForm.name.trim()) {
-      Alert.alert("Required", "Category name is required.");
-      return;
-    }
-
-    setSavingCat(true);
-
-    const res = editingCat
-      ? await adminService.updateCategory(editingCat.id, catForm)
-      : await adminService.createCategory(catForm);
-
-    setSavingCat(false);
-
-    if (res.error) {
-      Alert.alert("Category Save Failed", res.error.message || "Please try again.");
-      return;
-    }
-
-    Alert.alert("Success", editingCat ? "Category updated" : "Category created");
-    closeCatModal();
-    loadData();
-  };
-
-  const saveSubCategory = async () => {
-    if (!subForm.categoryId) {
-      Alert.alert("Required", "Please select parent category.");
-      return;
-    }
-
-    if (!subForm.name.trim()) {
-      Alert.alert("Required", "Subcategory name is required.");
-      return;
-    }
-
-    setSavingSub(true);
-
-    const res = editingSub
-      ? await adminService.updateSubCategory(editingSub.id, subForm)
-      : await adminService.createSubCategory(subForm);
-
     setSavingSub(false);
-
-    if (res.error) {
-      Alert.alert("Subcategory Save Failed", res.error.message || "Please try again.");
-      return;
-    }
-
-    Alert.alert("Success", editingSub ? "Subcategory updated" : "Subcategory created");
-    closeSubModal();
-    loadData();
+    setSubForm(emptySubForm);
   };
 
   const openCat = (cat?: any) => {
@@ -200,6 +297,7 @@ export default function AdminCategoriesScreen({ navigation }: any) {
       name: cat?.name || "",
       description: cat?.description || "",
       image: null,
+      existingImageUrl: cat?.imageUrl || cat?.image_url || "",
     });
     setCatModal(true);
   };
@@ -214,8 +312,191 @@ export default function AdminCategoriesScreen({ navigation }: any) {
       name: sub?.name || "",
       description: sub?.description || "",
       image: null,
+      existingImageUrl: sub?.imageUrl || sub?.image_url || "",
     });
     setSubModal(true);
+  };
+
+  const saveCategory = async () => {
+    if (!catForm.name.trim()) {
+      showMessage("warning", "Required", "Category name is required.");
+      return;
+    }
+
+    setSavingCat(true);
+
+    const payload = {
+      name: catForm.name.trim(),
+      description: catForm.description?.trim(),
+      image: catForm.image,
+    };
+
+    const res = editingCat
+      ? await adminService.updateCategory(editingCat.id, payload)
+      : await adminService.createCategory(payload);
+
+    setSavingCat(false);
+
+    if (res.error) {
+      showMessage(
+        "error",
+        "Category Save Failed",
+        res.error.message || "Please try again."
+      );
+      return;
+    }
+
+    closeCatModal();
+    showMessage(
+      "success",
+      editingCat ? "Category Updated" : "Category Created",
+      editingCat ? "Category updated successfully." : "Category created successfully.",
+      "Done",
+      () => {
+        closeMessage();
+        loadData();
+      }
+    );
+  };
+
+  const saveSubCategory = async () => {
+    if (!subForm.categoryId) {
+      showMessage("warning", "Required", "Please select parent category.");
+      return;
+    }
+
+    if (!subForm.name.trim()) {
+      showMessage("warning", "Required", "Subcategory name is required.");
+      return;
+    }
+
+    setSavingSub(true);
+
+    const payload = {
+      categoryId: subForm.categoryId,
+      name: subForm.name.trim(),
+      description: subForm.description?.trim(),
+      image: subForm.image,
+    };
+
+    const res = editingSub
+      ? await adminService.updateSubCategory(editingSub.id, payload)
+      : await adminService.createSubCategory(payload);
+
+    setSavingSub(false);
+
+    if (res.error) {
+      showMessage(
+        "error",
+        "Subcategory Save Failed",
+        res.error.message || "Please try again."
+      );
+      return;
+    }
+
+    closeSubModal();
+    showMessage(
+      "success",
+      editingSub ? "Subcategory Updated" : "Subcategory Created",
+      editingSub
+        ? "Subcategory updated successfully."
+        : "Subcategory created successfully.",
+      "Done",
+      () => {
+        closeMessage();
+        loadData();
+      }
+    );
+  };
+
+  const askDeleteCategory = (cat: any) => {
+    const linkedVendors = Number(cat.restaurants?.length || 0);
+    const linkedItems = Number(cat.menuItems?.length || 0);
+    const linkedSubs = Number(cat.subCategories?.length || 0);
+
+    showMessage(
+      "warning",
+      "Delete Category?",
+      `${cat.name || "This category"} will be deleted. Linked data: ${linkedVendors} vendors, ${linkedSubs} subcategories, ${linkedItems} items.`,
+      "Delete",
+      () => deleteCategory(cat.id),
+      "Cancel",
+      closeMessage
+    );
+  };
+
+  const deleteCategory = async (id: string) => {
+    setMessage((prev) => ({ ...prev, loading: true }));
+
+    const res = await adminService.deleteCategory(id);
+
+    if (res.error) {
+      setMessage({
+        visible: true,
+        type: "error",
+        title: "Delete Failed",
+        message:
+          res.error.message ||
+          "Category delete nahi hui. Shayad linked vendors/items/subcategories hain.",
+        primaryText: "Okay",
+      });
+      return;
+    }
+
+    setMessage({
+      visible: true,
+      type: "success",
+      title: "Category Deleted",
+      message: "Category deleted successfully.",
+      primaryText: "Done",
+      onPrimary: () => {
+        closeMessage();
+        loadData();
+      },
+    });
+  };
+
+  const askDeleteSubCategory = (sub: any) => {
+    showMessage(
+      "warning",
+      "Delete Subcategory?",
+      `${sub.name || "This subcategory"} will be deleted.`,
+      "Delete",
+      () => deleteSubCategory(sub.id),
+      "Cancel",
+      closeMessage
+    );
+  };
+
+  const deleteSubCategory = async (id: string) => {
+    setMessage((prev) => ({ ...prev, loading: true }));
+
+    const res = await adminService.deleteSubCategory(id);
+
+    if (res.error) {
+      setMessage({
+        visible: true,
+        type: "error",
+        title: "Delete Failed",
+        message:
+          res.error.message ||
+          "Subcategory delete nahi hui. Shayad linked menu items hain.",
+        primaryText: "Okay",
+      });
+      return;
+    }
+
+    setMessage({
+      visible: true,
+      type: "success",
+      title: "Subcategory Deleted",
+      message: "Subcategory deleted successfully.",
+      primaryText: "Done",
+      onPrimary: () => {
+        closeMessage();
+        loadData();
+      },
+    });
   };
 
   if (loading) {
@@ -233,19 +514,23 @@ export default function AdminCategoriesScreen({ navigation }: any) {
       <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
 
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation?.goBack?.()}>
+        <TouchableOpacity style={styles.backBtn} onPress={goBack}>
           <Icon name="chevron-back" size={24} color={THEME.text} />
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
           <Text style={styles.smallLabel}>BUSINESS SETUP</Text>
           <Text style={styles.title}>Categories</Text>
-          <Text style={styles.subtitle}>Manage vendor categories and product subcategories</Text>
+          <Text style={styles.subtitle}>Manage business categories and product subcategories</Text>
         </View>
+
+        <TouchableOpacity style={styles.homeBtn} onPress={() => navigation.navigate("AdminDashboard")}>
+          <Icon name="home-outline" size={21} color="#000" />
+        </TouchableOpacity>
       </View>
 
       <FlatList
-        data={categories}
+        data={filteredCategories}
         keyExtractor={(item) => item.id}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
@@ -275,6 +560,7 @@ export default function AdminCategoriesScreen({ navigation }: any) {
                 <MiniStat label="Categories" value={stats.totalCategories} />
                 <MiniStat label="Subcategories" value={stats.totalSubCategories} />
                 <MiniStat label="Linked Vendors" value={stats.totalVendors} />
+                <MiniStat label="Menu Items" value={stats.totalItems} />
               </View>
             </View>
 
@@ -290,13 +576,26 @@ export default function AdminCategoriesScreen({ navigation }: any) {
               </TouchableOpacity>
             </View>
 
+            <View style={styles.searchBox}>
+              <Icon name="search-outline" size={20} color={THEME.muted} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search category or subcategory..."
+                placeholderTextColor={THEME.muted}
+                style={styles.searchInput}
+              />
+
+              {search.length > 0 ? (
+                <TouchableOpacity onPress={() => setSearch("")}>
+                  <Icon name="close-circle" size={21} color={THEME.muted} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
             <Text style={styles.sectionTitle}>Filter Subcategories</Text>
 
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.chipScroll}
-            >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
               <TouchableOpacity
                 style={[styles.chip, selectedCategoryId === "ALL" && styles.chipActive]}
                 onPress={() => setSelectedCategoryId("ALL")}
@@ -312,12 +611,7 @@ export default function AdminCategoriesScreen({ navigation }: any) {
                   style={[styles.chip, selectedCategoryId === cat.id && styles.chipActive]}
                   onPress={() => setSelectedCategoryId(cat.id)}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      selectedCategoryId === cat.id && styles.chipTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.chipText, selectedCategoryId === cat.id && styles.chipTextActive]}>
                     {cat.name}
                   </Text>
                 </TouchableOpacity>
@@ -325,13 +619,17 @@ export default function AdminCategoriesScreen({ navigation }: any) {
             </ScrollView>
 
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Vendor Categories</Text>
-              <Text style={styles.sectionCount}>{categories.length} total</Text>
+              <Text style={styles.sectionTitleNoMargin}>Business Categories</Text>
+              <Text style={styles.sectionCount}>{filteredCategories.length} total</Text>
             </View>
           </>
         }
         renderItem={({ item }) => (
-          <CategoryCard item={item} onEdit={() => openCat(item)} />
+          <CategoryCard
+            item={item}
+            onEdit={() => openCat(item)}
+            onDelete={() => askDeleteCategory(item)}
+          />
         )}
         ListEmptyComponent={
           <View style={styles.emptyBox}>
@@ -345,11 +643,11 @@ export default function AdminCategoriesScreen({ navigation }: any) {
         ListFooterComponent={
           <>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Product Subcategories</Text>
-              <Text style={styles.sectionCount}>{subCategories.length} total</Text>
+              <Text style={styles.sectionTitleNoMargin}>Product Subcategories</Text>
+              <Text style={styles.sectionCount}>{filteredSubCategories.length} total</Text>
             </View>
 
-            {subCategories.length === 0 ? (
+            {filteredSubCategories.length === 0 ? (
               <View style={styles.emptyBox}>
                 <Icon name="albums-outline" size={38} color={THEME.green} />
                 <Text style={styles.emptyTitle}>No subcategories found</Text>
@@ -358,8 +656,13 @@ export default function AdminCategoriesScreen({ navigation }: any) {
                 </Text>
               </View>
             ) : (
-              subCategories.map((item) => (
-                <SubCategoryCard key={item.id} item={item} onEdit={() => openSub(item)} />
+              filteredSubCategories.map((item) => (
+                <SubCategoryCard
+                  key={item.id}
+                  item={item}
+                  onEdit={() => openSub(item)}
+                  onDelete={() => askDeleteSubCategory(item)}
+                />
               ))
             )}
 
@@ -392,6 +695,19 @@ export default function AdminCategoriesScreen({ navigation }: any) {
         onSave={saveSubCategory}
         onClose={closeSubModal}
       />
+
+      <KartoMessageModal
+        visible={message.visible}
+        type={message.type}
+        title={message.title}
+        message={message.message}
+        primaryText={message.primaryText}
+        secondaryText={message.secondaryText}
+        loading={message.loading}
+        onPrimary={message.onPrimary}
+        onSecondary={message.onSecondary}
+        onClose={closeMessage}
+      />
     </View>
   );
 }
@@ -405,11 +721,13 @@ function MiniStat({ label, value }: any) {
   );
 }
 
-function CategoryCard({ item, onEdit }: any) {
+function CategoryCard({ item, onEdit, onDelete }: any) {
+  const imageUrl = item.imageUrl || item.image_url;
+
   return (
     <View style={styles.card}>
-      {item.imageUrl ? (
-        <Image source={{ uri: item.imageUrl }} style={styles.thumb} />
+      {imageUrl ? (
+        <Image source={{ uri: imageUrl }} style={styles.thumb} />
       ) : (
         <View style={styles.fallbackIcon}>
           <Icon name="grid-outline" size={27} color={THEME.yellow} />
@@ -423,21 +741,31 @@ function CategoryCard({ item, onEdit }: any) {
         <View style={styles.cardMetaRow}>
           <Icon name="storefront-outline" size={13} color={THEME.green} />
           <Text style={styles.cardMetaText}>Vendors: {item.restaurants?.length || 0}</Text>
+          <Text style={styles.dot}>•</Text>
+          <Text style={styles.cardMetaText}>Items: {item.menuItems?.length || 0}</Text>
         </View>
       </View>
 
-      <TouchableOpacity style={styles.editBtn} onPress={onEdit}>
-        <Icon name="create-outline" size={18} color="#000" />
-      </TouchableOpacity>
+      <View style={styles.cardActions}>
+        <TouchableOpacity style={styles.editBtn} onPress={onEdit}>
+          <Icon name="create-outline" size={18} color="#000" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.deleteBtn} onPress={onDelete}>
+          <Icon name="trash-outline" size={18} color={THEME.danger} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
-function SubCategoryCard({ item, onEdit }: any) {
+function SubCategoryCard({ item, onEdit, onDelete }: any) {
+  const imageUrl = item.imageUrl || item.image_url;
+
   return (
     <View style={styles.card}>
-      {item.imageUrl ? (
-        <Image source={{ uri: item.imageUrl }} style={styles.thumb} />
+      {imageUrl ? (
+        <Image source={{ uri: imageUrl }} style={styles.thumb} />
       ) : (
         <View style={styles.fallbackIconGreen}>
           <Icon name="albums-outline" size={27} color={THEME.green} />
@@ -450,9 +778,15 @@ function SubCategoryCard({ item, onEdit }: any) {
         <Text style={styles.meta}>{item.description || "No description added"}</Text>
       </View>
 
-      <TouchableOpacity style={styles.editBtn} onPress={onEdit}>
-        <Icon name="create-outline" size={18} color="#000" />
-      </TouchableOpacity>
+      <View style={styles.cardActions}>
+        <TouchableOpacity style={styles.editBtn} onPress={onEdit}>
+          <Icon name="create-outline" size={18} color="#000" />
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.deleteBtn} onPress={onDelete}>
+          <Icon name="trash-outline" size={18} color={THEME.danger} />
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -487,7 +821,13 @@ function CategoryModal({
         multiline
       />
 
-      <ImagePickerPreview image={form.image} onCamera={onCamera} onGallery={onGallery} />
+      <ImagePickerPreview
+        image={form.image}
+        existingImageUrl={form.existingImageUrl}
+        title="Category Image"
+        onCamera={onCamera}
+        onGallery={onGallery}
+      />
 
       <PrimarySaveButton saving={saving} title="Save Category" onPress={onSave} />
     </ProfessionalModal>
@@ -517,12 +857,7 @@ function SubCategoryModal({
             style={[styles.formChip, form.categoryId === cat.id && styles.formChipActive]}
             onPress={() => setForm((p: any) => ({ ...p, categoryId: cat.id }))}
           >
-            <Text
-              style={[
-                styles.formChipText,
-                form.categoryId === cat.id && styles.formChipTextActive,
-              ]}
-            >
+            <Text style={[styles.formChipText, form.categoryId === cat.id && styles.formChipTextActive]}>
               {cat.name}
             </Text>
           </TouchableOpacity>
@@ -546,7 +881,13 @@ function SubCategoryModal({
         multiline
       />
 
-      <ImagePickerPreview image={form.image} onCamera={onCamera} onGallery={onGallery} />
+      <ImagePickerPreview
+        image={form.image}
+        existingImageUrl={form.existingImageUrl}
+        title="Subcategory Image"
+        onCamera={onCamera}
+        onGallery={onGallery}
+      />
 
       <PrimarySaveButton saving={saving} title="Save Subcategory" onPress={onSave} />
     </ProfessionalModal>
@@ -571,7 +912,9 @@ function ProfessionalModal({ visible, title, label, children, onClose }: any) {
             </TouchableOpacity>
           </View>
 
-          <ScrollView showsVerticalScrollIndicator={false}>{children}</ScrollView>
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            {children}
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -596,14 +939,22 @@ function FormInput({ label, icon, multiline, ...props }: any) {
   );
 }
 
-function ImagePickerPreview({ image, onCamera, onGallery }: any) {
+function ImagePickerPreview({
+  image,
+  existingImageUrl,
+  title,
+  onCamera,
+  onGallery,
+}: any) {
+  const previewUri = image?.uri || existingImageUrl;
+
   return (
     <View style={styles.imageSection}>
-      <Text style={styles.inputLabel}>Category Image</Text>
+      <Text style={styles.inputLabel}>{title}</Text>
 
       <View style={styles.imagePreviewBox}>
-        {image?.uri ? (
-          <Image source={{ uri: image.uri }} style={styles.preview} />
+        {previewUri ? (
+          <Image source={{ uri: previewUri }} style={styles.preview} />
         ) : (
           <View style={styles.emptyImage}>
             <Icon name="image-outline" size={34} color={THEME.yellow} />
@@ -615,12 +966,12 @@ function ImagePickerPreview({ image, onCamera, onGallery }: any) {
       <View style={styles.imageActions}>
         <TouchableOpacity style={styles.imageBtnGreen} onPress={onCamera}>
           <Icon name="camera-outline" size={20} color="#000" />
-          <Text style={styles.imageBtnText}>Camera</Text>
+          <Text style={styles.imageBtnText}>Open Camera</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.imageBtnYellow} onPress={onGallery}>
           <Icon name="images-outline" size={20} color="#000" />
-          <Text style={styles.imageBtnText}>Gallery</Text>
+          <Text style={styles.imageBtnText}>Upload File</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -648,24 +999,9 @@ function PrimarySaveButton({ saving, title, onPress }: any) {
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: THEME.bg,
-  },
-
-  center: {
-    flex: 1,
-    backgroundColor: THEME.bg,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  loadingText: {
-    color: THEME.muted,
-    marginTop: 12,
-    fontWeight: "800",
-  },
-
+  root: { flex: 1, backgroundColor: THEME.bg },
+  center: { flex: 1, backgroundColor: THEME.bg, justifyContent: "center", alignItems: "center" },
+  loadingText: { color: THEME.muted, marginTop: 12, fontWeight: "800" },
   header: {
     paddingHorizontal: 16,
     paddingTop: 22,
@@ -675,7 +1011,6 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: THEME.bg,
   },
-
   backBtn: {
     width: 46,
     height: 46,
@@ -686,33 +1021,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
-  smallLabel: {
-    color: THEME.green,
-    fontWeight: "900",
-    fontSize: 11,
-    letterSpacing: 1.1,
+  homeBtn: {
+    width: 46,
+    height: 46,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
   },
-
-  title: {
-    color: THEME.text,
-    fontSize: 27,
-    fontWeight: "900",
-    marginTop: 2,
-  },
-
-  subtitle: {
-    color: THEME.muted,
-    fontWeight: "700",
-    marginTop: 3,
-    fontSize: 12,
-  },
-
-  listContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 35,
-  },
-
+  smallLabel: { color: THEME.green, fontWeight: "900", fontSize: 11, letterSpacing: 1.1 },
+  title: { color: THEME.text, fontSize: 27, fontWeight: "900", marginTop: 2 },
+  subtitle: { color: THEME.muted, fontWeight: "700", marginTop: 3, fontSize: 12 },
+  listContent: { paddingHorizontal: 16, paddingBottom: 35 },
   summaryCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -724,26 +1044,9 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 7,
   },
-
-  summaryTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-
-  summaryLabel: {
-    color: THEME.muted,
-    fontSize: 13,
-    fontWeight: "800",
-  },
-
-  summaryValue: {
-    color: THEME.yellow,
-    fontSize: 40,
-    fontWeight: "900",
-    marginTop: 5,
-  },
-
+  summaryTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  summaryLabel: { color: THEME.muted, fontSize: 13, fontWeight: "800" },
+  summaryValue: { color: THEME.yellow, fontSize: 40, fontWeight: "900", marginTop: 5 },
   summaryIcon: {
     width: 64,
     height: 64,
@@ -754,41 +1057,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
-  summaryStats: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 20,
-  },
-
+  summaryStats: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 20 },
   miniStat: {
-    flex: 1,
+    width: "48.5%",
     backgroundColor: THEME.card2,
     borderRadius: 18,
     padding: 12,
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
-  miniValue: {
-    color: THEME.text,
-    fontSize: 18,
-    fontWeight: "900",
-  },
-
-  miniLabel: {
-    color: THEME.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: 4,
-  },
-
-  actionRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 16,
-  },
-
+  miniValue: { color: THEME.text, fontSize: 18, fontWeight: "900" },
+  miniLabel: { color: THEME.muted, fontSize: 10, fontWeight: "800", marginTop: 4 },
+  actionRow: { flexDirection: "row", gap: 10, marginTop: 16 },
   yellowBtn: {
     flex: 1,
     height: 52,
@@ -799,12 +1079,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
   },
-
-  yellowText: {
-    color: "#000",
-    fontWeight: "900",
-  },
-
+  yellowText: { color: "#000", fontWeight: "900" },
   greenBtn: {
     flex: 1,
     height: 52,
@@ -815,17 +1090,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
   },
-
-  greenText: {
-    color: "#000",
-    fontWeight: "900",
+  greenText: { color: "#000", fontWeight: "900" },
+  searchBox: {
+    marginTop: 17,
+    height: 54,
+    borderRadius: 20,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    paddingHorizontal: 15,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
-
-  chipScroll: {
-    maxHeight: 48,
-    marginBottom: 4,
-  },
-
+  searchInput: { flex: 1, color: THEME.text, fontWeight: "800", fontSize: 14 },
+  chipScroll: { maxHeight: 48, marginBottom: 4 },
   chip: {
     borderWidth: 1,
     borderColor: THEME.border,
@@ -835,21 +1114,9 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: THEME.card,
   },
-
-  chipActive: {
-    backgroundColor: THEME.yellow,
-    borderColor: THEME.yellow,
-  },
-
-  chipText: {
-    color: THEME.muted,
-    fontWeight: "900",
-  },
-
-  chipTextActive: {
-    color: "#000",
-  },
-
+  chipActive: { backgroundColor: THEME.yellow, borderColor: THEME.yellow },
+  chipText: { color: THEME.muted, fontWeight: "900" },
+  chipTextActive: { color: "#000" },
   sectionHeader: {
     marginTop: 22,
     marginBottom: 12,
@@ -857,20 +1124,9 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
   },
-
-  sectionTitle: {
-    color: THEME.text,
-    fontSize: 19,
-    fontWeight: "900",
-    marginTop: 22,
-    marginBottom: 12,
-  },
-
-  sectionCount: {
-    color: THEME.yellow,
-    fontWeight: "900",
-  },
-
+  sectionTitle: { color: THEME.text, fontSize: 19, fontWeight: "900", marginTop: 22, marginBottom: 12 },
+  sectionTitleNoMargin: { color: THEME.text, fontSize: 19, fontWeight: "900" },
+  sectionCount: { color: THEME.yellow, fontWeight: "900" },
   card: {
     backgroundColor: THEME.card,
     borderRadius: 22,
@@ -882,14 +1138,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
-  thumb: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: THEME.card2,
-  },
-
+  thumb: { width: 56, height: 56, borderRadius: 18, backgroundColor: THEME.card2 },
   fallbackIcon: {
     width: 56,
     height: 56,
@@ -900,7 +1149,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   fallbackIconGreen: {
     width: 56,
     height: 56,
@@ -911,33 +1159,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
-  name: {
-    color: THEME.text,
-    fontSize: 16,
-    fontWeight: "900",
-  },
-
-  meta: {
-    color: THEME.muted,
-    marginTop: 3,
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  cardMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    marginTop: 7,
-  },
-
-  cardMetaText: {
-    color: THEME.green,
-    fontSize: 11,
-    fontWeight: "900",
-  },
-
+  name: { color: THEME.text, fontSize: 16, fontWeight: "900" },
+  meta: { color: THEME.muted, marginTop: 3, fontSize: 12, fontWeight: "700" },
+  cardMetaRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 7, flexWrap: "wrap" },
+  cardMetaText: { color: THEME.green, fontSize: 11, fontWeight: "900" },
+  dot: { color: THEME.muted, fontWeight: "900" },
+  cardActions: { gap: 8 },
   editBtn: {
     width: 38,
     height: 38,
@@ -946,7 +1173,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
+  deleteBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    backgroundColor: "#251010",
+    borderWidth: 1,
+    borderColor: "#6B1F1F",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   emptyBox: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -955,28 +1191,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
-  emptyTitle: {
-    color: THEME.text,
-    fontSize: 18,
-    fontWeight: "900",
-    marginTop: 10,
-  },
-
-  emptyText: {
-    color: THEME.muted,
-    textAlign: "center",
-    marginTop: 7,
-    lineHeight: 20,
-    fontWeight: "700",
-  },
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.76)",
-    justifyContent: "flex-end",
-  },
-
+  emptyTitle: { color: THEME.text, fontSize: 18, fontWeight: "900", marginTop: 10 },
+  emptyText: { color: THEME.muted, textAlign: "center", marginTop: 7, lineHeight: 20, fontWeight: "700" },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.76)", justifyContent: "flex-end" },
   modalBox: {
     maxHeight: "92%",
     backgroundColor: THEME.bg,
@@ -986,7 +1203,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   modalHandle: {
     width: 52,
     height: 5,
@@ -995,28 +1211,9 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginBottom: 16,
   },
-
-  modalHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 18,
-  },
-
-  modalLabel: {
-    color: THEME.green,
-    fontSize: 11,
-    letterSpacing: 1.1,
-    fontWeight: "900",
-  },
-
-  modalTitle: {
-    color: THEME.text,
-    fontSize: 24,
-    fontWeight: "900",
-    marginTop: 3,
-  },
-
+  modalHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 18 },
+  modalLabel: { color: THEME.green, fontSize: 11, letterSpacing: 1.1, fontWeight: "900" },
+  modalTitle: { color: THEME.text, fontSize: 24, fontWeight: "900", marginTop: 3 },
   closeBtn: {
     width: 43,
     height: 43,
@@ -1027,18 +1224,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
-  inputGroup: {
-    marginBottom: 14,
-  },
-
-  inputLabel: {
-    color: THEME.text,
-    fontSize: 13,
-    fontWeight: "900",
-    marginBottom: 8,
-  },
-
+  inputGroup: { marginBottom: 14 },
+  inputLabel: { color: THEME.text, fontSize: 13, fontWeight: "900", marginBottom: 8 },
   inputBox: {
     minHeight: 55,
     borderRadius: 19,
@@ -1050,29 +1237,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
-  textAreaBox: {
-    minHeight: 96,
-    alignItems: "flex-start",
-    paddingTop: 14,
-  },
-
-  input: {
-    flex: 1,
-    color: THEME.text,
-    fontWeight: "800",
-  },
-
-  textArea: {
-    minHeight: 75,
-    textAlignVertical: "top",
-  },
-
-  formChipScroll: {
-    maxHeight: 47,
-    marginBottom: 16,
-  },
-
+  textAreaBox: { minHeight: 96, alignItems: "flex-start", paddingTop: 14 },
+  input: { flex: 1, color: THEME.text, fontWeight: "800" },
+  textArea: { minHeight: 75, textAlignVertical: "top" },
+  formChipScroll: { maxHeight: 47, marginBottom: 16 },
   formChip: {
     borderWidth: 1,
     borderColor: THEME.border,
@@ -1082,26 +1250,10 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: THEME.card,
   },
-
-  formChipActive: {
-    backgroundColor: THEME.green,
-    borderColor: THEME.green,
-  },
-
-  formChipText: {
-    color: THEME.muted,
-    fontWeight: "900",
-  },
-
-  formChipTextActive: {
-    color: "#000",
-  },
-
-  imageSection: {
-    marginTop: 2,
-    marginBottom: 15,
-  },
-
+  formChipActive: { backgroundColor: THEME.green, borderColor: THEME.green },
+  formChipText: { color: THEME.muted, fontWeight: "900" },
+  formChipTextActive: { color: "#000" },
+  imageSection: { marginTop: 2, marginBottom: 15 },
   imagePreviewBox: {
     height: 152,
     borderRadius: 22,
@@ -1110,57 +1262,33 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     overflow: "hidden",
   },
-
-  preview: {
-    width: "100%",
-    height: "100%",
-  },
-
-  emptyImage: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  emptyImageText: {
-    color: THEME.muted,
-    marginTop: 8,
-    fontWeight: "800",
-  },
-
-  imageActions: {
-    flexDirection: "row",
-    gap: 10,
-    marginTop: 12,
-  },
-
+  preview: { width: "100%", height: "100%" },
+  emptyImage: { flex: 1, alignItems: "center", justifyContent: "center" },
+  emptyImageText: { color: THEME.muted, marginTop: 8, fontWeight: "800" },
+  imageActions: { flexDirection: "row", gap: 10, marginTop: 12 },
   imageBtnGreen: {
     flex: 1,
-    height: 48,
+    minHeight: 48,
     borderRadius: 18,
     backgroundColor: THEME.green,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 7,
+    paddingHorizontal: 8,
   },
-
   imageBtnYellow: {
     flex: 1,
-    height: 48,
+    minHeight: 48,
     borderRadius: 18,
     backgroundColor: THEME.yellow,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 7,
+    paddingHorizontal: 8,
   },
-
-  imageBtnText: {
-    color: "#000",
-    fontWeight: "900",
-  },
-
+  imageBtnText: { color: "#000", fontWeight: "900", fontSize: 12 },
   saveBtn: {
     height: 56,
     borderRadius: 20,
@@ -1172,10 +1300,5 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 8,
   },
-
-  saveText: {
-    color: "#000",
-    fontSize: 16,
-    fontWeight: "900",
-  },
+  saveText: { color: "#000", fontSize: 16, fontWeight: "900" },
 });

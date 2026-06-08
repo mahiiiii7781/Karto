@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ const THEME = {
   muted: "#A7B0A7",
   border: "#263026",
   danger: "#FF4D4D",
+  orange: "#FFB020",
 };
 
 const money = (v: any) => `₹${Number(v || 0).toFixed(2)}`;
@@ -49,7 +50,6 @@ export default function AdminRidersScreen({ navigation }: any) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
-  const [selectedRider, setSelectedRider] = useState<any>(null);
   const [statusLoading, setStatusLoading] = useState(false);
 
   const [message, setMessage] = useState<MessageState>({
@@ -88,7 +88,12 @@ export default function AdminRidersScreen({ navigation }: any) {
     }));
   };
 
-  const loadRiders = async () => {
+  const goBack = () => {
+    if (navigation?.canGoBack?.()) navigation.goBack();
+    else navigation.navigate("AdminDashboard");
+  };
+
+  const loadRiders = useCallback(async () => {
     const { data, error } = await adminService.riders();
 
     if (error) {
@@ -97,17 +102,18 @@ export default function AdminRidersScreen({ navigation }: any) {
         "Unable to Load Riders",
         error.message || "Please check your connection and try again."
       );
+      setRiders([]);
     } else {
       setRiders(data || []);
     }
 
     setLoading(false);
     setRefreshing(false);
-  };
+  }, []);
 
   useEffect(() => {
     loadRiders();
-  }, []);
+  }, [loadRiders]);
 
   const filteredRiders = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -121,7 +127,8 @@ export default function AdminRidersScreen({ navigation }: any) {
         item.email?.toLowerCase().includes(q) ||
         item.vehicleNo?.toLowerCase().includes(q) ||
         item.vehicleType?.toLowerCase().includes(q) ||
-        item.address?.toLowerCase().includes(q)
+        item.address?.toLowerCase().includes(q) ||
+        item.city?.name?.toLowerCase().includes(q)
       );
     });
   }, [riders, search]);
@@ -152,16 +159,15 @@ export default function AdminRidersScreen({ navigation }: any) {
   };
 
   const askToggleStatus = (rider: any) => {
-    setSelectedRider(rider);
-
-    const willActivate = !rider.isActive;
+    const active = rider.isActive !== false;
+    const willActivate = !active;
 
     showMessage(
       willActivate ? "success" : "warning",
       willActivate ? "Activate Rider?" : "Block Rider?",
       willActivate
-        ? `${rider.fullName || "This rider"} will be allowed to receive delivery assignments.`
-        : `${rider.fullName || "This rider"} will stop receiving delivery assignments.`,
+        ? `${rider.fullName || "This rider"} delivery assignments receive kar sakega.`
+        : `${rider.fullName || "This rider"} delivery assignments receive nahi karega.`,
       willActivate ? "Activate" : "Block",
       () => toggleStatus(rider),
       "Cancel",
@@ -170,14 +176,15 @@ export default function AdminRidersScreen({ navigation }: any) {
   };
 
   const toggleStatus = async (rider: any) => {
+    const active = rider.isActive !== false;
+
     setStatusLoading(true);
+    setMessage((prev) => ({ ...prev, loading: true }));
 
-    setMessage((prev) => ({
-      ...prev,
-      loading: true,
-    }));
-
-    const { error } = await adminService.updateUserStatus(rider.id, !rider.isActive);
+    const { error } = await adminService.updateRiderStatus(
+      rider.id,
+      !active
+    );
 
     setStatusLoading(false);
 
@@ -186,7 +193,8 @@ export default function AdminRidersScreen({ navigation }: any) {
         visible: true,
         type: "error",
         title: "Status Update Failed",
-        message: error.message || "Unable to update rider status. Please try again.",
+        message:
+          error.message || "Unable to update rider status. Please try again.",
         primaryText: "Okay",
       });
       return;
@@ -196,9 +204,53 @@ export default function AdminRidersScreen({ navigation }: any) {
       visible: true,
       type: "success",
       title: "Rider Status Updated",
-      message: rider.isActive
+      message: active
         ? "Rider has been blocked from delivery operations."
         : "Rider is active and ready for delivery assignments.",
+      primaryText: "Done",
+      onPrimary: () => {
+        closeMessage();
+        loadRiders();
+      },
+    });
+  };
+
+  const askDeleteRider = (rider: any) => {
+    showMessage(
+      "warning",
+      "Delete Rider?",
+      `${rider.fullName || "This rider"} ko delete/block karna hai? Delivered orders linked hue to backend safe block karega.`,
+      "Delete",
+      () => deleteRider(rider),
+      "Cancel",
+      closeMessage
+    );
+  };
+
+  const deleteRider = async (rider: any) => {
+    setStatusLoading(true);
+    setMessage((prev) => ({ ...prev, loading: true }));
+
+    const { error } = await adminService.deleteRider(rider.id);
+
+    setStatusLoading(false);
+
+    if (error) {
+      setMessage({
+        visible: true,
+        type: "error",
+        title: "Delete Failed",
+        message: error.message || "Unable to delete rider. Please try again.",
+        primaryText: "Okay",
+      });
+      return;
+    }
+
+    setMessage({
+      visible: true,
+      type: "success",
+      title: "Rider Deleted",
+      message: "Rider deleted/blocked successfully.",
       primaryText: "Done",
       onPrimary: () => {
         closeMessage();
@@ -237,14 +289,16 @@ export default function AdminRidersScreen({ navigation }: any) {
         ListHeaderComponent={
           <>
             <View style={styles.header}>
-              <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
+              <TouchableOpacity style={styles.backBtn} onPress={goBack}>
                 <Icon name="chevron-back" size={24} color={THEME.text} />
               </TouchableOpacity>
 
               <View style={{ flex: 1 }}>
                 <Text style={styles.smallLabel}>RIDER OPERATIONS</Text>
                 <Text style={styles.title}>Riders</Text>
-                <Text style={styles.subtitle}>Manage delivery partners, earnings and status</Text>
+                <Text style={styles.subtitle}>
+                  Manage delivery partners, earnings, city and status
+                </Text>
               </View>
 
               <TouchableOpacity
@@ -269,19 +323,44 @@ export default function AdminRidersScreen({ navigation }: any) {
               </View>
 
               <View style={styles.summaryStats}>
-                <MiniStat label="Active" value={stats.active} />
-                <MiniStat label="Blocked" value={stats.blocked} />
+                <MiniStat label="Active" value={stats.active} green />
+                <MiniStat label="Blocked" value={stats.blocked} danger />
                 <MiniStat label="Delivered" value={stats.totalDelivered} />
               </View>
 
               <View style={styles.earningCard}>
                 <View>
                   <Text style={styles.earningLabel}>Total Rider Earnings</Text>
-                  <Text style={styles.earningValue}>{money(stats.totalEarning)}</Text>
+                  <Text style={styles.earningValue}>
+                    {money(stats.totalEarning)}
+                  </Text>
                 </View>
 
                 <Icon name="wallet-outline" size={28} color={THEME.green} />
               </View>
+            </View>
+
+            <View style={styles.quickRail}>
+              <QuickAction
+                icon="person-add-outline"
+                label="Add Rider"
+                onPress={() => navigation.navigate("AdminRiderCreate")}
+              />
+              <QuickAction
+                icon="card-outline"
+                label="Billing"
+                onPress={() => navigation.navigate("AdminBilling")}
+              />
+              <QuickAction
+                icon="receipt-outline"
+                label="Orders"
+                onPress={() => navigation.navigate("AdminOrders")}
+              />
+              <QuickAction
+                icon="bar-chart-outline"
+                label="Analytics"
+                onPress={() => navigation.navigate("AdminAnalytics")}
+              />
             </View>
 
             <View style={styles.searchBox}>
@@ -289,7 +368,7 @@ export default function AdminRidersScreen({ navigation }: any) {
               <TextInput
                 value={search}
                 onChangeText={setSearch}
-                placeholder="Search rider, phone, vehicle..."
+                placeholder="Search rider, phone, vehicle, city..."
                 placeholderTextColor={THEME.muted}
                 style={styles.searchInput}
               />
@@ -303,7 +382,9 @@ export default function AdminRidersScreen({ navigation }: any) {
 
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Rider List</Text>
-              <Text style={styles.sectionCount}>{filteredRiders.length} found</Text>
+              <Text style={styles.sectionCount}>
+                {filteredRiders.length} found
+              </Text>
             </View>
           </>
         }
@@ -326,7 +407,27 @@ export default function AdminRidersScreen({ navigation }: any) {
           </View>
         }
         renderItem={({ item }) => (
-          <RiderCard item={item} onToggleStatus={() => askToggleStatus(item)} />
+          <RiderCard
+            item={item}
+            onToggleStatus={() => askToggleStatus(item)}
+            onEdit={() =>
+              navigation.navigate("AdminRiderCreate", {
+                rider: item,
+                mode: "edit",
+              })
+            }
+            onBilling={() =>
+              navigation.navigate("AdminBilling", {
+                riderId: item.id,
+              })
+            }
+            onOrders={() =>
+              navigation.navigate("AdminOrders", {
+                riderId: item.id,
+              })
+            }
+            onDelete={() => askDeleteRider(item)}
+          />
         )}
       />
 
@@ -346,24 +447,49 @@ export default function AdminRidersScreen({ navigation }: any) {
   );
 }
 
-function MiniStat({ label, value }: any) {
+function MiniStat({ label, value, green, danger }: any) {
   return (
     <View style={styles.miniStat}>
-      <Text style={styles.miniValue}>{value}</Text>
+      <Text
+        style={[
+          styles.miniValue,
+          green && { color: THEME.green },
+          danger && { color: THEME.danger },
+        ]}
+      >
+        {value}
+      </Text>
       <Text style={styles.miniLabel}>{label}</Text>
     </View>
   );
 }
 
-function RiderCard({ item, onToggleStatus }: any) {
+function QuickAction({ icon, label, onPress }: any) {
+  return (
+    <TouchableOpacity style={styles.quickItem} onPress={onPress} activeOpacity={0.86}>
+      <Icon name={icon} size={21} color={THEME.yellow} />
+      <Text style={styles.quickText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function RiderCard({
+  item,
+  onToggleStatus,
+  onEdit,
+  onBilling,
+  onOrders,
+  onDelete,
+}: any) {
   const active = item.isActive !== false;
+  const imageUrl = item.imageUrl || item.image_url || item.avatarUrl;
 
   return (
     <View style={styles.card}>
       <View style={styles.cardTop}>
         <View style={styles.avatarBox}>
-          {item.avatarUrl ? (
-            <Image source={{ uri: item.avatarUrl }} style={styles.avatar} />
+          {imageUrl ? (
+            <Image source={{ uri: imageUrl }} style={styles.avatar} />
           ) : (
             <Icon name="person-outline" size={27} color={THEME.yellow} />
           )}
@@ -375,8 +501,18 @@ function RiderCard({ item, onToggleStatus }: any) {
               {item.fullName || "Rider"}
             </Text>
 
-            <View style={[styles.statusBadge, active ? styles.activeBadge : styles.blockedBadge]}>
-              <Text style={[styles.statusText, active ? styles.activeText : styles.blockedText]}>
+            <View
+              style={[
+                styles.statusBadge,
+                active ? styles.activeBadge : styles.blockedBadge,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.statusText,
+                  active ? styles.activeText : styles.blockedText,
+                ]}
+              >
                 {active ? "Active" : "Blocked"}
               </Text>
             </View>
@@ -387,7 +523,7 @@ function RiderCard({ item, onToggleStatus }: any) {
           </Text>
 
           <View style={styles.vehicleRow}>
-            <Icon name="bicycle-outline" size={14} color={THEME.green} />
+            <Icon name={getVehicleIcon(item.vehicleType)} size={14} color={THEME.green} />
             <Text style={styles.vehicleText} numberOfLines={1}>
               {item.vehicleType || "Vehicle"} • {item.vehicleNo || "No vehicle no"}
             </Text>
@@ -396,28 +532,54 @@ function RiderCard({ item, onToggleStatus }: any) {
       </View>
 
       <View style={styles.infoRow}>
-        <InfoChip icon="location-outline" text={item.address || "Address not added"} />
+        <InfoChip
+          icon="location-outline"
+          text={item.city?.name || item.address || "Address not added"}
+        />
       </View>
 
       <View style={styles.statsRow}>
         <StatBox title="Delivered" value={item.deliveredOrders || 0} />
         <StatBox title="Earning" value={money(item.totalDeliveryFee)} green />
+        <StatBox title="COD" value={money(item.codCollected || 0)} />
       </View>
 
-      <TouchableOpacity
-        style={[styles.statusAction, active ? styles.blockBtn : styles.activateBtn]}
-        onPress={onToggleStatus}
-        activeOpacity={0.86}
-      >
-        <Icon
-          name={active ? "ban-outline" : "checkmark-circle-outline"}
-          size={18}
-          color={active ? THEME.danger : "#000"}
-        />
-        <Text style={[styles.statusActionText, active ? styles.blockActionText : styles.activateActionText]}>
-          {active ? "Block Rider" : "Activate Rider"}
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.actionRow}>
+        <ActionButton icon="create-outline" title="Edit" onPress={onEdit} />
+        <ActionButton icon="card-outline" title="Billing" onPress={onBilling} outline />
+        <ActionButton icon="receipt-outline" title="Orders" onPress={onOrders} outline />
+      </View>
+
+      <View style={styles.actionRow}>
+        <TouchableOpacity
+          style={[styles.statusAction, active ? styles.blockBtn : styles.activateBtn]}
+          onPress={onToggleStatus}
+          activeOpacity={0.86}
+        >
+          <Icon
+            name={active ? "ban-outline" : "checkmark-circle-outline"}
+            size={18}
+            color={active ? THEME.danger : "#000"}
+          />
+          <Text
+            style={[
+              styles.statusActionText,
+              active ? styles.blockActionText : styles.activateActionText,
+            ]}
+          >
+            {active ? "Block Rider" : "Activate Rider"}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.deleteBtn}
+          onPress={onDelete}
+          activeOpacity={0.86}
+        >
+          <Icon name="trash-outline" size={18} color={THEME.danger} />
+          <Text style={styles.deleteText}>Delete</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -437,37 +599,66 @@ function StatBox({ title, value, green }: any) {
   return (
     <View style={styles.statBox}>
       <Text style={styles.statLabel}>{title}</Text>
-      <Text style={[styles.statValue, green && { color: THEME.green }]} numberOfLines={1}>
+      <Text
+        style={[styles.statValue, green && { color: THEME.green }]}
+        numberOfLines={1}
+      >
         {value}
       </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: THEME.bg,
-  },
+function ActionButton({ icon, title, onPress, outline }: any) {
+  return (
+    <TouchableOpacity
+      style={[styles.smallActionBtn, outline && styles.smallActionOutline]}
+      onPress={onPress}
+      activeOpacity={0.86}
+    >
+      <Icon name={icon} size={17} color={outline ? THEME.yellow : "#000"} />
+      <Text
+        style={[
+          styles.smallActionText,
+          outline && styles.smallActionTextOutline,
+        ]}
+      >
+        {title}
+      </Text>
+    </TouchableOpacity>
+  );
+}
 
+function getVehicleIcon(type: string) {
+  switch (type) {
+    case "SCOOTER":
+      return "speedometer-outline";
+    case "CYCLE":
+      return "bicycle-outline";
+    case "E-RICKSHAW":
+      return "car-outline";
+    default:
+      return "bicycle-outline";
+  }
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: THEME.bg },
   center: {
     flex: 1,
     backgroundColor: THEME.bg,
     justifyContent: "center",
     alignItems: "center",
   },
-
   loadingText: {
     color: THEME.muted,
     marginTop: 12,
     fontWeight: "800",
   },
-
   listContent: {
     paddingHorizontal: 16,
     paddingBottom: 38,
   },
-
   header: {
     paddingTop: 22,
     paddingBottom: 16,
@@ -475,7 +666,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-
   backBtn: {
     width: 46,
     height: 46,
@@ -486,7 +676,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   addBtn: {
     width: 46,
     height: 46,
@@ -495,28 +684,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   smallLabel: {
     color: THEME.green,
     fontWeight: "900",
     fontSize: 11,
     letterSpacing: 1.1,
   },
-
   title: {
     color: THEME.text,
     fontSize: 27,
     fontWeight: "900",
     marginTop: 2,
   },
-
   subtitle: {
     color: THEME.muted,
     fontWeight: "700",
     marginTop: 3,
     fontSize: 12,
   },
-
   summaryCard: {
     backgroundColor: THEME.card,
     borderRadius: 28,
@@ -528,26 +713,22 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 7,
   },
-
   summaryTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
   },
-
   summaryLabel: {
     color: THEME.muted,
     fontSize: 13,
     fontWeight: "800",
   },
-
   summaryValue: {
     color: THEME.yellow,
     fontSize: 40,
     fontWeight: "900",
     marginTop: 5,
   },
-
   summaryIcon: {
     width: 64,
     height: 64,
@@ -558,13 +739,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-
   summaryStats: {
     flexDirection: "row",
     gap: 10,
     marginTop: 20,
   },
-
   miniStat: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -573,20 +752,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   miniValue: {
     color: THEME.text,
     fontSize: 20,
     fontWeight: "900",
   },
-
   miniLabel: {
     color: THEME.muted,
     fontSize: 10.5,
     fontWeight: "800",
     marginTop: 3,
   },
-
   earningCard: {
     marginTop: 12,
     backgroundColor: "#102517",
@@ -598,20 +774,38 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   earningLabel: {
     color: THEME.muted,
     fontSize: 11,
     fontWeight: "800",
   },
-
   earningValue: {
     color: THEME.green,
     fontSize: 18,
     fontWeight: "900",
     marginTop: 5,
   },
-
+  quickRail: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+  },
+  quickItem: {
+    flex: 1,
+    backgroundColor: THEME.card,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 18,
+    paddingVertical: 13,
+    alignItems: "center",
+  },
+  quickText: {
+    color: THEME.text,
+    fontSize: 10,
+    fontWeight: "900",
+    marginTop: 6,
+    textAlign: "center",
+  },
   searchBox: {
     marginTop: 17,
     height: 54,
@@ -624,14 +818,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-
   searchInput: {
     flex: 1,
     color: THEME.text,
     fontWeight: "800",
     fontSize: 14,
   },
-
   sectionHeader: {
     marginTop: 24,
     marginBottom: 12,
@@ -639,18 +831,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   sectionTitle: {
     color: THEME.text,
     fontSize: 20,
     fontWeight: "900",
   },
-
   sectionCount: {
     color: THEME.yellow,
     fontWeight: "900",
   },
-
   emptyBox: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -659,14 +848,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   emptyTitle: {
     color: THEME.text,
     fontSize: 18,
     fontWeight: "900",
     marginTop: 10,
   },
-
   emptyText: {
     color: THEME.muted,
     textAlign: "center",
@@ -674,7 +861,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "700",
   },
-
   emptyAddBtn: {
     marginTop: 18,
     height: 48,
@@ -686,12 +872,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 7,
   },
-
   emptyAddText: {
     color: "#000",
     fontWeight: "900",
   },
-
   card: {
     backgroundColor: THEME.card,
     borderRadius: 24,
@@ -700,13 +884,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   cardTop: {
     flexDirection: "row",
     gap: 12,
     alignItems: "center",
   },
-
   avatarBox: {
     width: 58,
     height: 58,
@@ -718,80 +900,66 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-
   avatar: {
     width: "100%",
     height: "100%",
   },
-
   nameRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
-
   name: {
     flex: 1,
     fontSize: 17,
     fontWeight: "900",
     color: THEME.text,
   },
-
   meta: {
     color: THEME.muted,
     marginTop: 4,
     fontSize: 12,
     fontWeight: "800",
   },
-
   vehicleRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
     marginTop: 7,
   },
-
   vehicleText: {
     flex: 1,
     color: THEME.green,
     fontSize: 11,
     fontWeight: "900",
   },
-
   statusBadge: {
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 999,
     borderWidth: 1,
   },
-
   activeBadge: {
     backgroundColor: "#102517",
     borderColor: "#1F6B35",
   },
-
   blockedBadge: {
     backgroundColor: "#251010",
     borderColor: "#6B1F1F",
   },
-
   statusText: {
     fontSize: 10,
     fontWeight: "900",
   },
-
   activeText: {
     color: THEME.green,
   },
-
   blockedText: {
     color: THEME.danger,
   },
-
   infoRow: {
     marginTop: 14,
   },
-
   infoChip: {
     minHeight: 36,
     borderRadius: 14,
@@ -803,20 +971,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
   },
-
   infoChipText: {
     flex: 1,
     color: THEME.muted,
     fontSize: 11,
     fontWeight: "800",
   },
-
   statsRow: {
     flexDirection: "row",
     gap: 8,
     marginTop: 12,
   },
-
   statBox: {
     flex: 1,
     backgroundColor: THEME.card2,
@@ -825,50 +990,86 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: THEME.border,
   },
-
   statLabel: {
     color: THEME.muted,
     fontSize: 10.5,
     fontWeight: "800",
   },
-
   statValue: {
     color: THEME.yellow,
     fontWeight: "900",
     marginTop: 5,
   },
-
+  actionRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+  },
+  smallActionBtn: {
+    flex: 1,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: THEME.yellow,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  smallActionOutline: {
+    backgroundColor: THEME.card2,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  smallActionText: {
+    color: "#000",
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  smallActionTextOutline: {
+    color: THEME.yellow,
+  },
   statusAction: {
+    flex: 1,
     height: 45,
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: 7,
-    marginTop: 12,
     borderWidth: 1,
   },
-
   blockBtn: {
     backgroundColor: "#251010",
     borderColor: "#6B1F1F",
   },
-
   activateBtn: {
     backgroundColor: THEME.green,
     borderColor: THEME.green,
   },
-
   statusActionText: {
     fontWeight: "900",
     fontSize: 13,
   },
-
   blockActionText: {
     color: THEME.danger,
   },
-
   activateActionText: {
     color: "#000",
+  },
+  deleteBtn: {
+    flex: 1,
+    height: 45,
+    borderRadius: 17,
+    backgroundColor: "#251010",
+    borderWidth: 1,
+    borderColor: "#6B1F1F",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 7,
+  },
+  deleteText: {
+    color: THEME.danger,
+    fontWeight: "900",
   },
 });
