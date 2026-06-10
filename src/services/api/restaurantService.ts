@@ -213,19 +213,38 @@ const unwrap = (res: any) => res?.data ?? res;
 
 const getData = (res: any) => {
   const json = unwrap(res);
-
-  return json?.data ?? json;
+  return json?.data ?? json?.result ?? json?.payload ?? json;
 };
 
 const getList = (res: any) => {
-  const data = getData(res);
+  const json = unwrap(res);
 
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
-  if (Array.isArray(data?.restaurants)) return data.restaurants;
-  if (Array.isArray(data?.menuItems)) return data.menuItems;
-  if (Array.isArray(data?.menu_items)) return data.menu_items;
-  if (Array.isArray(data?.categories)) return data.categories;
+  const possible = [
+    json,
+    json?.data,
+    json?.data?.data,
+    json?.result,
+    json?.results,
+    json?.payload,
+    json?.payload?.data,
+    json?.items,
+    json?.data?.items,
+    json?.payload?.items,
+    json?.restaurants,
+    json?.data?.restaurants,
+    json?.payload?.restaurants,
+    json?.menuItems,
+    json?.data?.menuItems,
+    json?.menu_items,
+    json?.data?.menu_items,
+    json?.categories,
+    json?.data?.categories,
+    json?.payload?.categories,
+  ];
+
+  for (const item of possible) {
+    if (Array.isArray(item)) return item;
+  }
 
   return [];
 };
@@ -584,16 +603,36 @@ class RestaurantService {
   /* ---------- Categories ---------- */
 
   async getCategories(): Promise<ApiResult<Category[]>> {
-    return safeMappedList(() => apiClient.get("/categories"), mapCategory);
+    return safeMappedList(
+      () => apiClient.get("/vendor/categories/list"),
+      mapCategory
+    );
   }
 
   /* ---------- Restaurants ---------- */
 
   async getFeaturedRestaurants(): Promise<ApiResult<Restaurant[]>> {
-    return safeMappedList(
-      () => apiClient.get("/restaurants/featured"),
-      mapRestaurant
-    );
+    const endpoints = [
+      "/restaurants/featured",
+      "/restaurants",
+      "/restaurant/featured",
+      "/restaurant",
+      "/vendor/restaurants/public",
+    ];
+
+    let fallback: ApiResult<Restaurant[]> | null = null;
+
+    for (const endpoint of endpoints) {
+      const result = await safeMappedList(() => apiClient.get(endpoint), mapRestaurant);
+
+      if (!fallback) fallback = result;
+
+      if (!result.error && Array.isArray(result.data) && result.data.length > 0) {
+        return result;
+      }
+    }
+
+    return fallback || { data: [], error: null };
   }
 
   async getRestaurantsByCategory(categoryId: string): Promise<ApiResult<Restaurant[]>> {

@@ -23,9 +23,8 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import { launchCamera, launchImageLibrary,CameraOptions,ImageLibraryOptions, } from "react-native-image-picker";
-
 import apiClient from "@/api/apiClient";
+import { imageUploadService } from "@/services/api/imageUploadService";
 import vendorService, {
   VendorDashboard,
   VendorRestaurant,
@@ -114,12 +113,24 @@ const unwrapData = (res: any) => {
 const getUploadedImageUrl = (res: any) => {
   return (
     res?.data?.imageUrl ||
+    res?.data?.image_url ||
+    res?.data?.bannerUrl ||
+    res?.data?.banner_url ||
+    res?.data?.logoUrl ||
+    res?.data?.logo_url ||
     res?.data?.url ||
     res?.data?.secure_url ||
     res?.data?.data?.imageUrl ||
+    res?.data?.data?.image_url ||
+    res?.data?.data?.bannerUrl ||
+    res?.data?.data?.banner_url ||
+    res?.data?.data?.logoUrl ||
+    res?.data?.data?.logo_url ||
     res?.data?.data?.url ||
     res?.data?.data?.secure_url ||
     res?.data?.file?.url ||
+    res?.data?.file?.secure_url ||
+    res?.data?.result?.url ||
     res?.data?.result?.secure_url ||
     null
   );
@@ -197,8 +208,20 @@ const buildFormFromRestaurant = (restaurant?: VendorRestaurant | any): StoreForm
     isOpen: Boolean(open),
     isAcceptingOrders: Boolean(accepting),
     busyMinutes: "30",
-    imageUrl: restaurant.imageUrl || restaurant.image_url || "",
-    bannerUrl: restaurant.bannerUrl || restaurant.banner_url || "",
+    imageUrl:
+      restaurant.imageUrl ||
+      restaurant.image_url ||
+      restaurant.logoUrl ||
+      restaurant.logo_url ||
+      restaurant.image ||
+      "",
+    bannerUrl:
+      restaurant.bannerUrl ||
+      restaurant.banner_url ||
+      restaurant.coverUrl ||
+      restaurant.cover_url ||
+      restaurant.banner ||
+      "",
   };
 };
 
@@ -235,6 +258,7 @@ export default function VendorSettingsScreen({ navigation }: any) {
   const [statusSaving, setStatusSaving] = useState(false);
   const [busySaving, setBusySaving] = useState(false);
   const [uploadingType, setUploadingType] = useState<UploadType | null>(null);
+  const [imageVersion, setImageVersion] = useState(Date.now());
 
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
@@ -486,55 +510,103 @@ export default function VendorSettingsScreen({ navigation }: any) {
     }
   };
 
-  const uploadImageToServer = async (asset: any, type: UploadType) => {
-    if (!asset?.uri) return null;
+  const patchRestaurantMedia = async (
+    type: UploadType,
+    url: string | null
+  ) => {
+    const payload =
+      type === "banner"
+        ? {
+            bannerUrl: url,
+            banner_url: url,
+            coverUrl: url,
+          }
+        : {
+            imageUrl: url,
+            image_url: url,
+            logoUrl: url,
+          };
+
+    const endpoint = form.id
+      ? `/vendor/settings/${form.id}`
+      : "/vendor/settings/me";
+
+    const res = await apiClient.patch(endpoint, payload);
+    return unwrapData(res);
+  };
+
+  const applyRestaurantMediaLocally = (
+    type: UploadType,
+    url: string | null,
+    restaurant?: any
+  ) => {
+    setForm((prev) => {
+      const next = restaurant?.id
+        ? {
+            ...buildFormFromRestaurant({
+              ...restaurant,
+              imageUrl:
+                restaurant.imageUrl ||
+                restaurant.image_url ||
+                restaurant.logoUrl ||
+                restaurant.logo_url ||
+                prev.imageUrl,
+              bannerUrl:
+                restaurant.bannerUrl ||
+                restaurant.banner_url ||
+                restaurant.coverUrl ||
+                restaurant.cover_url ||
+                prev.bannerUrl,
+            }),
+            busyMinutes: prev.busyMinutes,
+          }
+        : prev;
+
+      return {
+        ...next,
+        imageUrl: type === "logo" ? url || "" : next.imageUrl,
+        bannerUrl: type === "banner" ? url || "" : next.bannerUrl,
+      };
+    });
+
+    setImageVersion(Date.now());
+  };
+
+  const uploadImageToServer = async (type: UploadType) => {
+    if (uploadingType) return null;
 
     setUploadingType(type);
 
     try {
-      const file: any = {
-        uri: asset.uri,
-        name:
-          asset.fileName ||
-          `vendor-${type}-${Date.now()}.${asset.type?.includes("png") ? "png" : "jpg"}`,
-        type: asset.type || "image/jpeg",
-      };
+      const folder = type === "banner" ? "vendor/banner" : "vendor/logo";
 
-      const formData = new FormData();
-      formData.append("image", file);
-      formData.append("folder", "vendor");
-
-      let res: any;
-
-      try {
-        res = await apiClient.post("/upload/image", formData, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-      } catch {
-        res = await apiClient.post("/upload", formData, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-      }
-
-      const url = getUploadedImageUrl(res);
+      const url = await imageUploadService.pickAndUpload(folder);
 
       if (!url) {
-        showToast("Image uploaded but URL not found");
         return null;
       }
 
-      update(type === "banner" ? "bannerUrl" : "imageUrl", url);
+      applyRestaurantMediaLocally(type, url);
 
-      if (form.id) {
-        const payload =
-          type === "banner"
-            ? ({ bannerUrl: url } as any)
-            : ({ imageUrl: url } as any);
-
-        await vendorService.updateSettings(payload, form.id);
+      try {
+        const updatedRestaurant = await patchRestaurantMedia(type, url);
+        applyRestaurantMediaLocally(type, url, updatedRestaurant);
+      } catch (patchError: any) {
+        showToast(
+          normalizeErrorMessage(
+            patchError,
+            "Image uploaded, but store profile update failed"
+          )
+        );
+        return null;
       }
 
       showToast(type === "banner" ? "Banner updated" : "Logo updated");
+
+     setImageVersion(Date.now());
+
+await loadSettings();
+
       return url;
     } catch (error: any) {
       showToast(normalizeErrorMessage(error, "Image upload failed"));
@@ -544,55 +616,38 @@ export default function VendorSettingsScreen({ navigation }: any) {
     }
   };
 
-const pickImage = async (source: "camera" | "gallery", type: UploadType) => {
-  const cameraOptions: CameraOptions = {
-    mediaType: "photo",
-    quality: 0.8,
-    includeBase64: false,
-    cameraType: "back",
-    saveToPhotos: false,
+  const pickImage = async (type: UploadType) => {
+    await uploadImageToServer(type);
   };
 
-  const galleryOptions: ImageLibraryOptions = {
-    mediaType: "photo",
-    quality: 0.8,
-    selectionLimit: 1,
-    includeBase64: false,
+  const removeMedia = async (type: UploadType) => {
+    if (uploadingType) return;
+
+    const previousUrl = type === "banner" ? form.bannerUrl : form.imageUrl;
+
+    applyRestaurantMediaLocally(type, null);
+
+    try {
+      await patchRestaurantMedia(type, null);
+      showToast(type === "banner" ? "Banner removed" : "Logo removed");
+      setImageVersion(Date.now());
+      await loadSettings();
+    } catch (error: any) {
+      applyRestaurantMediaLocally(type, previousUrl);
+      showToast(normalizeErrorMessage(error, "Failed to remove image"));
+    }
   };
-
-  const result =
-    source === "camera"
-      ? await launchCamera(cameraOptions)
-      : await launchImageLibrary(galleryOptions);
-
-  if (result.didCancel) return;
-
-  if (result.errorCode) {
-    showToast(result.errorMessage || "Image picker error");
-    return;
-  }
-
-  const asset = result.assets?.[0];
-
-  if (!asset?.uri) {
-    showToast("Image not selected");
-    return;
-  }
-
-  await uploadImageToServer(asset, type);
-};
 
   const showImageOptions = (type: UploadType) => {
     Alert.alert(
       type === "banner" ? "Store Banner" : "Store Logo",
       "Choose image source",
       [
-        { text: "Camera", onPress: () => pickImage("camera", type) },
-        { text: "Gallery", onPress: () => pickImage("gallery", type) },
+        { text: "Gallery", onPress: () => pickImage(type) },
         {
           text: "Remove",
           style: "destructive",
-          onPress: () => update(type === "banner" ? "bannerUrl" : "imageUrl", ""),
+          onPress: () => removeMedia(type),
         },
         { text: "Cancel", style: "cancel" },
       ]
@@ -746,6 +801,7 @@ const pickImage = async (source: "camera" | "gallery", type: UploadType) => {
               title="Store Banner"
               subtitle="Best for store header and customer trust"
               imageUrl={form.bannerUrl}
+              imageVersion={imageVersion}
               uploading={uploadingType === "banner"}
               onPress={() => showImageOptions("banner")}
             />
@@ -755,6 +811,7 @@ const pickImage = async (source: "camera" | "gallery", type: UploadType) => {
               title="Store Logo"
               subtitle="Shown in restaurant cards and profile"
               imageUrl={form.imageUrl}
+              imageVersion={imageVersion}
               uploading={uploadingType === "logo"}
               onPress={() => showImageOptions("logo")}
             />
@@ -1015,6 +1072,7 @@ function ImagePickerCard({
   title,
   subtitle,
   imageUrl,
+  imageVersion,
   uploading,
   onPress,
 }: {
@@ -1022,6 +1080,7 @@ function ImagePickerCard({
   title: string;
   subtitle: string;
   imageUrl: string;
+  imageVersion: number;
   uploading: boolean;
   onPress: () => void;
 }) {
@@ -1035,7 +1094,16 @@ function ImagePickerCard({
       disabled={uploading}
     >
       {imageUrl ? (
-        <Image source={{ uri: imageUrl }} style={StyleSheet.absoluteFillObject} />
+        <Image
+          key={`${type}-${imageUrl}-${imageVersion}`}
+          source={{
+            uri: imageUrl.includes("?")
+              ? `${imageUrl}&v=${imageVersion}`
+              : `${imageUrl}?v=${imageVersion}`,
+          }}
+          style={StyleSheet.absoluteFillObject}
+          resizeMode="cover"
+        />
       ) : (
         <View style={styles.imageEmpty}>
           <Icon

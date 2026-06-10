@@ -280,6 +280,16 @@ export type VendorSettingsPayload = Partial<{
   weeklyOffDay: string;
   isOpen: boolean;
   isAcceptingOrders: boolean;
+
+  // Restaurant media
+  imageUrl: string | null;
+  image_url: string | null;
+  logoUrl: string | null;
+  logo_url: string | null;
+  bannerUrl: string | null;
+  banner_url: string | null;
+  coverUrl: string | null;
+  cover_url: string | null;
 }>;
 
 export type VendorNotification = {
@@ -347,14 +357,38 @@ const normalizeMenuPayload = (payload: Partial<VendorMenuItem>) => {
     payload.is_vegetarian ??
     true;
 
+  const imageUrl = payload.imageUrl ?? payload.image_url ?? null;
+  const restaurantId = payload.restaurantId ?? payload.restaurant_id ?? null;
+  const categoryId = payload.categoryId ?? payload.category_id ?? null;
+  const subCategoryId = payload.subCategoryId ?? payload.sub_category_id ?? null;
+  const vendorCategoryId =
+    payload.vendorCategoryId ?? payload.vendor_category_id ?? categoryId ?? null;
+  const vendorSubCategoryId =
+    payload.vendorSubCategoryId ?? payload.vendor_sub_category_id ?? subCategoryId ?? null;
+  const prepTimeMin = Number(payload.prepTimeMin ?? payload.prep_time_min ?? 20);
+
   return {
     name: payload.name?.trim?.() ?? payload.name,
     description: payload.description || null,
     price: Number(payload.price || 0),
-    imageUrl: payload.imageUrl ?? payload.image_url ?? null,
+
+    // Keep both formats so backend/controller and direct fallbacks both work.
+    imageUrl,
+    image_url: imageUrl,
+
+    restaurantId,
+    restaurant_id: restaurantId,
 
     isVeg: Boolean(isVeg),
+    is_veg: Boolean(isVeg),
     isVegetarian: Boolean(
+      payload.isVegetarian ??
+        payload.is_vegetarian ??
+        payload.isVeg ??
+        payload.is_veg ??
+        true
+    ),
+    is_vegetarian: Boolean(
       payload.isVegetarian ??
         payload.is_vegetarian ??
         payload.isVeg ??
@@ -363,20 +397,28 @@ const normalizeMenuPayload = (payload: Partial<VendorMenuItem>) => {
     ),
 
     isPopular: Boolean(payload.isPopular ?? payload.is_popular ?? false),
+    is_popular: Boolean(payload.isPopular ?? payload.is_popular ?? false),
     isBestSeller: Boolean(
       payload.isBestSeller ?? payload.is_best_seller ?? false
     ),
+    is_best_seller: Boolean(
+      payload.isBestSeller ?? payload.is_best_seller ?? false
+    ),
     isAvailable: Boolean(payload.isAvailable ?? payload.is_available ?? true),
+    is_available: Boolean(payload.isAvailable ?? payload.is_available ?? true),
 
-    prepTimeMin: Number(payload.prepTimeMin ?? payload.prep_time_min ?? 20),
+    prepTimeMin,
+    prep_time_min: prepTimeMin,
 
-    categoryId: payload.categoryId ?? payload.category_id ?? null,
-    subCategoryId: payload.subCategoryId ?? payload.sub_category_id ?? null,
+    categoryId,
+    category_id: categoryId,
+    subCategoryId,
+    sub_category_id: subCategoryId,
 
-    vendorCategoryId:
-      payload.vendorCategoryId ?? payload.vendor_category_id ?? null,
-    vendorSubCategoryId:
-      payload.vendorSubCategoryId ?? payload.vendor_sub_category_id ?? null,
+    vendorCategoryId,
+    vendor_category_id: vendorCategoryId,
+    vendorSubCategoryId,
+    vendor_sub_category_id: vendorSubCategoryId,
   };
 };
 
@@ -398,6 +440,25 @@ const normalizeSettingsPayload = (payload: VendorSettingsPayload) => {
   if (payload.isOpen !== undefined) body.isOpen = Boolean(payload.isOpen);
   if (payload.isAcceptingOrders !== undefined)
     body.isAcceptingOrders = Boolean(payload.isAcceptingOrders);
+
+  /*
+    IMPORTANT:
+    These media fields must be passed to backend.
+    Earlier service was dropping imageUrl/bannerUrl, so upload worked
+    but restaurant profile was not saving logo/banner.
+  */
+
+  // Logo / restaurant image
+  if (payload.imageUrl !== undefined) body.imageUrl = payload.imageUrl;
+  if (payload.image_url !== undefined) body.image_url = payload.image_url;
+  if (payload.logoUrl !== undefined) body.logoUrl = payload.logoUrl;
+  if (payload.logo_url !== undefined) body.logo_url = payload.logo_url;
+
+  // Banner / cover image
+  if (payload.bannerUrl !== undefined) body.bannerUrl = payload.bannerUrl;
+  if (payload.banner_url !== undefined) body.banner_url = payload.banner_url;
+  if (payload.coverUrl !== undefined) body.coverUrl = payload.coverUrl;
+  if (payload.cover_url !== undefined) body.cover_url = payload.cover_url;
 
   return body;
 };
@@ -835,8 +896,18 @@ export const vendorService = {
 
       const payload =
         type === "banner"
-          ? ({ bannerUrl: imageUrl } as any)
-          : ({ imageUrl } as any);
+          ? ({
+              bannerUrl: imageUrl,
+              banner_url: imageUrl,
+              coverUrl: imageUrl,
+              cover_url: imageUrl,
+            } as any)
+          : ({
+              imageUrl,
+              image_url: imageUrl,
+              logoUrl: imageUrl,
+              logo_url: imageUrl,
+            } as any);
 
       const res = await apiClient.patch(
         `/vendor/settings/${restaurantId}`,

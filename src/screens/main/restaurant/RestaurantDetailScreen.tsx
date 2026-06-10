@@ -33,25 +33,38 @@ import {
 import { favoriteService } from "@/services/api/favouriteService";
 
 const THEME = {
-  bg: "#F5F6FA",
+  bg: "#F8FAF5",
+
   card: "#FFFFFF",
-  card2: "#EEF2F7",
-  surface: "#F9FAFC",
-  orange: "#FF4D18",
-  orangeSoft: "#FFF0EA",
-  blue: "#0D4563",
+  card2: "#F1F5EC",
+  surface: "#F7FAF2",
+
+  // Primary Karto Colors
+  yellow: "#FACC15",
+  yellowSoft: "#FEF9C3",
+
   green: "#22C55E",
-  yellow: "#F59E0B",
+  greenDark: "#15803D",
+
+  black: "#111827",
+  blackSoft: "#1F2937",
+
+  text: "#111827",
+  muted: "#6B7280",
+
+  border: "#DDE5D7",
+
+  orange: "#FACC15",
+  orangeSoft: "#FEF9C3",
+
+  blue: "#111827",
+
   purple: "#8B5CF6",
   pink: "#EC4899",
-  text: "#123047",
-  muted: "#748494",
-  border: "#E4E8EF",
+
   danger: "#EF4444",
   white: "#FFFFFF",
-  black: "#050807",
 };
-
 type FilterType = "All" | "Recommended" | "Veg" | "Non Veg" | "Best Sellers";
 
 type MenuGroup = {
@@ -60,10 +73,43 @@ type MenuGroup = {
   items: MenuItem[];
 };
 
+type RestaurantCategory = {
+  id: string;
+  title: string;
+  imageUrl?: string | null;
+};
+
 const FILTERS: FilterType[] = ["All", "Recommended", "Veg", "Non Veg", "Best Sellers"];
 
-const imageUri = (item: any) =>
-  item?.image_url || item?.imageUrl || item?.image || item?.logoUrl || item?.logo_url || null;
+const menuItemImageUri = (item: any) =>
+  item?.imageUrl || item?.image_url || item?.photoUrl || item?.photo_url || item?.image || null;
+
+const restaurantLogoUri = (item: any) =>
+  item?.imageUrl || item?.image_url || item?.logoUrl || item?.logo_url || item?.image || null;
+
+const restaurantBannerUri = (item: any) =>
+  item?.bannerUrl || item?.banner_url || item?.coverUrl || item?.cover_url || restaurantLogoUri(item);
+
+const categoryImageUri = (item: any) => {
+  const category =
+    item?.vendorCategory ||
+    item?.vendor_category ||
+    item?.category ||
+    item?.menuCategory ||
+    item?.menu_category ||
+    null;
+
+  return (
+    item?.categoryImageUrl ||
+    item?.category_image_url ||
+    item?.vendorCategoryImageUrl ||
+    item?.vendor_category_image_url ||
+    category?.imageUrl ||
+    category?.image_url ||
+    category?.image ||
+    null
+  );
+};
 
 const restaurantName = (restaurant: any) =>
   restaurant?.restaurant_name || restaurant?.restaurantName || restaurant?.name || "Karto Store";
@@ -113,6 +159,43 @@ const normalizeMenuResponse = (value: any, restData?: any) => {
   return Array.isArray(list) ? list : [];
 };
 
+const normalizeRestaurantCategories = (restData: any): RestaurantCategory[] => {
+  const list =
+    restData?.vendorCategories ||
+    restData?.vendor_categories ||
+    restData?.categories ||
+    restData?.menuCategories ||
+    restData?.menu_categories ||
+    [];
+
+  if (!Array.isArray(list)) return [];
+
+  return list
+    .map((cat: any) => {
+      const title = cleanCategoryTitle(
+        cat?.name ||
+          cat?.category_name ||
+          cat?.title ||
+          cat?.vendorCategoryName ||
+          "Menu"
+      );
+
+      return {
+        id: categoryKey(cat?.id || title),
+        title,
+        imageUrl:
+          cat?.imageUrl ||
+          cat?.image_url ||
+          cat?.categoryImageUrl ||
+          cat?.category_image_url ||
+          cat?.photoUrl ||
+          cat?.photo_url ||
+          null,
+      };
+    })
+    .filter((cat: RestaurantCategory) => cat.title && cat.title !== "Menu");
+};
+
 const normalizeFavoriteValue = (value: any) =>
   Boolean(
     value?.isFavorite ??
@@ -123,19 +206,66 @@ const normalizeFavoriteValue = (value: any) =>
       false
   );
 
-const getMenuCategoryTitle = (item: any) =>
-  item?.categoryName ||
-  item?.category_name ||
-  item?.category?.name ||
-  item?.category?.category_name ||
-  (typeof item?.category === "string" ? item.category : "") ||
-  "Recommended";
+const getMenuCategoryTitle = (item: any) => {
+  const category =
+    item?.vendorCategory ||
+    item?.vendor_category ||
+    item?.category ||
+    item?.menuCategory ||
+    item?.menu_category ||
+    null;
 
-const getMenuCategoryId = (item: any) =>
-  item?.categoryId ||
-  item?.category_id ||
-  item?.category?.id ||
-  getMenuCategoryTitle(item);
+  return (
+    item?.categoryName ||
+    item?.category_name ||
+    item?.vendorCategoryName ||
+    item?.vendor_category_name ||
+    category?.name ||
+    category?.category_name ||
+    category?.title ||
+    (typeof category === "string" ? category : "") ||
+    "Menu"
+  );
+};
+
+const getMenuCategoryId = (item: any) => {
+  const category =
+    item?.vendorCategory ||
+    item?.vendor_category ||
+    item?.category ||
+    item?.menuCategory ||
+    item?.menu_category ||
+    null;
+
+  return (
+    item?.vendorCategoryId ||
+    item?.vendor_category_id ||
+    item?.categoryId ||
+    item?.category_id ||
+    item?.menuCategoryId ||
+    item?.menu_category_id ||
+    category?.id ||
+    getMenuCategoryTitle(item)
+  );
+};
+
+const cleanCategoryTitle = (value: any) => {
+  const title = String(value || "Menu")
+    .trim()
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ");
+
+  if (!title) return "Menu";
+
+  return title
+    .split(" ")
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+};
+
+const categoryKey = (value: any) =>
+  cleanCategoryTitle(value).toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
 
 const showToast = (
   type: "success" | "error" | "info",
@@ -165,6 +295,7 @@ export default function RestaurantDetailScreen() {
 
   const [restaurant, setRestaurant] = useState<Restaurant | any>(initialRestaurant);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [restaurantCategories, setRestaurantCategories] = useState<RestaurantCategory[]>([]);
   const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -275,12 +406,14 @@ export default function RestaurantDetailScreen() {
       if (!restData?.id) {
         setRestaurant(null);
         setMenuItems([]);
+        setRestaurantCategories([]);
         showToast("error", "Store unavailable", "Restaurant details are missing.");
         return;
       }
 
       setRestaurant(restData);
       setMenuItems(menuData);
+      setRestaurantCategories(normalizeRestaurantCategories(restData));
 
       const previewReviews =
         restData?.ratings ||
@@ -358,7 +491,9 @@ export default function RestaurantDetailScreen() {
 
     if (activeCategory !== "All") {
       list = list.filter(
-        (item: any) => String(getMenuCategoryId(item)) === String(activeCategory)
+        (item: any) =>
+          categoryKey(getMenuCategoryId(item) || getMenuCategoryTitle(item)) === String(activeCategory) ||
+          categoryKey(getMenuCategoryTitle(item)) === String(activeCategory)
       );
     }
 
@@ -381,54 +516,78 @@ export default function RestaurantDetailScreen() {
   }, [menuItems, search, activeFilter, activeCategory]);
 
   const menuGroups: MenuGroup[] = useMemo(() => {
-    const source = filteredItems;
-
     const groups = new Map<string, MenuGroup>();
 
-    const recommended = source.filter((item: any) => isPopular(item)).slice(0, 10);
-
-    if (activeCategory === "All" && activeFilter === "All" && recommended.length > 0) {
-      groups.set("recommended", {
-        title: "Recommended",
-        categoryId: "recommended",
-        items: recommended,
-      });
-    }
-
-    source.forEach((item: any) => {
-      const categoryId = String(getMenuCategoryId(item) || "Menu");
-      const title = String(getMenuCategoryTitle(item) || "Menu");
-
-      const key = categoryId || title;
+    filteredItems.forEach((item: any) => {
+      const title = cleanCategoryTitle(getMenuCategoryTitle(item));
+      const key = categoryKey(title);
 
       if (!groups.has(key)) {
         groups.set(key, {
           title,
-          categoryId,
+          categoryId: key,
           items: [],
         });
       }
 
-      groups.get(key)?.items.push(item);
+      const existingItems = groups.get(key)?.items || [];
+      const alreadyAdded = existingItems.some((x: any) => x.id === item.id);
+
+      if (!alreadyAdded) {
+        groups.get(key)?.items.push(item);
+      }
     });
 
     return Array.from(groups.values()).filter(group => group.items.length > 0);
-  }, [filteredItems, activeCategory, activeFilter]);
+  }, [filteredItems]);
 
   const categoryTabs = useMemo(() => {
-    const categories = new Map<string, string>();
+    const categories = new Map<string, { id: string; title: string; imageUrl?: string | null }>();
 
-    menuItems.forEach((item: any) => {
-      const id = String(getMenuCategoryId(item) || "Menu");
-      const title = String(getMenuCategoryTitle(item) || "Menu");
-      categories.set(id, title);
+    // First add categories directly returned with restaurant.
+    // This keeps restaurant category image separate from menu item image.
+    restaurantCategories.forEach((cat) => {
+      const title = cleanCategoryTitle(cat.title);
+      const key = categoryKey(cat.id || title);
+
+      if (!title || ["recommended", "all"].includes(title.toLowerCase())) {
+        return;
+      }
+
+      categories.set(key, {
+        id: key,
+        title,
+        imageUrl: cat.imageUrl || null,
+      });
+    });
+
+    // Then merge categories found inside menu items.
+    // This keeps existing behavior and fills missing counts/tabs.
+    menuItems.forEach((menuItem: any) => {
+      const rawId = getMenuCategoryId(menuItem);
+      const title = cleanCategoryTitle(getMenuCategoryTitle(menuItem));
+      const key = categoryKey(rawId || title);
+
+      if (!title || ["recommended", "all"].includes(title.toLowerCase())) {
+        return;
+      }
+
+      const current = categories.get(key);
+      categories.set(key, {
+        id: key,
+        title: current?.title || title,
+        imageUrl:
+          current?.imageUrl ||
+          categoryImageUri(menuItem) ||
+          null,
+      });
     });
 
     return [
-      { id: "All", title: "All" },
-      ...Array.from(categories.entries()).map(([id, title]) => ({ id, title })),
+      { id: "All", title: "All", imageUrl: null },
+      ...Array.from(categories.values()),
     ];
-  }, [menuItems]);
+  }, [menuItems, restaurantCategories]);
 
   const bestSellers = useMemo(() => {
     return menuItems.filter((item: any) => isPopular(item)).slice(0, 8);
@@ -568,7 +727,7 @@ const toggleFavorite = async () => {
   };
 
   const renderImage = (sourceItem: any, style: any, fallbackIcon = "fast-food-outline") => {
-    const uri = imageUri(sourceItem) || imageUri(restaurant);
+    const uri = menuItemImageUri(sourceItem);
 
     if (uri) {
       return <Image source={{ uri }} style={style} />;
@@ -776,7 +935,15 @@ const toggleFavorite = async () => {
         }}
       >
         <View style={styles.hero}>
-          {renderImage(restaurant, styles.heroImage, "storefront-outline")}
+          {restaurantBannerUri(restaurant) ? (
+            <Image source={{ uri: restaurantBannerUri(restaurant) }} style={styles.heroImage} />
+          ) : restaurantLogoUri(restaurant) ? (
+            <Image source={{ uri: restaurantLogoUri(restaurant) }} style={styles.heroImage} />
+          ) : (
+            <View style={[styles.heroImage, styles.imageFallback]}>
+              <Icon name="storefront-outline" size={42} color={THEME.orange} />
+            </View>
+          )}
           <View style={styles.heroOverlay} />
 
           <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -986,6 +1153,90 @@ const toggleFavorite = async () => {
             }}
           />
 
+          {categoryTabs.length > 1 && (
+            <View style={styles.menuCategoryOverview}>
+              <View style={styles.menuHeader}>
+                <View>
+                  <Text style={styles.menuSmall}>EXPLORE MENU</Text>
+                  <Text style={styles.menuTitle}>Menu sections</Text>
+                </View>
+                <Text style={styles.menuCount}>{categoryTabs.length - 1} sections</Text>
+              </View>
+
+              <View style={styles.categoryGrid}>
+                {categoryTabs
+                  .filter(item => item.id !== "All")
+                  .map(item => {
+                    const count = menuItems.filter(
+                      (menuItem: any) =>
+                        categoryKey(getMenuCategoryId(menuItem) || getMenuCategoryTitle(menuItem)) === String(item.id) ||
+                        categoryKey(getMenuCategoryTitle(menuItem)) === String(item.id)
+                    ).length;
+
+                    return (
+                      <TouchableOpacity
+                        key={item.id}
+                        style={[
+                          styles.categoryTile,
+                          activeCategory === item.id && styles.categoryTileActive,
+                        ]}
+                        activeOpacity={0.9}
+                        onPress={() => {
+                          setActiveCategory(item.id);
+                          setActiveFilter("All");
+                          setSearch("");
+                          scrollToMenu();
+                        }}
+                      >
+                        <View
+                          style={[
+                            styles.categoryTileIcon,
+                            activeCategory === item.id && styles.categoryTileIconActive,
+                          ]}
+                        >
+                          {item.imageUrl ? (
+                            <Image source={{ uri: item.imageUrl }} style={styles.categoryTileImage} />
+                          ) : (
+                            <Icon
+                              name="restaurant-outline"
+                              size={20}
+                              color={activeCategory === item.id ? THEME.white : THEME.orange}
+                            />
+                          )}
+                        </View>
+
+                        <View style={{ flex: 1 }}>
+                          <Text
+                            style={[
+                              styles.categoryTileTitle,
+                              activeCategory === item.id && styles.categoryTileTitleActive,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {item.title}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.categoryTileCount,
+                              activeCategory === item.id && styles.categoryTileCountActive,
+                            ]}
+                          >
+                            {count} item{count > 1 ? "s" : ""}
+                          </Text>
+                        </View>
+
+                        <Icon
+                          name="chevron-forward"
+                          size={17}
+                          color={activeCategory === item.id ? THEME.white : THEME.muted}
+                        />
+                      </TouchableOpacity>
+                    );
+                  })}
+              </View>
+            </View>
+          )}
+
           {bestSellers.length > 0 && activeFilter === "All" && activeCategory === "All" && !search.trim() && (
             <View style={styles.bestSection}>
               <View style={styles.menuHeader}>
@@ -1038,7 +1289,7 @@ const toggleFavorite = async () => {
               <Text style={styles.menuSmall}>CURATED MENU</Text>
               <Text style={styles.menuTitle}>
                 {activeCategory === "All"
-                  ? "Recommended for you"
+                  ? "Full menu"
                   : categoryTabs.find(x => x.id === activeCategory)?.title || "Menu"}
               </Text>
             </View>
@@ -1512,6 +1763,61 @@ const styles = StyleSheet.create({
   },
   categoryTextActive: {
     color: THEME.white,
+  },
+  menuCategoryOverview: {
+    marginBottom: 18,
+  },
+  categoryGrid: {
+    paddingHorizontal: 20,
+    gap: 10,
+  },
+  categoryTile: {
+    backgroundColor: THEME.card,
+    borderRadius: 20,
+    padding: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: THEME.border,
+    ...shadow,
+  },
+  categoryTileActive: {
+    backgroundColor: THEME.orange,
+    borderColor: THEME.orange,
+  },
+  categoryTileIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: THEME.orangeSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 11,
+  },
+  categoryTileImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 12,
+  },
+  categoryTileIconActive: {
+    backgroundColor: "rgba(255,255,255,0.18)",
+  },
+  categoryTileTitle: {
+    color: THEME.blue,
+    fontWeight: "900",
+    fontSize: 15,
+  },
+  categoryTileTitleActive: {
+    color: THEME.white,
+  },
+  categoryTileCount: {
+    color: THEME.muted,
+    fontWeight: "800",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  categoryTileCountActive: {
+    color: "rgba(255,255,255,0.86)",
   },
   bestSection: {
     marginBottom: 18,

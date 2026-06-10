@@ -23,22 +23,34 @@ import apiClient from "@/api/apiClient";
 import { useAuth } from "@/context/AuthContext";
 
 const THEME = {
-  bg: "#F5F6FA",
+  bg: "#F8FAF5",
+
   card: "#FFFFFF",
-  card2: "#EEF2F7",
-  surface: "#F9FAFC",
-  orange: "#FF4D18",
-  orangeSoft: "#FFF0EA",
-  blue: "#0D4563",
+  card2: "#F1F5EC",
+  surface: "#F7FAF2",
+
+  orange: "#FACC15",
+  orangeSoft: "#FEF9C3",
+
+  blue: "#111827",
+
   green: "#22C55E",
-  yellow: "#F59E0B",
+  greenDark: "#15803D",
+
+  yellow: "#FACC15",
+  yellowSoft: "#FEF9C3",
+
   purple: "#8B5CF6",
-  text: "#123047",
-  muted: "#748494",
-  border: "#E4E8EF",
+
+  text: "#111827",
+  muted: "#6B7280",
+  border: "#DDE5D7",
+
   danger: "#EF4444",
+
   white: "#FFFFFF",
-  black: "#050807",
+  black: "#111827",
+  blackSoft: "#1F2937",
 };
 
 const showToast = (

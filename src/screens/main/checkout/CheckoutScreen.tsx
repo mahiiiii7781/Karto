@@ -23,19 +23,32 @@ import { orderService } from "@/services/api/orderService";
 import { useAuth } from "@/context/AuthContext";
 
 const THEME = {
-  bg: "#F5F6FA",
+  bg: "#F8FAF5",
+
   card: "#FFFFFF",
-  card2: "#EEF2F7",
-  surface: "#F9FAFC",
+  card2: "#F1F5EC",
+  surface: "#F7FAF2",
+
+  orange: "#FACC15",
+  orangeSoft: "#FEF9C3",
+
+  blue: "#111827",
+
   green: "#22C55E",
-  orange: "#FF4D18",
-  orangeSoft: "#FFF0EA",
-  blue: "#0D4563",
-  text: "#123047",
-  muted: "#748494",
-  border: "#E4E8EF",
+  greenDark: "#15803D",
+
+  yellow: "#FACC15",
+  yellowSoft: "#FEF9C3",
+
+  text: "#111827",
+  muted: "#6B7280",
+  border: "#DDE5D7",
+
   danger: "#EF4444",
-  black: "#050807",
+
+  black: "#111827",
+  blackSoft: "#1F2937",
+
   white: "#FFFFFF",
 };
 
@@ -68,6 +81,19 @@ const getOrderFromResponse = (value: any) => {
     value
   );
 };
+
+const getDeliveryOtp = (order: any) =>
+  String(
+    order?.deliveryOtp ||
+      order?.delivery_otp ||
+      order?.otp ||
+      order?.deliveryCode ||
+      order?.delivery_code ||
+      ""
+  ).trim();
+
+const getOrderNumber = (order: any) =>
+  String(order?.orderNumber || order?.order_number || order?.id || "").trim();
 
 const normalizeAddressText = (addr: any) => {
   if (!addr) return "Saved delivery address";
@@ -119,6 +145,8 @@ export default function CheckoutScreen() {
   const [refreshingBill, setRefreshingBill] = useState(false);
   const [taxModalVisible, setTaxModalVisible] = useState(false);
   const [billModalVisible, setBillModalVisible] = useState(false);
+  const [orderSuccessModalVisible, setOrderSuccessModalVisible] = useState(false);
+  const [placedOrder, setPlacedOrder] = useState<any>(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(14)).current;
@@ -509,7 +537,13 @@ export default function CheckoutScreen() {
         throw verifyRes.error;
       }
 
-      return verifyRes.data || createdOrder;
+      const verifiedOrder = getOrderFromResponse(verifyRes.data) || createdOrder;
+
+      return {
+        ...createdOrder,
+        ...verifiedOrder,
+        deliveryOtp: getDeliveryOtp(verifiedOrder) || getDeliveryOtp(createdOrder),
+      };
     } catch (error: any) {
       const isCancelled =
         error?.code === 0 ||
@@ -541,29 +575,19 @@ export default function CheckoutScreen() {
 
       await clearCartSilently();
 
+      const orderWithOtp = getOrderFromResponse(order);
+      setPlacedOrder(orderWithOtp);
+      setOrderSuccessModalVisible(true);
+
       showToast(
         "success",
         "Order placed successfully",
-        paymentMethod === "ONLINE"
+        getDeliveryOtp(orderWithOtp)
+          ? `Delivery OTP: ${getDeliveryOtp(orderWithOtp)}`
+          : paymentMethod === "ONLINE"
           ? "Payment received and your order is confirmed."
           : "Your order has been confirmed."
       );
-
-      navigation.reset({
-        index: 0,
-        routes: [
-          {
-            name: "UserApp",
-            params: {
-              screen: "Orders",
-              params: {
-                screen: "OrderDetail",
-                params: { orderId: order?.id },
-              },
-            },
-          },
-        ],
-      });
     } catch (error: any) {
       const isCancelled =
         error?.code === 0 ||
@@ -589,6 +613,32 @@ export default function CheckoutScreen() {
     } finally {
       setPlacing(false);
     }
+  };
+
+  const openPlacedOrderDetail = () => {
+    const orderId = placedOrder?.id;
+
+    setOrderSuccessModalVisible(false);
+
+    navigation.reset({
+      index: 0,
+      routes: [
+        {
+          name: "UserApp",
+          params: {
+            screen: "Orders",
+            params: {
+              screen: "OrderDetail",
+              params: {
+                orderId,
+                order: placedOrder,
+                deliveryOtp: getDeliveryOtp(placedOrder),
+              },
+            },
+          },
+        },
+      ],
+    });
   };
 
   const removeItem = async (itemId: string) => {
@@ -1086,9 +1136,76 @@ export default function CheckoutScreen() {
         onClose={() => setBillModalVisible(false)}
         bill={bill}
       />
+
+
+      <OrderSuccessModal
+        visible={orderSuccessModalVisible}
+        order={placedOrder}
+        paymentMethod={paymentMethod}
+        onViewOrder={openPlacedOrderDetail}
+      />
     </View>
   );
 }
+
+const OrderSuccessModal = ({ visible, order, paymentMethod, onViewOrder }: any) => {
+  const otp = getDeliveryOtp(order);
+  const orderNumber = getOrderNumber(order);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onViewOrder}>
+      <View style={styles.modalOverlay}>
+        <View style={styles.successModal}>
+          <View style={styles.successIconBox}>
+            <Icon name="checkmark-circle" size={44} color={THEME.green} />
+          </View>
+
+          <Text style={styles.successTitle}>Order Placed!</Text>
+          <Text style={styles.successSub}>
+            {paymentMethod === "ONLINE"
+              ? "Payment confirmed. Share this OTP with rider only at delivery."
+              : "Your order is confirmed. Share this OTP with rider only at delivery."}
+          </Text>
+
+          {!!orderNumber && (
+            <View style={styles.orderNumberPill}>
+              <Icon name="receipt-outline" size={16} color={THEME.orange} />
+              <Text style={styles.orderNumberText}>Order #{orderNumber}</Text>
+            </View>
+          )}
+
+          <View style={styles.otpBox}>
+            <Text style={styles.otpLabel}>Delivery OTP</Text>
+
+            {otp ? (
+              <Text style={styles.otpValue}>{otp}</Text>
+            ) : (
+              <Text style={styles.otpMissing}>OTP not received in response</Text>
+            )}
+
+            <Text style={styles.otpHint}>
+              Rider will enter this code to complete delivery. Do not share before receiving your order.
+            </Text>
+          </View>
+
+          {!otp && (
+            <View style={styles.otpWarnBox}>
+              <Icon name="alert-circle-outline" size={18} color={THEME.danger} />
+              <Text style={styles.otpWarnText}>
+                Backend is generating OTP, but API response may be hiding it. Check deliveryOtp field in create order response.
+              </Text>
+            </View>
+          )}
+
+          <TouchableOpacity style={styles.modalBtnWide} onPress={onViewOrder} activeOpacity={0.9}>
+            <Text style={styles.modalBtnText}>View Order</Text>
+            <Icon name="arrow-forward" size={19} color={THEME.white} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+};
 
 const InfoBox = ({ icon, color, text }: any) => {
   const isOrange = color === "orange";
@@ -1825,4 +1942,118 @@ const styles = StyleSheet.create({
     color: THEME.white,
     fontWeight: "900",
   },
+  successModal: {
+    backgroundColor: THEME.card,
+    borderRadius: 28,
+    padding: 22,
+    alignItems: "center",
+  },
+  successIconBox: {
+    width: 82,
+    height: 82,
+    borderRadius: 30,
+    backgroundColor: "#EAFBF1",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 14,
+  },
+  successTitle: {
+    color: THEME.blue,
+    fontSize: 24,
+    fontWeight: "900",
+  },
+  successSub: {
+    color: THEME.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+    fontWeight: "700",
+  },
+  orderNumberPill: {
+    marginTop: 14,
+    backgroundColor: THEME.orangeSoft,
+    borderWidth: 1,
+    borderColor: "#FFD6C8",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  orderNumberText: {
+    color: THEME.orange,
+    fontWeight: "900",
+    fontSize: 12,
+  },
+  otpBox: {
+    alignSelf: "stretch",
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 22,
+    padding: 18,
+    marginTop: 18,
+    alignItems: "center",
+  },
+  otpLabel: {
+    color: THEME.muted,
+    fontSize: 12,
+    fontWeight: "900",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  otpValue: {
+    color: THEME.blue,
+    fontSize: 42,
+    fontWeight: "900",
+    letterSpacing: 10,
+    marginTop: 8,
+  },
+  otpMissing: {
+    color: THEME.danger,
+    fontSize: 15,
+    fontWeight: "900",
+    marginTop: 12,
+    textAlign: "center",
+  },
+  otpHint: {
+    color: THEME.muted,
+    textAlign: "center",
+    lineHeight: 19,
+    fontWeight: "700",
+    marginTop: 8,
+    fontSize: 12,
+  },
+  otpWarnBox: {
+    alignSelf: "stretch",
+    backgroundColor: "#FFF1F2",
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    borderRadius: 16,
+    padding: 12,
+    marginTop: 12,
+    flexDirection: "row",
+    gap: 8,
+  },
+  otpWarnText: {
+    flex: 1,
+    color: THEME.danger,
+    fontWeight: "800",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  modalBtnWide: {
+    marginTop: 18,
+    backgroundColor: THEME.orange,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignSelf: "stretch",
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+  },
+
 });

@@ -7,3 +7,6 @@ import App from './App';
 import { name as appName } from './app.json';
 
 AppRegistry.registerComponent(appName, () => App);
+AppRegistry.registerComponent("karto", () => App);
+AppRegistry.registerComponent("Karto", () => App);
+AppRegistry.registerComponent("KartoApp", () => App);

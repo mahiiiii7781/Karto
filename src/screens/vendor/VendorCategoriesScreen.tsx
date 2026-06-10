@@ -192,7 +192,7 @@ export default function VendorCategoriesScreen() {
 
       const formData = new FormData();
       formData.append("image", file);
-      formData.append("folder", "vendor");
+      formData.append("folder", "vendor/category");
 
       let res: any;
 

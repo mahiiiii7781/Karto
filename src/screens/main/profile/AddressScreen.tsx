@@ -1,3 +1,11 @@
+// AddressScreen.tsx - corrected
+// Fixes included:
+// 1) Robust userId check: supports id, _id and userId.
+// 2) Robust address list extraction from API responses.
+// 3) First saved address is sent as default.
+// 4) Removed automatic pincode API call while typing because uploaded backend does not contain GET /address/pincode/:pincode. Use Lookup button only if you add that backend route.
+// 5) Save always reloads from GET /address after create/update.
+
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -58,13 +66,12 @@ const compact = (value?: string | null) =>
     .replace(/\s+/g, " ");
 
 const getAddressList = (data: any) => {
+  if (Array.isArray(data)) return data;
+
   const list =
-    data?.data?.addresses ||
-    data?.data?.address ||
-    data?.addresses ||
-    data?.address ||
-    data?.data ||
-    data ||
+    (Array.isArray(data?.addresses) && data.addresses) ||
+    (Array.isArray(data?.data?.addresses) && data.data.addresses) ||
+    (Array.isArray(data?.data) && data.data) ||
     [];
 
   return Array.isArray(list) ? list : [];
@@ -178,7 +185,8 @@ export default function AddressScreen() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [defaultLoadingId, setDefaultLoadingId] = useState<string | null>(null);
 
-  const isGuest = !user?.id;
+  const userId = (user as any)?.id || (user as any)?._id || (user as any)?.userId;
+  const isGuest = !userId;
 
   const filteredAddresses = useMemo(() => {
     const q = searchText.trim().toLowerCase();
@@ -205,8 +213,8 @@ export default function AddressScreen() {
 
   const isRealUser = useCallback(async () => {
     const token = await AsyncStorage.getItem("accessToken");
-    return Boolean(user?.id && token);
-  }, [user?.id]);
+    return Boolean(userId && token);
+  }, [userId]);
 
   const requireRealLogin = useCallback(async () => {
     const ok = await isRealUser();
@@ -257,7 +265,8 @@ export default function AddressScreen() {
           return;
         }
 
-        setAddresses(getAddressList(data));
+        const list = getAddressList(data);
+        setAddresses(list);
       } catch {
         setAddresses([]);
         showToast("error", "Unable to load addresses", "Please try again.");
@@ -465,7 +474,7 @@ export default function AddressScreen() {
     country: country.trim() || "India",
     latitude,
     longitude,
-    isDefault,
+    isDefault: addresses.length === 0 ? true : isDefault,
   });
 
   const saveAddress = async () => {
@@ -819,7 +828,6 @@ export default function AddressScreen() {
                         onChangeText={text => {
                           const pin = text.replace(/\D/g, "");
                           setPincode(pin);
-                          if (pin.length === 6) fetchPincodeDetails(pin);
                         }}
                       />
 

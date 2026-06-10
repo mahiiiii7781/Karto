@@ -110,27 +110,17 @@ export default function AppNavigator() {
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       {isFirstLaunch ? (
         <Stack.Screen name="Onboarding">
-          {props => (
-            <OnboardingNavigator
-              {...props}
-              onDone={handleOnboardingDone}
-            />
-          )}
+          {() => <OnboardingNavigator onDone={handleOnboardingDone} />}
         </Stack.Screen>
       ) : permissionPending ? (
         <Stack.Screen name="PermissionSetup">
-          {props => (
-            <PermissionSetupScreen
-              {...props}
-              onDone={handlePermissionDone}
-            />
-          )}
+          {() => <PermissionSetupScreen onDone={handlePermissionDone} />}
         </Stack.Screen>
       ) : !user ? (
         <>
           <Stack.Screen name="UserApp" component={TabNavigator} />
           <Stack.Screen name="Auth" component={AuthNavigator} />
-          <BrowseScreens />
+          {BrowseScreens()}
         </>
       ) : role === "ADMIN" ? (
         <>
@@ -139,26 +129,26 @@ export default function AppNavigator() {
           <Stack.Screen name="VendorApp" component={VendorNavigator} />
           <Stack.Screen name="RiderApp" component={RiderNavigator} />
           <Stack.Screen name="AdminPanel" component={AdminNavigator} />
-          <BrowseScreens />
-          <ProtectedUserScreens />
+          {BrowseScreens()}
+          {ProtectedUserScreens()}
         </>
       ) : role === "VENDOR" ? (
         <>
           <Stack.Screen name="VendorApp" component={VendorNavigator} />
-          <BrowseScreens />
-          <ProtectedUserScreens />
+          {BrowseScreens()}
+          {ProtectedUserScreens()}
         </>
       ) : role === "RIDER" ? (
         <>
           <Stack.Screen name="RiderApp" component={RiderNavigator} />
-          <BrowseScreens />
-          <ProtectedUserScreens />
+          {BrowseScreens()}
+          {ProtectedUserScreens()}
         </>
       ) : (
         <>
           <Stack.Screen name="UserApp" component={TabNavigator} />
-          <BrowseScreens />
-          <ProtectedUserScreens />
+          {BrowseScreens()}
+          {ProtectedUserScreens()}
         </>
       )}
     </Stack.Navigator>

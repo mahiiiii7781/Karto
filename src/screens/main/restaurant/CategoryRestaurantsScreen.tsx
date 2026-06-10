@@ -19,22 +19,35 @@ import Toast from "react-native-toast-message";
 import { restaurantService, Restaurant } from "@/services/api/restaurantService";
 
 const THEME = {
-  bg: "#F5F6FA",
+  bg: "#F8FAF5",
+
   card: "#FFFFFF",
-  card2: "#EEF2F7",
-  surface: "#F9FAFC",
-  orange: "#FF4D18",
-  orangeSoft: "#FFF0EA",
-  blue: "#0D4563",
+  card2: "#F1F5EC",
+  surface: "#F7FAF2",
+
+  yellow: "#FACC15",
+  yellowSoft: "#FEF9C3",
+
   green: "#22C55E",
-  yellow: "#F59E0B",
+  greenDark: "#15803D",
+
+  black: "#111827",
+  blackSoft: "#1F2937",
+
+  text: "#111827",
+  muted: "#6B7280",
+
+  border: "#DDE5D7",
+
+  orange: "#FACC15",
+  orangeSoft: "#FEF9C3",
+
+  blue: "#111827",
+
   purple: "#8B5CF6",
-  text: "#123047",
-  muted: "#748494",
-  border: "#E4E8EF",
+
   danger: "#EF4444",
   white: "#FFFFFF",
-  black: "#050807",
 };
 
 type SortType = "recommended" | "rating" | "delivery" | "fee";
@@ -687,48 +700,48 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontWeight: "700",
   },
-  heroCard: {
-    marginHorizontal: 20,
-    marginBottom: 14,
-    backgroundColor: THEME.card,
-    borderRadius: 26,
-    padding: 18,
-    flexDirection: "row",
-    alignItems: "center",
-    ...shadow,
-  },
+ heroCard: {
+  marginHorizontal: 20,
+  marginBottom: 14,
+  backgroundColor: THEME.black,
+  borderRadius: 26,
+  padding: 18,
+  flexDirection: "row",
+  alignItems: "center",
+  ...shadow,
+},
   heroText: {
     flex: 1,
   },
   heroTag: {
-    color: THEME.orange,
-    fontSize: 11,
-    fontWeight: "900",
-    letterSpacing: 1,
-  },
-  heroTitle: {
-    color: THEME.blue,
-    fontSize: 23,
-    fontWeight: "900",
-    marginTop: 5,
-  },
-  heroSub: {
-    color: THEME.muted,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 6,
-    fontWeight: "700",
-  },
-  heroIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 23,
-    backgroundColor: THEME.orange,
-    justifyContent: "center",
-    alignItems: "center",
-    marginLeft: 14,
-    overflow: "hidden",
-  },
+  color: THEME.yellow,
+  fontSize: 11,
+  fontWeight: "900",
+  letterSpacing: 1,
+},
+ heroTitle: {
+  color: THEME.white,
+  fontSize: 23,
+  fontWeight: "900",
+  marginTop: 5,
+},
+heroSub: {
+  color: "rgba(255,255,255,0.82)",
+  fontSize: 13,
+  lineHeight: 18,
+  marginTop: 6,
+  fontWeight: "700",
+},
+ heroIcon: {
+  width: 64,
+  height: 64,
+  borderRadius: 23,
+  backgroundColor: THEME.yellow,
+  justifyContent: "center",
+  alignItems: "center",
+  marginLeft: 14,
+  overflow: "hidden",
+},
   heroImage: {
     width: "100%",
     height: "100%",

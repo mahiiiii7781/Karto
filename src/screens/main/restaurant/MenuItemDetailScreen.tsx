@@ -28,23 +28,31 @@ import {
 import favoriteService from "@/services/api/favouriteService";
 
 const THEME = {
-  bg: "#F5F6FA",
+  bg: "#F8FAF5",
+
   card: "#FFFFFF",
-  card2: "#EEF2F7",
-  surface: "#F9FAFC",
-  orange: "#FF4D18",
-  orangeSoft: "#FFF0EA",
-  blue: "#0D4563",
+  card2: "#F1F5EC",
+  surface: "#F7FAF2",
+
+  // Karto Brand
+  orange: "#FACC15",      // yellow
+  orangeSoft: "#FEF9C3",  // light yellow
+
+  blue: "#111827",        // black
   green: "#22C55E",
-  yellow: "#F59E0B",
+  yellow: "#FACC15",
+
   purple: "#8B5CF6",
   pink: "#EC4899",
-  text: "#123047",
-  muted: "#748494",
-  border: "#E4E8EF",
+
+  text: "#111827",
+  muted: "#6B7280",
+
+  border: "#DDE5D7",
+
   danger: "#EF4444",
   white: "#FFFFFF",
-  black: "#050807",
+  black: "#111827",
 };
 
 const NOTE_SUGGESTIONS = ["Less spicy", "No onion", "Extra fresh", "Pack separately"];

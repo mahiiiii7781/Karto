@@ -13,6 +13,7 @@ import {
   Platform,
   StatusBar,
   Dimensions,
+  Modal,
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -41,18 +42,32 @@ import AuthRequiredModal from "@/components/AuthRequiredModal";
 const { width } = Dimensions.get("window");
 
 const THEME = {
-  bg: "#070A08",
-  surface: "#0B110E",
-  card: "#101713",
-  card2: "#151F19",
+  bg: "#F8FAF5",
+
+  surface: "#F7FAF2",
+  card: "#FFFFFF",
+  card2: "#F1F5EC",
+
+  // Karto premium brand palette
+  orange: "#FACC15",
+  orangeSoft: "#FEF9C3",
+
+  blue: "#111827",
+
   green: "#22C55E",
-  greenDark: "#16A34A",
+  greenDark: "#15803D",
+
   yellow: "#FACC15",
-  yellowSoft: "#2A260B",
-  text: "#F8FAFC",
-  muted: "#8A94A6",
-  border: "#1E2A22",
-  black: "#050807",
+  yellowSoft: "#FEF9C3",
+
+  text: "#111827",
+  muted: "#6B7280",
+  border: "#DDE5D7",
+
+  black: "#111827",
+  blackSoft: "#1F2937",
+
+  white: "#FFFFFF",
   danger: "#EF4444",
 };
 
@@ -67,6 +82,16 @@ const getName = (item: any) =>
   "Karto Store";
 
 const money = (value: any) => `₹${Number(value || 0).toFixed(0)}`;
+
+const getDeliveryOtp = (order: any) =>
+  String(
+    order?.deliveryOtp ||
+      order?.delivery_otp ||
+      order?.otp ||
+      order?.deliveryCode ||
+      order?.delivery_code ||
+      ""
+  ).trim();
 
 const shortText = (value?: string | null) =>
   String(value || "")
@@ -297,6 +322,7 @@ export default function HomeScreen() {
 
   const [authModal, setAuthModal] = useState(false);
   const [authMessage, setAuthMessage] = useState("Login to continue.");
+  const [addressModalVisible, setAddressModalVisible] = useState(false);
 
   const isLoggedIn = Boolean(user?.id);
 
@@ -336,6 +362,8 @@ export default function HomeScreen() {
     activeOrder?.vendor?.fullName ||
     activeOrder?.vendor?.name ||
     "Karto Store";
+
+  const activeOrderOtp = getDeliveryOtp(activeOrder);
 
   const showToast = (
     type: "success" | "error" | "info",
@@ -435,7 +463,29 @@ export default function HomeScreen() {
 
   const openAddress = () => {
     if (!requireAuth("Login to select or save delivery address.")) return;
-    navigation.navigate("Address");
+    setAddressModalVisible(true);
+  };
+
+  const changeAddress = () => {
+    setAddressModalVisible(false);
+
+    /*
+      Modal close ke turant baad navigate karne par kuch devices/navigation stacks me
+      action ignore ho jata hai. Isliye small delay rakha hai.
+      Route name "Address" existing app flow ke hisaab se same rakha hai.
+    */
+    setTimeout(() => {
+      navigation.navigate("Address", {
+        fromHome: true,
+        returnTo: "Home",
+      });
+    }, 120);
+  };
+
+  const useCurrentLocationFromPopup = async () => {
+    setAddressModalVisible(false);
+    await fetchCurrentAddress();
+    showToast("success", "Current location refreshed", "We updated your delivery location.");
   };
 
   const loadCartSummary = async () => {
@@ -523,11 +573,28 @@ export default function HomeScreen() {
   };
 
   const normalizeList = (value: any) => {
-    if (Array.isArray(value)) return value;
-    if (Array.isArray(value?.data)) return value.data;
-    if (Array.isArray(value?.items)) return value.items;
-    if (Array.isArray(value?.restaurants)) return value.restaurants;
-    if (Array.isArray(value?.categories)) return value.categories;
+    const possible = [
+      value,
+      value?.data,
+      value?.data?.data,
+      value?.data?.categories,
+      value?.data?.restaurants,
+      value?.data?.items,
+      value?.categories,
+      value?.restaurants,
+      value?.items,
+      value?.result,
+      value?.results,
+      value?.payload,
+      value?.payload?.data,
+      value?.payload?.categories,
+      value?.payload?.restaurants,
+    ];
+
+    for (const item of possible) {
+      if (Array.isArray(item)) return item;
+    }
+
     return [];
   };
 
@@ -539,20 +606,33 @@ export default function HomeScreen() {
         discountService.getActiveDiscounts(),
       ]);
 
-      if (catRes.status === "fulfilled" && !catRes.value.error) {
-        setCategories(normalizeList(catRes.value.data));
+      if (catRes.status === "fulfilled") {
+        const list = normalizeList(catRes.value?.data);
+        setCategories(list);
+        console.log("HOME CATEGORIES:", list.length, catRes.value?.data);
+      } else {
+        console.log("HOME CATEGORIES ERROR:", catRes.reason);
+        setCategories([]);
       }
 
-      if (restRes.status === "fulfilled" && !restRes.value.error) {
-        setFeaturedRestaurants(normalizeList(restRes.value.data));
+      if (restRes.status === "fulfilled") {
+        const list = normalizeList(restRes.value?.data);
+        setFeaturedRestaurants(list);
+        console.log("HOME RESTAURANTS:", list.length, restRes.value?.data);
+      } else {
+        console.log("HOME RESTAURANTS ERROR:", restRes.reason);
+        setFeaturedRestaurants([]);
       }
 
-      if (discRes.status === "fulfilled" && !discRes.value.error) {
-        setDiscounts(normalizeList(discRes.value.data));
+      if (discRes.status === "fulfilled") {
+        setDiscounts(normalizeList(discRes.value?.data));
+      } else {
+        setDiscounts([]);
       }
 
       await Promise.all([loadCartSummary(), loadPersonalSections(), loadActiveOrder()]);
-    } catch {
+    } catch (error) {
+      console.log("HOME LOAD ERROR:", error);
       showToast("error", "Unable to refresh home", "Please try again.");
     } finally {
       setLoading(false);
@@ -621,6 +701,11 @@ export default function HomeScreen() {
   const openNotifications = () => {
     if (!requireAuth("Login to view notifications and order updates.")) return;
     navigation.navigate("Notifications");
+  };
+
+  const openFavorites = () => {
+    if (!requireAuth("Login to view your favorite stores and items.")) return;
+    navigation.navigate("Favorites");
   };
 
   const openActiveOrder = () => {
@@ -799,6 +884,14 @@ export default function HomeScreen() {
             {activeOrderRestaurant} • #{activeOrderNumber}
           </Text>
 
+          {!!activeOrderOtp && (
+            <View style={styles.activeOtpPill}>
+              <Icon name="keypad-outline" size={13} color={THEME.black} />
+              <Text style={styles.activeOtpLabel}>Delivery OTP</Text>
+              <Text style={styles.activeOtpValue}>{activeOrderOtp}</Text>
+            </View>
+          )}
+
           <View style={styles.activeProgressTrack}>
             <View
               style={[
@@ -830,7 +923,7 @@ export default function HomeScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+        <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
         <View style={styles.loadingLogo}>
           <Text style={styles.loadingLogoText}>K</Text>
         </View>
@@ -842,7 +935,7 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.screen}>
-      <StatusBar backgroundColor={THEME.bg} barStyle="light-content" />
+      <StatusBar backgroundColor={THEME.bg} barStyle="dark-content" />
 
       <ScrollView
         style={styles.container}
@@ -889,6 +982,10 @@ export default function HomeScreen() {
                   </Text>
                 </View>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.roundBtn} onPress={openFavorites} activeOpacity={0.85}>
+              <Icon name="heart-outline" size={22} color={THEME.text} />
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.roundBtn} onPress={openNotifications} activeOpacity={0.85}>
@@ -992,40 +1089,29 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {favoriteRestaurants.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Favorite stores</Text>
-              <Text style={styles.sectionHint}>Loved</Text>
+        {isLoggedIn && (favoriteRestaurants.length > 0 || favoriteItems.length > 0) && (
+          <TouchableOpacity
+            style={styles.favoriteShortcutCard}
+            activeOpacity={0.9}
+            onPress={openFavorites}
+          >
+            <View style={styles.favoriteShortcutIcon}>
+              <Icon name="heart" size={24} color={THEME.black} />
             </View>
 
-            <FlatList
-              horizontal
-              data={favoriteRestaurants}
-              keyExtractor={(item: any, index) => item?.id?.toString() || index.toString()}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.horizontalList}
-              renderItem={renderFavoriteRestaurant}
-            />
-          </View>
-        )}
-
-        {favoriteItems.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>Favorite items</Text>
-              <Text style={styles.sectionHint}>Reorder</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.favoriteShortcutTitle}>Your favorites are ready</Text>
+              <Text style={styles.favoriteShortcutSub}>
+                {favoriteRestaurants.length} store{favoriteRestaurants.length === 1 ? "" : "s"} •{" "}
+                {favoriteItems.length} item{favoriteItems.length === 1 ? "" : "s"}
+              </Text>
             </View>
 
-            <FlatList
-              horizontal
-              data={favoriteItems}
-              keyExtractor={(item: any, index) => item?.id?.toString() || index.toString()}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.horizontalList}
-              renderItem={renderSmallItem}
-            />
-          </View>
+            <View style={styles.favoriteShortcutBtn}>
+              <Text style={styles.favoriteShortcutBtnText}>Open</Text>
+              <Icon name="arrow-forward" size={16} color={THEME.black} />
+            </View>
+          </TouchableOpacity>
         )}
 
         {topRated.length > 0 && (
@@ -1079,6 +1165,75 @@ export default function HomeScreen() {
         </TouchableOpacity>
       )}
 
+      <Modal
+        visible={addressModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddressModalVisible(false)}
+      >
+        <View style={styles.addressModalOverlay}>
+          <View style={styles.addressModalCard}>
+            <View style={styles.addressModalHandle} />
+
+            <View style={styles.addressModalIcon}>
+              <Icon name="location" size={30} color={THEME.white} />
+            </View>
+
+            <Text style={styles.addressModalTitle}>Delivery address</Text>
+            <Text style={styles.addressModalSub}>
+              Confirm where you want your order to be delivered.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.selectedAddressBox}
+              activeOpacity={0.9}
+              onPress={changeAddress}
+            >
+              <View style={styles.selectedAddressIcon}>
+                <Icon name="navigate-outline" size={20} color={THEME.orange} />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.selectedAddressLabel} numberOfLines={1}>
+                  {locationSubText || "Selected address"}
+                </Text>
+                <Text style={styles.selectedAddressText} numberOfLines={3}>
+                  {locationText || "Tap change address to select delivery address"}
+                </Text>
+              </View>
+
+              <Icon name="chevron-forward" size={20} color={THEME.muted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.changeAddressBtn}
+              activeOpacity={0.9}
+              onPress={changeAddress}
+            >
+              <Text style={styles.changeAddressText}>Change Address</Text>
+              <Icon name="arrow-forward-circle" size={21} color={THEME.white} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.currentLocationBtn}
+              activeOpacity={0.85}
+              onPress={useCurrentLocationFromPopup}
+            >
+              <Icon name="locate-outline" size={19} color={THEME.orange} />
+              <Text style={styles.currentLocationText}>Use current location</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.addressModalClose}
+              activeOpacity={0.85}
+              onPress={() => setAddressModalVisible(false)}
+            >
+              <Text style={styles.addressModalCloseText}>Not now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <AuthRequiredModal
         visible={authModal}
         message={authMessage}
@@ -1087,6 +1242,14 @@ export default function HomeScreen() {
     </View>
   );
 }
+
+const shadow = {
+  shadowColor: "#CBD5E1",
+  shadowOpacity: 0.45,
+  shadowOffset: { width: 0, height: 8 },
+  shadowRadius: 18,
+  elevation: 4,
+};
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: THEME.bg },
@@ -1203,7 +1366,7 @@ const styles = StyleSheet.create({
     width: 170,
     height: 170,
     borderRadius: 85,
-    backgroundColor: "#183A23",
+    backgroundColor: THEME.orangeSoft,
   },
   heroLeft: { flex: 1, padding: 18, justifyContent: "center" },
   heroBrand: {
@@ -1344,7 +1507,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     backgroundColor: THEME.yellowSoft,
     borderWidth: 1,
-    borderColor: "#57470A",
+    borderColor: "#FFD6C8",
     padding: 16,
     marginRight: 13,
     overflow: "hidden",
@@ -1356,7 +1519,7 @@ const styles = StyleSheet.create({
     width: 112,
     height: 112,
     borderRadius: 56,
-    backgroundColor: "rgba(250,204,21,0.18)",
+    backgroundColor: "rgba(255,77,24,0.10)",
   },
   offerTag: {
     alignSelf: "flex-start",
@@ -1487,13 +1650,60 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
 
+  favoriteShortcutCard: {
+    marginHorizontal: 16,
+    marginTop: 18,
+    backgroundColor: THEME.card,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  favoriteShortcutIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 18,
+    backgroundColor: THEME.yellow,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  favoriteShortcutTitle: {
+    color: THEME.text,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  favoriteShortcutSub: {
+    color: THEME.muted,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 4,
+  },
+  favoriteShortcutBtn: {
+    backgroundColor: THEME.green,
+    borderRadius: 99,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginLeft: 10,
+  },
+  favoriteShortcutBtnText: {
+    color: THEME.black,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+
   activeOrderCard: {
     marginHorizontal: 16,
     marginTop: 14,
     backgroundColor: THEME.card,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: "#294733",
+    borderColor: "#FFD6C8",
     padding: 14,
     flexDirection: "row",
     alignItems: "center",
@@ -1506,7 +1716,7 @@ const styles = StyleSheet.create({
     width: 130,
     height: 130,
     borderRadius: 65,
-    backgroundColor: "rgba(34,197,94,0.13)",
+    backgroundColor: "rgba(255,77,24,0.10)",
   },
   activeOrderIcon: {
     width: 54,
@@ -1537,6 +1747,33 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     marginTop: 4,
   },
+  activeOtpPill: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+    backgroundColor: THEME.yellowSoft,
+    borderWidth: 1,
+    borderColor: THEME.yellow,
+    borderRadius: 99,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  activeOtpLabel: {
+    color: THEME.black,
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  activeOtpValue: {
+    color: THEME.black,
+    fontSize: 13,
+    fontWeight: "900",
+    letterSpacing: 1.5,
+  },
+
   activeProgressTrack: {
     height: 5,
     borderRadius: 99,
@@ -1575,6 +1812,132 @@ const styles = StyleSheet.create({
   trackPillText: {
     color: THEME.black,
     fontSize: 11,
+    fontWeight: "900",
+  },
+
+
+  addressModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(5,8,7,0.42)",
+    justifyContent: "flex-end",
+  },
+  addressModalCard: {
+    backgroundColor: THEME.card,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    paddingHorizontal: 22,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === "ios" ? 34 : 24,
+    borderWidth: 1,
+    borderColor: THEME.border,
+  },
+  addressModalHandle: {
+    width: 48,
+    height: 5,
+    borderRadius: 99,
+    backgroundColor: THEME.border,
+    alignSelf: "center",
+    marginBottom: 18,
+  },
+  addressModalIcon: {
+    width: 68,
+    height: 68,
+    borderRadius: 24,
+    backgroundColor: THEME.orange,
+    alignSelf: "center",
+    justifyContent: "center",
+    alignItems: "center",
+    ...shadow,
+  },
+  addressModalTitle: {
+    color: THEME.blue,
+    fontSize: 24,
+    fontWeight: "900",
+    textAlign: "center",
+    marginTop: 16,
+  },
+  addressModalSub: {
+    color: THEME.muted,
+    fontSize: 13,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 7,
+    lineHeight: 19,
+  },
+  selectedAddressBox: {
+    marginTop: 18,
+    backgroundColor: THEME.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "flex-start",
+  },
+  selectedAddressIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
+    backgroundColor: THEME.orangeSoft,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  selectedAddressLabel: {
+    color: THEME.orange,
+    fontSize: 12,
+    fontWeight: "900",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  selectedAddressText: {
+    color: THEME.blue,
+    fontSize: 14,
+    fontWeight: "800",
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  changeAddressBtn: {
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: THEME.orange,
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 18,
+    ...shadow,
+  },
+  changeAddressText: {
+    color: THEME.white,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  currentLocationBtn: {
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: THEME.orangeSoft,
+    borderWidth: 1,
+    borderColor: "#FFD6C8",
+    justifyContent: "center",
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 12,
+  },
+  currentLocationText: {
+    color: THEME.orange,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  addressModalClose: {
+    height: 48,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 6,
+  },
+  addressModalCloseText: {
+    color: THEME.muted,
     fontWeight: "900",
   },
 
